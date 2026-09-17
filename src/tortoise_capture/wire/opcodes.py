@@ -58,14 +58,14 @@ def _stamp(paths: list[Path]) -> list[list[float]]:
 def load(repo: Path | None, cache_dir: Path | None = None) -> OpcodeTable:
     """Loads (or re-parses) the opcode table. Missing checkout -> empty table."""
     if repo is None:
-        _logger.error("no tortoise-wow checkout configured (--repo / TCT_REPO); "
-                      "opcodes stay numeric-only")
+        _logger.warning("no tortoise-wow checkout configured (--repo / TCT_REPO); "
+                        "opcodes stay numeric-only")
         return OpcodeTable()
 
     values_file, names_file = repo / VALUES_FILE, repo / NAMES_FILE
     if not values_file.exists() or not names_file.exists():
-        _logger.error("opcode sources not found under %s (expected %s and %s); "
-                      "opcodes stay numeric-only", repo, VALUES_FILE, NAMES_FILE)
+        _logger.warning("opcode sources not found under %s (expected %s and %s); "
+                        "opcodes stay numeric-only", repo, VALUES_FILE, NAMES_FILE)
         return OpcodeTable()
 
     stamp = _stamp([values_file, names_file])

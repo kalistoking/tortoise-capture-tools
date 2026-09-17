@@ -1,0 +1,43 @@
+# tortoise-capture-tools configuration.
+#
+# Copy to tct.toml next to the repository (it is git-ignored, because the
+# paths are specific to one machine). Every key is optional: what is not set
+# here falls back to the built-in default, and a command-line flag overrides
+# whatever is here for a single run.
+#
+#   default  <  tct.toml  <  environment  <  command-line flag
+
+[capture]
+# The tortoise-wow checkout: opcode numbers and UpdateField indices are parsed
+# from it at runtime, never hardcoded. Forward slashes work on Windows too.
+repo = "C:/WOW/source/tortoise-wow_AIBot/tortoise-wow"
+port = 8090                     # this fork's WorldServerPort
+server_ip = "127.0.0.1"
+
+[log]
+# Console verbosity: error | warn | info | debug
+#   error  the work failed: a result is missing or wrong
+#   warn   suspicious, but the run continued (zero-filled TCP gap, missing
+#          checkout falling back to numeric-only, container size mismatch)
+#   info   where the run has got to
+#   debug  offsets, per-packet decisions
+# warn and error always go to stderr, info and debug to stdout.
+level = "info"
+
+# The log file can keep more than the console shows -- handy for a long run
+# where the console should stay readable but the detail must survive.
+file_level = "debug"
+file = true                     # false -> console only
+dir = "logs"                    # logs/<capture stem>.log, appended per run
+
+# Per-module verbosity, by module id (see `tct opcodes --coverage`). This is
+# how you debug one opcode without drowning in the other 824.
+[log.modules]
+# update_object = "debug"
+# monster_move = "debug"
+
+[output]
+dir = "out"                     # generated .sql / .jsonl / text reports
+cache_dir = ".cache"            # parsed opcode and field tables
+sql_dialect = "mysql"           # mysql | sqlite
+text_layout = "grouped"         # grouped | stream

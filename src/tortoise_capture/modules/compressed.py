@@ -35,8 +35,8 @@ def _inflate(pkt: Packet, ctx: DecodeContext) -> bytes:
     declared = struct.unpack_from("<I", pkt.body, 0)[0]
     inner = zlib.decompress(pkt.body[4:])
     if len(inner) != declared:
-        ctx.log.error("%s: container declares %d bytes, inflated %d",
-                      pkt.describe(), declared, len(inner))
+        ctx.log.warning("%s: container declares %d bytes, inflated %d",
+                        pkt.describe(), declared, len(inner))
     return inner
 
 

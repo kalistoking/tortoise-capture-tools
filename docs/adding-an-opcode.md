@@ -43,6 +43,16 @@ Rules that matter:
   The runner never requires a module to consume every byte.
 - **Raise `WireError`** (or let `ByteReader` raise it) when the payload does
   not match the layout. The runner logs it against your module and carries on.
+- **Log through `ctx.log`**, which is already named after your module:
+  `ctx.log.debug(...)` for what you parsed, `ctx.log.warning(...)` for
+  something odd that you handled anyway. Anything you could not decode should
+  raise instead of logging an error. Your debug output can then be switched on
+  alone, without touching the console level for everything else:
+
+  ```toml
+  [log.modules]
+  my_thing = "debug"
+  ```
 
 ## 3. Declare the text form
 

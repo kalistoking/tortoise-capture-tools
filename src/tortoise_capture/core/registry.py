@@ -77,7 +77,7 @@ class Registry:
                     continue
                 number = tables.opcodes.by_name.get(decl)
                 if number is None:
-                    _logger.error(
+                    _logger.warning(
                         "module %s declares opcode %s, which this checkout does not define "
                         "-- that opcode stays uncovered", reg.id, decl)
                     continue

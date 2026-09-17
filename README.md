@@ -58,7 +58,38 @@ tct dump Ralthas.pcap --port 8090 --repo C:/WOW/source/tortoise-wow_AIBot/tortoi
 tct decode Ralthas.jsonl --entry 62635 --format text,sql
 ```
 
-`--debug` turns on the detailed log level; errors always go to stderr.
+## Configuration
+
+Copy `tct.example.toml` to `tct.toml` and set what you would otherwise retype
+every run. It is TOML — `parametr = hodnota`, `#` comments, `[section]`
+groups — and every key is optional.
+
+```toml
+[capture]
+repo = "C:/WOW/source/tortoise-wow_AIBot/tortoise-wow"
+port = 8090
+
+[log]
+level = "info"          # console: error | warn | info | debug
+file_level = "debug"    # the log file may keep more than the screen shows
+
+[log.modules]
+update_object = "debug" # detail for one module, without the other 824
+```
+
+Precedence: built-in default → `tct.toml` → environment (`TCT_REPO`,
+`TCT_PORT`, `TCT_SERVER_IP`, `TCT_LOG_LEVEL`, `TCT_CONFIG`) → command-line
+flag. So `--log-level debug` overrides the file for a single run, and
+`--debug` is a shortcut for it.
+
+`tct.toml` is git-ignored (machine-specific paths); `tct.example.toml` is
+versioned and documents every key.
+
+Logging has four levels — `error`, `warn`, `info`, `debug`. **Errors and
+warnings always go to stderr**, info and debug to stdout, so the text report
+on stdout is never polluted by diagnostics. An error means something was
+lost (the exit code becomes 2); a warning means the result is there with a
+caveat.
 
 ## Layout
 

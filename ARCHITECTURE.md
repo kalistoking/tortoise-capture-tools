@@ -15,7 +15,8 @@ cost one new file and nothing else**, for 825 opcodes, over a long time.
 | R3 | The runner must not depend on the body of any interface method | [§7.1 The independence rule](#71-the-independence-rule) |
 | R4 | Text output format is declared by the module (templates), mapped by the core | [§9 Text emission](#9-text-emission) |
 | R5 | SQL output: the module declares the table shape and the row mapping | [§10 SQL emission](#10-sql-emission) |
-| R6 | Three log levels — info / debug / error, error always on stderr | [§8 Logging](#8-logging) |
+| R6 | Log levels — error / warn / info / debug, error always on stderr | [§8.1 Four levels](#81-four-levels) |
+| R6b | Verbosity set from a config file, per run and per module | [§8.2 The config file](#82-the-config-file) |
 | R7 | Incremental opcode coverage, measurable | [§12 Coverage and roadmap](#12-coverage-and-roadmap) |
 | R8 | Captures and records never reach the repository | [§13 Testing](#13-testing) |
 
@@ -260,30 +261,72 @@ The runner depends only on the contracts, never on any implementation:
 
 ---
 
-## 8. Logging
+## 8. Logging and configuration
 
-`log.py`. Exactly three levels, a deliberately closed vocabulary — there is
-no `WARNING`: anything that is a failure is an error, anything else is
-progress.
+### 8.1 Four levels
 
-| level | content | stdout | stderr | log file | when |
-|---|---|---|---|---|---|
-| `info` | where the run has got to: files read, stream sizes, counts, milestones | yes | no | yes | always |
-| `debug` | per-packet / per-field detail, offsets, decisions taken | yes | no | yes | only with `--debug` |
-| `error` | a failure: desync, unparsable payload, missing table, module exception | no | **yes** | yes | always |
+`log.py`. A closed vocabulary of four, where the dividing line between `error`
+and `warn` is **whether anything was lost**.
+
+| level | content | stdout | stderr | log file |
+|---|---|---|---|---|
+| `error` | the work failed: desync, module exception, unparsable payload, row for an undeclared table | no | **yes** | yes |
+| `warn` | suspicious, but the run continued: zero-filled TCP gap, missing checkout falling back to numeric-only, container size mismatch, module declaring an opcode this fork lacks | no | **yes** | yes |
+| `info` | where the run has got to: files read, stream sizes, counts, milestones | yes | no | yes |
+| `debug` | per-packet / per-field detail, offsets, decisions taken | yes | no | yes |
 
 Rules:
 
-- Errors go to stderr **always**, regardless of verbosity, and are counted.
-- Every module gets its logger through `ctx.log`, named after its module id,
-  so `--debug` output says which module produced each line.
-- The log file (`logs/<capture-stem>.log`) receives all three levels plus the
-  invoking command line, appended per run with a timestamp separator, so one
-  file holds a target's whole processing history.
+- **Warnings share stderr with errors.** stdout carries the text report; a
+  diagnostic line in the middle of it would corrupt that output.
+- Warnings and errors are counted separately. Only errors change the exit
+  code — a warning means the result is there, with a caveat.
+- Every module gets its logger through `ctx.log`, named `tct.mod.<id>`, which
+  is what makes per-module verbosity possible.
+- The log file (`logs/<capture-stem>.log`) is appended per run with a
+  timestamp separator and the invoking command line, so one file holds a
+  target's whole processing history. It can be kept more verbose than the
+  console.
 - Output is ASCII-only and written UTF-8: the local console is cp1250 and a
   stray arrow character is a real, previously observed crash source.
 
+Levels are thresholds on *handlers*, not on loggers: loggers stay permissive
+and each destination filters per record. A level set on a logger could not
+express "info everywhere, debug for this one module", and would outlive the
+call that set it.
+
 Exit codes: `0` clean, `2` completed with errors, `1` fatal (could not start).
+
+### 8.2 The config file
+
+`tct.toml`, next to the repository. TOML, so it reads as the plain
+`parametr = hodnota` with `#` comments that it looks like, but values keep
+their types — `port = 8090` is an integer, `file = true` is a boolean,
+`[log.modules]` is a table — and `tomllib` is in the standard library, so it
+costs no dependency. Everything in it is optional.
+
+```toml
+[log]
+level = "info"          # console: error | warn | info | debug
+file_level = "debug"    # the file may keep more than the screen shows
+
+[log.modules]
+update_object = "debug" # one module in detail, without the other 824
+```
+
+Precedence, lowest to highest: **built-in default → `tct.toml` → environment
+→ command-line flag**. A config file holds what you would otherwise retype
+every run (checkout path, port, verbosity); a flag overrides one of them for
+one run.
+
+Two consequences worth stating:
+
+- `tct.toml` is **git-ignored** — it holds machine-specific paths.
+  `tct.example.toml` is versioned and documents every key.
+- Problems in the file (unknown key, bad level name) are collected while
+  parsing and logged as warnings *after* the handlers exist — the file is what
+  configures logging, so it cannot log during its own parse. The run continues
+  on defaults; only a config path named explicitly and missing is fatal.
 
 ---
 
@@ -412,7 +455,11 @@ Planned order, highest content value first:
 | stream desync (opcode above the fork's ceiling, or body length overrun) | error, that direction stops, the other direction still completes |
 | unknown opcode | not an error — counted as uncovered, reported at the end |
 | unsupported update-block type | error, that message stops (the offset is unrecoverable past it), the run continues |
-| missing checkout or table | error naming the path, numeric-only fallback |
+| missing checkout or table | **warn** naming the path, numeric-only fallback — output is degraded, not lost |
+| gap in the TCP stream | **warn** saying where and how many bytes; zero-filled, decode continues until it desyncs |
+| container size mismatch | **warn**; the inflated body is used, since it parsed |
+| module declares an opcode this fork lacks | **warn** at startup; that opcode stays uncovered |
+| unknown key or level in the config file | **warn**, that key ignored, default used |
 
 The principle: a single bad packet must never cost the run. Half a session
 decoded with an accurate error count is far more useful than a traceback.
@@ -429,7 +476,8 @@ decoded with an accurate error count is far more useful than a traceback.
 | D4 | Registration by opcode symbol, resolved from source | Survives a fork renumbering; gaps are reported, not silently mis-decoded |
 | D5 | Tables parsed at runtime, cached on disk, never committed | A committed table drifts from the checkout it describes |
 | D6 | SQL to a file, MySQL dialect, `managed` flag per table | No mysql client available; world tables must not receive DDL |
-| D7 | Three log levels, no WARNING | Matches the required vocabulary; removes "is this bad?" ambiguity |
+| D7 | Four log levels; error vs warn = was anything lost | Keeps the vocabulary decidable; warnings do not change the exit code |
+| D7b | TOML config file, flags override it, never committed | Typed values without a dependency; machine-specific paths stay local |
 | D8 | Module errors are isolated and counted | Incremental development over 825 opcodes needs a forgiving runner |
 | D9 | Python 3.14 + scapy only | Same as the prototype; no new runtime to maintain |
 

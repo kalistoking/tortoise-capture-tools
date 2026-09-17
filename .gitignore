@@ -9,6 +9,9 @@ out/
 export/
 logs/
 
+# --- local configuration (machine-specific paths) ------------------------
+tct.toml
+
 # --- generated artifacts ------------------------------------------------
 *.sql.out
 .cache/

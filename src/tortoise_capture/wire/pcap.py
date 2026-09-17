@@ -83,8 +83,9 @@ def _reassemble(packets, src: tuple[str, int], dst: tuple[str, int]) -> Stream:
             overlap = expected - seq
             data = data[overlap:] if overlap < len(data) else b""
         elif seq > expected:
-            _logger.error("gap in %s:%d -> %s:%d stream: expected seq %d, got %d (%d bytes missing)",
-                          src[0], src[1], dst[0], dst[1], expected, seq, seq - expected)
+            _logger.warning("gap in %s:%d -> %s:%d stream: expected seq %d, got %d "
+                            "(%d bytes missing)",
+                            src[0], src[1], dst[0], dst[1], expected, seq, seq - expected)
             buf.extend(b"\x00" * (seq - expected))
         if data:
             breakpoints.append((len(buf), ts))

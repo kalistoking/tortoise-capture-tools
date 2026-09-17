@@ -72,9 +72,9 @@ def walk(stream: Stream, direction: Direction, key: bytes, table: OpcodeTable,
     # body never needs parsing to find the start of the encrypted traffic.
     size, opcode, hdr_len, body_len = read_header(stream.data[:header_len])
     if opcode != bootstrap_opcode:
-        _logger.error("%s starts with opcode 0x%X, expected %s (0x%X) -- capture may not "
-                      "begin at session start; decode will desync",
-                      direction, opcode, bootstrap_name, bootstrap_opcode)
+        _logger.warning("%s starts with opcode 0x%X, expected %s (0x%X) -- capture may not "
+                        "begin at session start; decode will probably desync",
+                        direction, opcode, bootstrap_name, bootstrap_opcode)
     yield Packet(seq=0, t=stream.time_at(0, t0), direction=direction, opcode=opcode,
                  name=table.name(opcode) or bootstrap_name,
                  body=stream.data[hdr_len:hdr_len + body_len])

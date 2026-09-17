@@ -63,7 +63,7 @@ def _evaluate(text: str, enums: tuple[str, ...]) -> tuple[dict[str, int], dict[i
     for name in enums:
         match = re.search(_ENUM_RE.format(name=name), text, re.DOTALL)
         if not match:
-            _logger.error("enum %s not found in %s", name, FIELDS_FILE)
+            _logger.warning("enum %s not found in %s", name, FIELDS_FILE)
             continue
         body = re.sub(r"//.*", "", match.group(1))
         for member in _MEMBER_RE.finditer(body):
@@ -86,13 +86,13 @@ def _evaluate(text: str, enums: tuple[str, ...]) -> tuple[dict[str, int], dict[i
 def load(repo: Path | None, cache_dir: Path | None = None) -> FieldTable:
     """Loads (or re-parses) the field table. Missing checkout -> empty table."""
     if repo is None:
-        _logger.error("no tortoise-wow checkout configured (--repo / TCT_REPO); "
-                      "update fields stay numeric-only")
+        _logger.warning("no tortoise-wow checkout configured (--repo / TCT_REPO); "
+                        "update fields stay numeric-only")
         return FieldTable()
 
     path = repo / FIELDS_FILE
     if not path.exists():
-        _logger.error("%s not found; update fields stay numeric-only", path)
+        _logger.warning("%s not found; update fields stay numeric-only", path)
         return FieldTable()
 
     stamp = [path.stat().st_size, path.stat().st_mtime]

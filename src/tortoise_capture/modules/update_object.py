@@ -186,6 +186,7 @@ class UpdateObject(BaseModule):
         r = ByteReader(pkt.body, pkt.name or "SMSG_UPDATE_OBJECT")
         block_count = r.u32("blockCount")
         r.u8("hasTransport")
+        ctx.log.debug("%s: %d block(s)", pkt.describe(), block_count)
 
         for index in range(block_count):
             update_type = r.u8("updateType")

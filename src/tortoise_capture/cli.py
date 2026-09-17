@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from . import log as _log
-from .config import RunConfig
+from .config import CONFIG_NAME, RunConfig
 from .core import pipeline, registry as registry_mod
 from .core.contracts import DecodeContext, Tables
 from .core.dispatch import Filters, Runner
@@ -38,14 +38,17 @@ _logger = _log.get_logger("cli")
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--config", help=f"config file (default: ./{CONFIG_NAME}); env TCT_CONFIG")
     common.add_argument("--repo", help="tortoise-wow checkout (opcode and field tables); env TCT_REPO")
     common.add_argument("--port", type=int, help="world server port of the capture (default 8090)")
     common.add_argument("--server-ip", help="server address in the capture (default 127.0.0.1)")
-    common.add_argument("--debug", action="store_true", help="turn on the debug log level")
-    common.add_argument("--out-dir", default="out", help="where generated files go (default: out)")
-    common.add_argument("--log-dir", default="logs", help="where run logs go (default: logs)")
+    common.add_argument("--log-level", choices=_log.LEVEL_NAMES,
+                        help="console verbosity (default: info, or [log] level in the config)")
+    common.add_argument("--debug", action="store_true", help="shortcut for --log-level debug")
+    common.add_argument("--out-dir", help="where generated files go (default: out)")
+    common.add_argument("--log-dir", help="where run logs go (default: logs)")
     common.add_argument("--no-log-file", action="store_true", help="console logging only")
-    common.add_argument("--cache-dir", default=".cache", help="parsed table cache (default: .cache)")
+    common.add_argument("--cache-dir", help="parsed table cache (default: .cache)")
 
     ap = argparse.ArgumentParser(prog="tct", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -68,9 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_dec.add_argument("--entry", type=int, help="only events about this creature_template entry")
     p_dec.add_argument("--guid", type=lambda v: int(v, 0), help="only events about this wire GUID")
     p_dec.add_argument("--only", help="comma-separated module ids to decode with")
-    p_dec.add_argument("--text-layout", choices=("grouped", "stream"), default="grouped")
+    p_dec.add_argument("--text-layout", choices=("grouped", "stream"),
+                       help="default: grouped, or [output] text_layout in the config")
     p_dec.add_argument("--text-out", help="write the text report to a file instead of stdout")
-    p_dec.add_argument("--sql-dialect", choices=("mysql", "sqlite"), default="mysql")
+    p_dec.add_argument("--sql-dialect", choices=("mysql", "sqlite"),
+                       help="default: mysql, or [output] sql_dialect in the config")
     p_dec.add_argument("--report", action="store_true", help="print the coverage summary at the end")
 
     p_ops = sub.add_parser("opcodes", parents=[common], help="opcode table and coverage")
@@ -161,10 +166,11 @@ def cmd_decode(args, cfg: RunConfig) -> int:
             open_files.append(handle)
         else:
             handle = sys.stdout
-        sinks.append(TextSink(handle, modules, layout=args.text_layout,
+        sinks.append(TextSink(handle, modules, layout=args.text_layout or cfg.text_layout,
                               highlight_entry=args.entry))
     if "sql" in formats:
-        sinks.append(SqlSink(cfg.out_dir / f"{stem}.sql", capture_id=stem, dialect=args.sql_dialect))
+        sinks.append(SqlSink(cfg.out_dir / f"{stem}.sql", capture_id=stem,
+                             dialect=args.sql_dialect or cfg.sql_dialect))
     if "jsonl" in formats:
         cfg.out_dir.mkdir(parents=True, exist_ok=True)
         handle = open(cfg.out_dir / f"{stem}.events.jsonl", "w", encoding="utf-8", newline="\n")
@@ -214,13 +220,21 @@ _COMMANDS = {"key": cmd_key, "dump": cmd_dump, "decode": cmd_decode, "opcodes": 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    cfg = RunConfig.from_args(args)
+    try:
+        cfg = RunConfig.resolve(args)
+    except (OSError, ValueError) as exc:          # unreadable or malformed config file
+        print(f"ERROR config: {exc}", file=sys.stderr)
+        return EXIT_FATAL
 
     target = getattr(args, "capture", None) or getattr(args, "source", None) or args.command
-    quiet = getattr(args, "key_only", False)
-    _log.setup(debug=cfg.debug, quiet=quiet,
+    _log.setup(level=cfg.log_level, file_level=cfg.file_log_level, quiet=cfg.quiet,
+               module_levels=cfg.module_levels,
                log_file=cfg.log_file(Path(target).stem),
                command_line=" ".join([sys.executable, *sys.argv]))
+    # Config problems are collected before logging exists -- replay them now.
+    for level, message in cfg.issues:
+        _logger.log(_log.level_value(level) or 30, "%s", message)
+    _logger.debug("%s", cfg.describe())
 
     try:
         code = _COMMANDS[args.command](args, cfg)
@@ -229,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_FATAL
     except Exception as exc:
         _logger.error("%s: %s", type(exc).__name__, exc)
-        if cfg.debug:
+        if cfg.log_level == "debug":
             raise
         return EXIT_FATAL
 

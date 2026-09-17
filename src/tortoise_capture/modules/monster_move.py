@@ -91,6 +91,8 @@ class MonsterMove(BaseModule):
 
         common = {"guid": guid, "entry": guid_entry(guid), "guid_type": guid_type(guid),
                   "transport": transport, "spline_id": spline_id, "start": start}
+        ctx.log.debug("%s: entry=%d moveType=%d spline=%d", pkt.describe(),
+                      common["entry"], move_type, spline_id)
 
         if move_type == MOVE_STOP:
             yield self.event(pkt, "move_stop", **common, points=[start])
