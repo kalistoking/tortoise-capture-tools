@@ -13,7 +13,7 @@ cooperation from the recorded server is required.
 | | |
 |---|---|
 | **Consuming project** | `tortoise-wow` — the private vanilla-protocol server fork whose `tw_world` database the extracted content is authored into. |
-| **Game client** | World of Warcraft **1.12.1 (build 5875)**, vanilla wire protocol. |
+| **Game client** | Turtle WoW client, distribution **1.18.1-7272-Hotfix-2026-04-12**. Its `WoW.exe` reports `FileVersion 1,12,1,5875` (verified) — Turtle WoW's own version number is a content-patch label layered over the unmodified vanilla **1.12.1 (build 5875)** executable, which is what actually speaks the wire protocol this project decodes. |
 | **Recorded server** | Any vanilla-protocol server reachable by that client, including third-party ones. |
 
 This repository is **standalone**. It is not a fork, submodule or mirror of
@@ -49,13 +49,13 @@ and re-implemented against the architecture here.
 pip install -e .
 
 # 1. recover the session key from the capture
-tct key Ralthas.pcap --port 8090
+tct key capture.pcap --port 8090
 
 # 2. decrypt and frame the whole session into records
-tct dump Ralthas.pcap --port 8090 --repo C:/WOW/source/tortoise-wow_AIBot/tortoise-wow
+tct dump capture.pcap --port 8090 --repo /path/to/tortoise-wow
 
 # 3. run every registered opcode module over those records
-tct decode Ralthas.jsonl --entry 62635 --format text,sql
+tct decode capture.jsonl --entry <creature_template.entry> --format text,sql
 ```
 
 ## Configuration
@@ -66,7 +66,7 @@ groups — and every key is optional.
 
 ```toml
 [capture]
-repo = "C:/WOW/source/tortoise-wow_AIBot/tortoise-wow"
+repo = "/path/to/tortoise-wow"
 port = 8090
 
 [log]
@@ -124,9 +124,8 @@ Tests run with `pytest` after `pip install -e ".[dev]"`, or without it via
 capture contains the recorded account name (in `CMSG_AUTH_SESSION`) and is
 treated as private test material.
 
-Test captures (e.g. the `Ralthas` session) stay on the local machine and are
-pointed at through `TCT_TEST_CAPTURE`; tests that need one skip themselves
-when it is unset.
+Test captures stay on the local machine and are pointed at through
+`TCT_TEST_CAPTURE`; tests that need one skip themselves when it is unset.
 
 ## License
 

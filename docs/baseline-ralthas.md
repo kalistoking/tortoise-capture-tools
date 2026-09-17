@@ -43,6 +43,11 @@ was available. Verify before trusting stat extraction for authoring.
 
 ## Environment facts
 
+- Test client: Turtle WoW distribution **1.18.1-7272-Hotfix-2026-04-12**,
+  installed at `C:\WOW\1.18.1-7272-Hotfix-2026-04-12`. Its `WoW.exe` reports
+  `FileVersion 1,12,1,5875` — the wire protocol is unmodified vanilla
+  1.12.1 build 5875; Turtle WoW's own version number is only a content-patch
+  label on top of it.
 - Target server port **8090** (this fork's `WorldServerPort`). The unrelated
   `wow_decrypt2` test used 8085; `wow_session_key.py` still defaults to 8085.
 - Source repo for all live-parsed tables:
