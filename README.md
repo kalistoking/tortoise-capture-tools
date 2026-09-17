@@ -128,9 +128,18 @@ Test captures (e.g. the `Ralthas` session) stay on the local machine and are
 pointed at through `TCT_TEST_CAPTURE`; tests that need one skip themselves
 when it is unset.
 
+## License
+
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-or-later) — the
+same license `tortoise-wow` itself uses. Any modified version, including one
+only ever run as a network service and never distributed as a binary, must
+make its complete source available to users of that service (AGPL-3.0 §13).
+
 ## Licensing discipline
 
 All wire knowledge here is derived from the user's own `tortoise-wow` C++
 source. No code or table is taken from GPLv3 projects such as
 WowPacketParser or HermesProxy — they were assessed as cross-reference only.
-Re-derive, do not copy.
+Re-derive, do not copy. Choosing AGPL-3.0 for this project's own license is a
+separate decision from that discipline: it is about what this project grants
+downstream, not about what it took from anyone upstream.
