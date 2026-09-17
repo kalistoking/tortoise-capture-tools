@@ -19,7 +19,7 @@ count via the target's own schema, checked against the PR column by column.
 | table | result |
 |---|---|
 | `creature_template` (UPDATE, 9 fields) | **9/9** — integers exact, floats ~3e-6 off (the wire carries computed, not authored, values; §1.1) |
-| `creature` (18 columns) | **17/18** — only `map` withheld |
+| `creature` (18 columns) | **18/18** |
 | `creature_movement` (42 waypoints × 5 columns) | **42/42** rows, XY exact, Z within ~0.35 yd (ground-snap) |
 | `creature_equip_template` (4 columns) | **4/4** |
 | `broadcast_text` (2 rows × 12 columns) | **12/12** per row |
@@ -27,9 +27,9 @@ count via the target's own schema, checked against the PR column by column.
 | `creature_ai_scripts` (2 rows × 22 columns) | **22/22** per row |
 | `creature_spells` (90 columns) | **88/90** — only `delayRepeatMin/Max` for the one used slot withheld |
 
-**207 of 210 directly comparable fields identical, zero disagreements.** The
-three withheld are `map` and one spell's `delayRepeatMin/Max` — named as gaps
-in the output with the reason, never defaulted.
+**208 of 210 directly comparable fields identical, zero disagreements.** The
+two withheld are one spell's `delayRepeatMin/Max` — named as a gap in the
+output with the reason, never defaulted.
 
 ---
 
@@ -72,7 +72,7 @@ play — but writing the broadcast value back into the column it came from would
 nudge it every time, and a capture/author/capture loop would walk it.
 
 So the authoring emitter diffs against the database and **leaves a column alone
-when the stored value already agrees within 1e-4 relative** ([§9](#9-proposed-sql-output-shape)).
+when the stored value already agrees within 1e-4 relative** ([§9](#9-sql-output-shape-built)).
 The capture confirms the row rather than revising it. Where a value does get
 proposed, it is written with nine significant digits — the IEEE guarantee for a
 float32 round trip — so it lands in the column bit-identically.
@@ -104,9 +104,15 @@ implied by the closed movement loop. The rest (`id2..4`, `wander_distance`,
 `health_percent`, `mana_percent`, `spawn_flags`, `visibility_mod`) are the
 constants every spawn row carries.
 
-**Only `map` is genuinely absent** from the packets decoded so far — it
-arrives at login (`SMSG_LOGIN_VERIFY_WORLD` / `SMSG_NEW_WORLD`), so it is one
-small module away rather than unknowable.
+**`map` — done.** `SMSG_LOGIN_VERIFY_WORLD` / `SMSG_NEW_WORLD` (identical
+20-byte body: `uint32 mapId` + `Vector4`, `CharacterHandler.cpp:574`,
+`Player.cpp:2826`) is exactly the opcode this section predicted, and the
+Ralthas capture contains one: `map_id = 0`, matching the PR exactly. It is not
+about the creature itself — it is the *observing player's* map — which is
+why `Event.scope="session"` had to exist: a plain `--entry`-scoped run would
+otherwise drop it before it ever reached the authoring rule, the same way an
+emote correctly drops for lacking a sender guid. Wired into `creature.map`
+(§9, ARCHITECTURE.md §17.5).
 
 ## 3. `creature_movement` — geometry yes, exact Z no
 
@@ -203,17 +209,22 @@ extraction. A capture of one 30-second fight cannot produce those two numbers,
 and pretending otherwise would be inventing data. `tct author` reports this as
 a gap and leaves the two columns out of the row entirely — no zero, no guess.
 
-`castTarget` turned out not to need the decoder after all. `DESCRIBE
-creature_spells` shows the column's own default is `1`, and the PR itself
-writes `1` into every one of its eight slots, including the seven it never
-uses — which reads as the table's convention, not something measured per
-spell. So the authoring emitter fills it from that schema default, same as
-every other unused-slot column, with an explicit note that the wire layout
-(`Spell.cpp:4662`) is still undecoded and the value is unverified per spell.
-That is a real caveat, not a silent guess dressed up as data — but it does
-mean the earlier framing of this as a hard "not decoded" gap was too strict:
-the schema default and the PR's own value agree, so withholding it produced a
-less complete migration for no accuracy gained.
+`castTarget` was never a pending decoder — that framing was wrong, and worth
+correcting rather than quietly dropping. `Spell.cpp:4662`'s target block
+carries who a spell *hit*: the resolved guid, after the AI already chose it.
+`castTarget` is a different thing — the *rule* the AI used to make that
+choice (`GetTargetByType()`, `CreatureAI.cpp:230`: nearest enemy, self,
+whoever provoked it) — and that rule is consulted server-side before the cast
+and never serialized in any packet. No capture, however complete, can recover
+it; there is no wire representation to decode.
+
+That this column's own `DESCRIBE creature_spells` default is `1`, and that
+the PR itself writes `1` into every one of its eight slots including the
+seven it never uses, is the tell: whoever authored that migration could not
+read it off a capture either, and used the common default. This toolkit does
+the same, schema-filled with an explicit note that it is a default, not a
+measurement — which is the ceiling of what is possible here, not an interim
+step before a decoder that could never exist.
 
 ---
 
@@ -233,15 +244,32 @@ Ordered by value per unit of work. The first three have since been built.
    or a `creature_ai_scripts` boilerplate column is proposed from the
    table's own default instead of being left out (§9,
    ARCHITECTURE.md §17.3). Confirmed the same way as everything else here:
-   checked field by field against the PR, 207/210 identical.
-5. **Remaining decoder gaps**, each one file:
-   - `SMSG_SPELL_GO` target block → `castTarget` per spell (currently a
-     flagged schema default, not a measurement)
-   - ~~keep `language` in `messagechat`~~ — **done**
-   - `SMSG_LOGIN_VERIFY_WORLD` / `SMSG_NEW_WORLD` → `map`
-   - `SMSG_PLAY_SOUND` → `sound_id` (`SMSG_EMOTE` is decoded but the emotes in
-     this capture are the player's, not the creature's)
-6. **Longer captures** for anything statistical (`delayRepeat*`). Not a code
+   checked field by field against the PR.
+5. ~~**`SMSG_LOGIN_VERIFY_WORLD` / `SMSG_NEW_WORLD` → `map`**~~ — **done**
+   (`modules/world_transfer.py`). Confirmed against the real capture:
+   `map_id = 0`, matching the PR exactly. Needed a real architecture fix
+   alongside it: the map is a fact about the *session*, not about any one
+   creature, so it has no `entry` to filter by -- under a plain `--entry` run
+   it would have been dropped the instant it reached the filter, the same
+   way `Filters` correctly drops an emote with no sender guid. `Event.scope`
+   ("entry" | "session") is the fix, checked at the dispatch level, not just
+   unit-tested against the rule in isolation (ARCHITECTURE.md §17.5).
+6. ~~**`SMSG_SPELL_GO` target block → `castTarget`**~~ — **withdrawn**, not
+   built. Verified against the server source that this was never a pending
+   decoder to begin with: `castTarget` is the AI's target-*selection rule*
+   (`CreatureAI.cpp:230`), consulted before a cast and never put on the wire
+   in any form. What `Spell.cpp:4662`'s target block carries is who the
+   spell *hit* -- the resolved outcome, not the rule that picked it. No
+   decoder could ever close this gap; §7 above corrects the earlier framing.
+   ~~keep `language` in `messagechat`~~ — **done**
+7. **`SMSG_PLAY_SOUND` → `broadcast_text.sound_id`** — the one gap actually
+   left. The opcode is a clean 4-byte body (`Object.cpp` `PlayDirectSound`),
+   but it carries no sender guid at all, so attributing a sound to a specific
+   creature's line needs the same timestamp-coincidence discipline as
+   `behaviour.py`'s `text_trigger` (attribute only when unambiguous). The
+   Ralthas capture contains none, so this would ship with zero real-capture
+   validation -- synthetic tests only, honestly labelled as such.
+8. **Longer captures** for anything statistical (`delayRepeat*`). Not a code
    problem.
 
 ## 9. SQL output shape (built)
@@ -269,11 +297,11 @@ is a different thing and stays separate rather than overloading it:
 
 For a creature like Ralthas — one that spawns, patrols, aggros, talks, casts
 one spell, dies and respawns inside the capture — this toolkit now produces
-**207 of the PR's 210 comparable fields, identical, with zero disagreements**:
+**208 of the PR's 210 comparable fields, identical, with zero disagreements**:
 52 rows across 8 tables, at the PR's own full column width, ids matching the
-hand-authored ones. The three fields it does not produce — `map` and one
-spell's `delayRepeatMin/Max` — are named as gaps in the file, with the reason,
-rather than defaulted or guessed.
+hand-authored ones. The two it does not produce — one spell's
+`delayRepeatMin/Max` — are named as a gap in the file, with the reason, rather
+than defaulted or guessed.
 
 The work was never in the decoding, which already reached these numbers. It
 was in the `analyze/` layer that turns 113 hops into 41 waypoints and three

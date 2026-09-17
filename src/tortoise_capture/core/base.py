@@ -40,9 +40,14 @@ class BaseModule:
 
     # -- helper ------------------------------------------------------------
 
-    def event(self, pkt: Packet, kind: str, **data: Any) -> Event:
-        """Builds an Event stamped with this module's id."""
-        return Event(packet=pkt, module_id=self.id, kind=kind, data=data)
+    def event(self, pkt: Packet, kind: str, *, scope: str = "entry", **data: Any) -> Event:
+        """Builds an Event stamped with this module's id.
+
+        `scope="session"` is for the rare fact that is not about any one
+        creature (which map the session is on) and must reach sinks under
+        any --entry filter -- see Event's own docstring.
+        """
+        return Event(packet=pkt, module_id=self.id, kind=kind, data=data, scope=scope)
 
 
 class BaseAuthorRule:

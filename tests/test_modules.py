@@ -184,3 +184,42 @@ def test_unit_fields_become_sql_rows():
     assert {r.values["field_name"] for r in rows} == set(FIELD_NAMES.values())
     mindamage = next(r for r in rows if r.values["field_name"] == "UNIT_FIELD_MINDAMAGE")
     assert abs(mindamage.values["value"] - 20.2119) < 1e-4       # float bits, not the raw int
+
+
+# --------------------------------------------------------------------------
+# world_transfer: SMSG_LOGIN_VERIFY_WORLD / SMSG_NEW_WORLD -- the map id
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.world_transfer import WorldTransfer  # noqa: E402
+
+
+def _transfer_body(map_id=0, x=-9100.0, y=-1000.0, z=70.0, o=1.5):
+    return struct.pack("<I4f", map_id, x, y, z, o)
+
+
+def test_login_verify_world_reads_the_map_id():
+    pkt = make_packet(0x236, _transfer_body(map_id=0), "SMSG_LOGIN_VERIFY_WORLD")
+    ev = decode_one(WorldTransfer(), pkt, make_ctx())
+    assert ev.kind == "world_transfer"
+    assert ev.data["map_id"] == 0
+    assert ev.data["source"] == "login"
+
+
+def test_new_world_reads_the_map_id_too_and_tags_it_a_teleport():
+    """Same 20-byte body (uint32 mapId + 4 floats) as LOGIN_VERIFY_WORLD --
+    Player.cpp:2826 writes the same shape whether or not m_transport is set."""
+    pkt = make_packet(0x3E, _transfer_body(map_id=1), "SMSG_NEW_WORLD")
+    ev = decode_one(WorldTransfer(), pkt, make_ctx())
+    assert ev.data["map_id"] == 1
+    assert ev.data["source"] == "teleport"
+
+
+def test_a_later_transfer_is_what_authoring_should_use():
+    """Both opcodes decode independently; picking "the last one seen" for
+    authoring is the author rule's job, not this module's -- it just reports
+    what each packet said."""
+    ev1 = decode_one(WorldTransfer(), make_packet(0x236, _transfer_body(0),
+                                                  "SMSG_LOGIN_VERIFY_WORLD"), make_ctx())
+    ev2 = decode_one(WorldTransfer(), make_packet(0x3E, _transfer_body(1),
+                                                  "SMSG_NEW_WORLD"), make_ctx())
+    assert ev1.data["map_id"] == 0 and ev2.data["map_id"] == 1

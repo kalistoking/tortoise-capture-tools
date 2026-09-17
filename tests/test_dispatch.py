@@ -17,6 +17,15 @@ class Good(BaseModule):
         yield self.event(pkt, "good", entry=62635, guid=7)
 
 
+class SessionScoped(BaseModule):
+    """A fact about the whole session (e.g. which map), not about one creature."""
+
+    id = "session_scoped"
+
+    def decode(self, pkt, ctx):
+        yield self.event(pkt, "world_transfer", scope="session", map_id=0)
+
+
 class Broken(BaseModule):
     id = "broken"
 
@@ -86,3 +95,23 @@ def test_only_narrows_decoding():
     runner = Runner(_registry(Good(), Broken()), make_ctx(), [sink], only={"good"})
     stats = runner.run([make_packet(OPCODE, b"")])
     assert stats.errors == 0 and len(sink.events) == 1
+
+
+def test_session_scoped_events_bypass_the_entry_filter():
+    """world_transfer (the map) is a session-wide fact, not about any one
+    creature -- it must still reach sinks under --entry, unlike an ordinary
+    entry-tagged event for a *different* entry, which must still be dropped."""
+    sink = Collector()
+    runner = Runner(_registry(SessionScoped()), make_ctx(), [sink], Filters(entry=999))
+    stats = runner.run([make_packet(OPCODE, b"")])
+    assert stats.emitted == 1 and len(sink.events) == 1
+    assert sink.events[0].kind == "world_transfer"
+
+
+def test_an_ordinary_event_for_a_different_entry_is_still_dropped():
+    """Regression guard: the session-scope escape hatch must not become a
+    general bypass for the --entry filter."""
+    sink = Collector()
+    runner = Runner(_registry(Good()), make_ctx(), [sink], Filters(entry=999))
+    runner.run([make_packet(OPCODE, b"")])
+    assert sink.events == []

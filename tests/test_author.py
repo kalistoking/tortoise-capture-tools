@@ -194,9 +194,30 @@ def test_a_closed_route_repeats_its_first_point_to_close_the_loop():
     assert movement[-1].provenance["point"] == CONVENTION
 
 
-def test_the_map_id_is_always_reported_as_missing():
+def test_the_map_id_is_reported_as_missing_when_no_transfer_was_seen():
     _, gaps = author_rows(Spawn(), _spawn_events(), ENTRY)
     assert any("creature.map" in gap for gap in gaps)
+
+
+def test_the_map_id_comes_from_a_world_transfer_event_when_one_was_seen():
+    events = _spawn_events() + [make_event("world_transfer", 1.0, map_id=0, source="login")]
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["map"] == 0
+    assert creature.provenance["map"] == WIRE
+    assert not any("creature.map" in gap for gap in gaps)
+
+
+def test_the_last_world_transfer_wins_over_an_earlier_one():
+    """A capture with a teleport mid-session should trust the map the
+    creature was actually observed on, not wherever the player started."""
+    events = _spawn_events() + [
+        make_event("world_transfer", 1.0, map_id=0, source="login"),
+        make_event("world_transfer", 5.0, map_id=1, source="teleport"),
+    ]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["map"] == 1
 
 
 def test_map_is_never_schema_filled_even_when_a_default_is_offered():

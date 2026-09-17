@@ -20,13 +20,20 @@ hand-authored values are 12 and 17. A capture long enough to pass
 repeats) *does* get its observed range proposed as `DERIVED` -- the refusal
 is about small samples, not about the column in general.
 
-`castTarget` is different in kind, not degree: the wire layout is known
-(`SMSG_SPELL_GO`'s target block, `Spell.cpp:4662`) but not decoded yet. Its
-schema default is `1`, and the hand-authored PR this was checked against sets
-every slot -- including seven it never uses -- to exactly that value, which
-reads as the table's own convention rather than something an author measured
-per spell. So it is schema-filled like any other unused-slot column, with a
-note attached, rather than withheld.
+`castTarget` looked at first like a decoding gap -- `SMSG_SPELL_GO` has a
+target block, so surely it says who a spell was aimed at. It does, but that
+is not what this column means. `castTarget` is the *rule* a creature's AI
+used to pick a target (`GetTargetByType()`, `CreatureAI.cpp:230` --
+"nearest enemy", "self", "whoever provoked it") -- a server-side authoring
+choice consulted *before* casting, never serialized in any form. The wire
+only ever carries the *result* of that choice (the resolved guid the spell
+hit), not the rule that produced it, so no decoder could recover this column
+from a capture no matter how complete. This is why the hand-authored PR this
+was checked against sets `castTarget` to the same value (`1`) in all eight
+slots, including the seven it never uses: whoever wrote that migration could
+not read it off a capture either, and picked the common default. This
+toolkit schema-fills it the same way, with a note that it is a default, not a
+measurement.
 """
 
 from __future__ import annotations
@@ -103,8 +110,10 @@ class Spells(BaseAuthorRule):
         notes.append(f"{len(spells)} spell(s) seen cast; a spell never used during the "
                      "capture cannot appear here at all")
         notes.append("castTarget is left at the table's own default (1) for every slot: "
-                     "the SMSG_SPELL_GO target block is not decoded yet (Spell.cpp:4662), "
-                     "and the reference migration this was checked against uses the same "
+                     "it is the AI's target-selection rule (CreatureAI.cpp GetTargetByType), "
+                     "consulted before a spell is cast and never put on the wire in any "
+                     "form -- no capture, however complete, can recover it, which is also "
+                     "why the reference migration this was checked against uses the same "
                      "value uniformly, used slots and empty ones alike")
 
         self.fill_schema_defaults(ctx, "creature_spells", values, provenance, notes, skip=skip)

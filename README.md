@@ -55,10 +55,10 @@ conclusion.
 matching a target table's full column width by reading its own schema
 (`DESCRIBE`) rather than a second, hand-maintained copy of it — the same
 never-hardcode-what-the-source-already-knows rule the opcode and field tables
-follow. Checked field by field against a hand-authored content PR: 207 of 210
-comparable columns identical, zero disagreements, and the three differences
-are the map id and a spell's repeat delay bounds — named as gaps in the
-output rather than guessed at
+follow. Checked field by field against a hand-authored content PR: 208 of 210
+comparable columns identical, zero disagreements, and the one difference is a
+spell's repeat delay bounds — named as a gap in the output rather than
+guessed at
 ([docs/feasibility-ralthas-pr.md](docs/feasibility-ralthas-pr.md)).
 
 Support grows one module at a time — see

@@ -43,6 +43,7 @@ class Spawn(BaseAuthorRule):
         self._respawn: float | None = None
         self._waypoints: list[dict[str, Any]] = []
         self._closes_loop = False
+        self._map_id: int | None = None
 
     # -- collect -----------------------------------------------------------
 
@@ -61,6 +62,11 @@ class Spawn(BaseAuthorRule):
             self._waypoints.append(dict(ev.data))
         elif ev.kind == "patrol_route":
             self._closes_loop = bool(ev.data.get("closes_loop"))
+        elif ev.kind == "world_transfer":
+            # Session-scoped (see Event.scope): not about this creature
+            # specifically, but the map the whole session was observed on.
+            # Last one wins -- a teleport mid-session supersedes login.
+            self._map_id = ev.data["map_id"]
 
     def _spawn_sighting(self) -> tuple[tuple[float, ...], bool] | None:
         """The create that followed a death, else the earliest one seen."""
@@ -114,9 +120,16 @@ class Spawn(BaseAuthorRule):
                              "holds no death for this creature, so this may be mid-route")
             notes.append("position_z is ground-snapped by the server at runtime and tracks "
                          "the terrain, not the authored value")
-            # map is never schema-filled: its default (0) is a real place
-            # (Eastern Kingdoms), not neutral boilerplate, and this capture
-            # carries no opcode that says which map the creature is on.
+
+            if self._map_id is not None:
+                values["map"] = self._map_id
+                provenance["map"] = WIRE
+                notes.append(f"map {self._map_id} from the observing player's own "
+                             "SMSG_LOGIN_VERIFY_WORLD/SMSG_NEW_WORLD, not from anything "
+                             "the creature itself broadcasts")
+            # map is never schema-filled when it is still unknown: its
+            # default (0) is a real place (Eastern Kingdoms), not neutral
+            # boilerplate, and guessing it would be worse than a named gap.
             self.fill_schema_defaults(ctx, "creature", values, provenance, notes, skip={"map"})
 
             yield self.row(values, provenance, notes=tuple(notes))
@@ -154,8 +167,9 @@ class Spawn(BaseAuthorRule):
         if not self._creates:
             yield "creature -- no CREATE block for this entry, so no spawn position was seen"
             return
-        yield ("creature.map -- the map id is not in any opcode decoded so far; it arrives "
-               "at login (SMSG_LOGIN_VERIFY_WORLD / SMSG_NEW_WORLD)")
+        if self._map_id is None:
+            yield ("creature.map -- no SMSG_LOGIN_VERIFY_WORLD or SMSG_NEW_WORLD in this "
+                   "capture; a capture that starts after login never carries one")
         if not self._deaths:
             yield ("creature.spawntimesecsmin/max -- the creature never died in this capture, "
                    "so the respawn timer could not be measured")

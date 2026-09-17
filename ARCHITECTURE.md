@@ -674,7 +674,32 @@ rather than guessing between two answers.
 
 Without a database the command still runs; the lookups become gaps.
 
-### 17.5 What it does not do
+### 17.5 Not every fact is about a creature
+
+Wiring `creature.map` up (from `SMSG_LOGIN_VERIFY_WORLD` /
+`SMSG_NEW_WORLD` — `modules/world_transfer.py`) surfaced a real gap in the
+filter model, not just a missing decoder: that event is not about any
+creature at all — it is which map the *observing player* was on — so it has
+no `entry` for `Filters.accept` ([§7.1](#71-the-independence-rule)) to match
+against. Under a plain `--entry`-scoped `tct author` run, it would have been
+silently dropped at the same line that correctly drops a sender-less emote —
+both look identical to the filter (`entry` key absent), but mean opposite
+things: one is *a fact about an unidentifiable creature*, correctly excluded
+from a run scoped to a different one; the other is *not a fact about a
+creature in the first place*, and has nothing for `--entry` to judge.
+
+`Event.scope` is the fix: `"entry"` (the default) keeps the existing
+behaviour exactly, `"session"` bypasses `--entry`/`--guid` entirely. It is a
+narrow escape hatch, not a general one — `Filters.accept` checks it first and
+returns `True` immediately, so a module opts a *specific* event into it
+(`self.event(pkt, kind, scope="session", ...)`) rather than a whole class of
+output becoming unfilterable by accident. Caught at the dispatch level, not
+just unit-tested against one rule in isolation: `test_dispatch.py` proves a
+session-scoped event reaches a sink under a non-matching `--entry`, and that
+an ordinary entry-tagged event for a different entry still does not — the
+regression that would matter is the escape hatch turning into a bypass.
+
+### 17.6 What it does not do
 
 It does not apply anything. The output is a file for a human to read, argue
 with and run — which is why the gaps and the provenance are in the file itself

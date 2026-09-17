@@ -39,6 +39,11 @@ class Filters:
         return self.entry is not None or self.guid is not None
 
     def accept(self, ev: Event) -> bool:
+        # A session-scoped fact (which map the session is on, say) is not
+        # about any creature, so there is nothing here for --entry/--guid to
+        # judge it against -- see Event.scope's own docstring.
+        if ev.scope == "session":
+            return True
         if self.entry is not None and ev.data.get("entry") != self.entry:
             return False
         if self.guid is not None and ev.data.get("guid") != self.guid:

@@ -55,12 +55,24 @@ class Event:
 
     Conventional keys the core uses for cross-cutting filters (and nothing
     else): `entry` (creature_template.entry) and `guid` (64-bit wire GUID).
+
+    `scope` is almost always left at its default. `"entry"` means what it
+    sounds like: the event is about one creature, and `--entry`/`--guid`
+    filtering applies normally -- a module that cannot supply `entry`/`guid`
+    (SMSG_MESSAGECHAT's emote form has no sender guid) is correctly dropped
+    under a filtered run, by design. `"session"` is the deliberate exception:
+    a fact that is not about any creature at all -- which map the session was
+    on, say -- and so has nothing to filter by in the first place. Without
+    it, such an event would silently vanish under any --entry run, which is
+    not "correctly filtered", just a category error: it was never a
+    per-creature fact for the filter to judge.
     """
 
     packet: Packet
     module_id: str
     kind: str
     data: Mapping[str, Any] = field(default_factory=dict)
+    scope: str = "entry"
 
 
 # --------------------------------------------------------------------------
