@@ -21,6 +21,22 @@ any other repository and carries no upstream remote. It only *references* a
 `tortoise-wow` checkout at runtime, as a read-only source of truth for opcode
 numbers and update-field indices (see [Source-derived tables](#source-derived-tables)).
 
+## Intended use and disclaimer
+
+This tool exists to support development of `tortoise-wow` — reconstructing
+authorable server content from a capture of a session the person running the
+capture is themselves a party to. It is not intended for, and must not be
+used for, unauthorized access to any system, interception of communications
+you are not a party to, or any other unlawful purpose. Using it against a
+server without that server's or account owner's permission may violate that
+server's terms of service and applicable law; that is the user's
+responsibility to determine before running it, not this project's.
+
+The author provides this software "as is", under the license below, and
+disclaims all liability for how anyone else chooses to use it. See
+[License](#license), which carries its own no-warranty and
+limitation-of-liability terms (AGPL-3.0 §§15–16).
+
 ## Status
 
 The module system works end to end. Nine modules cover ten opcodes: creature
