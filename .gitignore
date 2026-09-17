@@ -1,0 +1,34 @@
+# --- captured / extracted material: never versioned ---------------------
+*.pcap
+*.pcapng
+*.jsonl
+*.session-key
+session_key*.txt
+data/
+out/
+export/
+logs/
+
+# --- generated artifacts ------------------------------------------------
+*.sql.out
+.cache/
+opcodes.cache.json
+updatefields.cache.json
+
+# --- python -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- editors / os -------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

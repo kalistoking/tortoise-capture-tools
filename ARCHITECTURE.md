@@ -1,0 +1,445 @@
+# Architecture
+
+How this toolkit is put together, and why. The driving requirement is not
+throughput or feature count — it is that **support for one more opcode must
+cost one new file and nothing else**, for 825 opcodes, over a long time.
+
+---
+
+## 1. Requirements this design answers
+
+| # | Requirement | Where it is met |
+|---|---|---|
+| R1 | Modular: one unit of work per opcode | [§3 Pattern analysis](#3-pattern-analysis), [§6 Module contracts](#6-module-contracts) |
+| R2 | The runner iterates over *detected opcodes*, not over hand-written per-packet code | [§7 The dispatch loop](#7-the-dispatch-loop) |
+| R3 | The runner must not depend on the body of any interface method | [§7.1 The independence rule](#71-the-independence-rule) |
+| R4 | Text output format is declared by the module (templates), mapped by the core | [§9 Text emission](#9-text-emission) |
+| R5 | SQL output: the module declares the table shape and the row mapping | [§10 SQL emission](#10-sql-emission) |
+| R6 | Three log levels — info / debug / error, error always on stderr | [§8 Logging](#8-logging) |
+| R7 | Incremental opcode coverage, measurable | [§12 Coverage and roadmap](#12-coverage-and-roadmap) |
+| R8 | Captures and records never reach the repository | [§13 Testing](#13-testing) |
+
+---
+
+## 2. Layering
+
+Five layers, each usable on its own and testable without the one above it.
+Data flows one way; no layer imports a layer above it.
+
+```
+ capture file
+     |
+ [wire]     pcap read -> TCP reassembly -> session-key recovery -> header
+     |      decryption -> framing                       ==> Packet stream
+     |
+ [core]     registry lookup per opcode -> expansion (containers)
+     |      -> decode                                   ==> Event stream
+     |
+ [modules]  one module per opcode: decode + how to print + how to store
+     |
+ [emit]     text / SQL / JSONL sinks consume Events
+     |
+ [analyze]  (later) cross-opcode correlation: timelines, path assembly
+```
+
+Two data types cross every boundary, and only those two:
+
+```python
+Packet   # one framed message: seq, t, direction, opcode, name, body, via
+Event    # one decoded fact: packet provenance, kind, data mapping
+```
+
+`Event.data` is a plain `Mapping[str, Any]` rather than a per-opcode class.
+That is deliberate: the core, the templates, the SQL mapper and the JSONL
+writer all treat it uniformly, and no core code ever needs to import a type
+a module defined. A module may still build that mapping from a dataclass
+internally.
+
+---
+
+## 3. Pattern analysis
+
+The question posed was "maybe Strategy?". Strategy is the right *shape* for
+one module, but on its own it does not solve the problem — it describes
+swapping **one** interchangeable algorithm, and we need to select among
+hundreds, keyed by a value read off the wire.
+
+Options considered:
+
+| Option | Adding an opcode costs | Verdict |
+|---|---|---|
+| **A. `if/elif` chain** (the prototype) | edit the core, forever growing | Rejected — violates R3 directly; the core ends up knowing every payload. |
+| **B. Plain Strategy** (one context, one swappable algorithm) | n/a | Insufficient alone — no selection mechanism for ~825 candidates. |
+| **C. Registry of strategies** (dispatch table + plugin discovery) | one new file | **Chosen.** Strategy stays the per-module contract; a registry keyed by opcode does the selection; discovery makes registration automatic. |
+| **D. Visitor** | change the visitor interface, then every implementor | Rejected — grows in the wrong direction; a new opcode should not touch existing code. |
+| **E. Chain of Responsibility** | one new file, but O(n) per packet and order-dependent | Rejected as the primary mechanism — no direct lookup, no coverage introspection. Fan-out of one opcode to several modules is handled by the registry instead. |
+| **F. Declarative struct DSL** (a table describing each layout) | one table entry | Rejected as primary. Vanilla payloads are heavily conditional — flag-gated optional blocks, embedded splines, update masks — so the DSL would have to grow into a small language. A typed cursor (`ByteReader`) gets most of the brevity with none of the lost expressiveness. |
+
+**Chosen: Registry of Strategies + segregated capability interfaces.**
+
+Supporting patterns, each pulling its weight:
+
+- **Interface Segregation.** A module *must* decode. Printing, SQL and
+  container expansion are separate optional capabilities. A module that only
+  knows how to decode declares nothing else, and the core notices the absence
+  rather than requiring a stub.
+- **Null Object.** A missing capability resolves to a no-op, so sinks contain
+  no `if module is X` branching — only "does this module offer this
+  capability".
+- **Data Mapper.** Modules map an `Event` to rows; they never write SQL text.
+  Quoting, batching and dialect live in one place.
+- **Observer / Sink.** Emitters subscribe to the event stream; adding an
+  output format does not touch decode code.
+- **Template Method (optional convenience).** `BaseModule` supplies defaults
+  so a short module stays short — but it is a convenience, not a requirement:
+  the contracts are `Protocol`s, structurally typed.
+
+### 3.1 Why registration is by symbol, not by number
+
+Modules declare `opcodes = ("SMSG_MONSTER_MOVE",)`. Numbers are resolved at
+load time from the opcode table parsed out of the server checkout
+([§11](#11-source-derived-tables)). A fork that renumbers an opcode keeps
+working; a symbol that no longer exists is reported at startup as a coverage
+gap instead of silently decoding the wrong payload. Numeric registration is
+accepted too, for opcodes absent from a given checkout.
+
+---
+
+## 4. Package layout
+
+```
+src/tortoise_capture/
+  cli.py              subcommands: key, dump, decode, opcodes
+  log.py              three-level logging (info/debug/error)
+  config.py           run configuration, resolved once from CLI/env
+  core/
+    contracts.py      Packet, Event, TableSpec, the Protocols
+    registry.py       @module decorator, discovery, symbol resolution
+    pipeline.py       framing + expansion -> Packet stream
+    dispatch.py       Packet stream -> Event stream (the runner)
+    reader.py         ByteReader: typed cursor, packGUID, cstring, GUID helpers
+  wire/
+    pcap.py           capture read, TCP reassembly, timestamps
+    crypt.py          HeaderCrypt, known-plaintext session-key recovery
+    framing.py        header layouts, session walk, desync detection
+    opcodes.py        opcode table from the server checkout (+ cache)
+  fields/
+    tables.py         UpdateFields.h enum evaluation, object-type gating
+    values.py         field value typing (float / two-short / bytes_0 / int)
+  modules/            <-- the part that grows; core never imports from here
+  emit/
+    text.py           template renderer + section grouping
+    sql.py            TableSpec -> DDL/INSERT, dialect handling
+    jsonl.py          raw record / event dump
+  analyze/            (later) cross-opcode correlation
+```
+
+---
+
+## 5. Module anatomy
+
+A complete, working module — this is the whole cost of supporting an opcode:
+
+```python
+@module(id="ai_reaction", opcodes=("SMSG_AI_REACTION",))
+class AiReaction(BaseModule):
+    """SMSG_AI_REACTION: a unit entered combat (Creature.cpp:2246)."""
+
+    # --- decode: wire bytes -> facts -----------------------------------
+    def decode(self, pkt: Packet, ctx: DecodeContext) -> Iterator[Event]:
+        r = ByteReader(pkt.body)
+        guid = r.u64()                      # raw guid here, not packed
+        yield self.event(pkt, "ai_reaction",
+                         guid=guid,
+                         entry=guid_entry(guid),
+                         reaction=r.u32())
+
+    # --- text: format declared here, mapping done by the core ----------
+    text_section = "AI reactions (aggro)"
+    text_templates = {
+        "ai_reaction": "entry={entry:<7} guid=0x{guid:016X} reaction={reaction}",
+    }
+
+    # --- sql: table shape declared here, writing done by the core ------
+    sql_tables = (
+        TableSpec(
+            name="capture_ai_reaction",
+            columns=(Column("capture", "VARCHAR(64)"),
+                     Column("t", "DOUBLE"),
+                     Column("guid", "BIGINT UNSIGNED"),
+                     Column("entry", "INT UNSIGNED"),
+                     Column("reaction", "INT UNSIGNED")),
+            key=("capture", "t", "guid"),
+        ),
+    )
+
+    def sql_rows(self, ev: Event, ctx: SqlContext) -> Iterator[Row]:
+        yield Row("capture_ai_reaction",
+                  {"capture": ctx.capture_id, "t": ev.packet.t, **ev.data})
+```
+
+Nothing in that file is referenced by name anywhere else in the codebase.
+Dropping it into `modules/` is the entire integration step.
+
+---
+
+## 6. Module contracts
+
+`core/contracts.py`, all `typing.Protocol` — structural, so a module can
+implement them without inheriting anything.
+
+```python
+class Decoder(Protocol):                       # required
+    id: str
+    opcodes: Sequence[str | int]
+    def decode(self, pkt: Packet, ctx: DecodeContext) -> Iterable[Event]: ...
+
+class Expander(Protocol):                      # optional — containers
+    def expand(self, pkt: Packet, ctx: DecodeContext) -> Iterable[Packet]: ...
+
+class TextRenderer(Protocol):                  # optional
+    text_section: str
+    text_templates: Mapping[str, str]          # event kind -> format template
+    def text_fields(self, ev: Event) -> Mapping[str, Any]: ...   # default: ev.data
+
+class SqlEmitter(Protocol):                    # optional
+    sql_tables: Sequence[TableSpec]
+    def sql_rows(self, ev: Event, ctx: SqlContext) -> Iterable[Row]: ...
+```
+
+Conventional `Event.data` keys, honoured by the core for cross-cutting
+filters and by nothing else:
+
+| key | meaning |
+|---|---|
+| `entry` | `creature_template.entry` this event is about — feeds `--entry` |
+| `guid` | full 64-bit wire GUID — feeds `--guid` |
+
+A module that cannot supply them simply omits them; filtered runs then skip
+its events, which is the correct behaviour (a chat emote carries no sender
+GUID and genuinely cannot be attributed to an entry).
+
+---
+
+## 7. The dispatch loop
+
+The entire runner, in essence:
+
+```python
+for pkt in pipeline.packets(capture, cfg):        # wire layer + expansion
+    for mod in registry.for_opcode(pkt.opcode):   # 0..n modules
+        for ev in mod.decode(pkt, ctx):           # the module's own business
+            if not filters.accept(ev):
+                continue
+            for sink in sinks:
+                sink.handle(ev, mod)              # text / sql / jsonl
+```
+
+An opcode with no module is counted as *seen but uncovered* and reported at
+the end; it is never an error. That is what makes incremental coverage
+comfortable: an unsupported opcode is data, not a failure.
+
+### 7.1 The independence rule
+
+The runner depends only on the contracts, never on any implementation:
+
+1. `core/`, `wire/`, `emit/` and `cli.py` **never import from `modules/`**.
+   Enforced by a test over the import graph.
+2. The core **never branches on an opcode value or a module id**. The only
+   opcode constants outside `modules/` are the two session-bootstrap opcodes
+   in `wire/framing.py` (`SMSG_AUTH_CHALLENGE`, `CMSG_AUTH_SESSION`), which
+   are a transport concern — they delimit the plaintext handshake that exists
+   before any decoding does — and are documented as such where they are
+   defined.
+3. A module's output is consumed only through the contract: `Event`s are
+   mappings, `Row`s are mappings, templates are strings. The core cannot be
+   broken by *how* a module computes them, only by a module returning
+   something the contract does not allow.
+4. A module that raises is isolated ([§14](#14-failure-handling)); the run
+   continues.
+
+---
+
+## 8. Logging
+
+`log.py`. Exactly three levels, a deliberately closed vocabulary — there is
+no `WARNING`: anything that is a failure is an error, anything else is
+progress.
+
+| level | content | stdout | stderr | log file | when |
+|---|---|---|---|---|---|
+| `info` | where the run has got to: files read, stream sizes, counts, milestones | yes | no | yes | always |
+| `debug` | per-packet / per-field detail, offsets, decisions taken | yes | no | yes | only with `--debug` |
+| `error` | a failure: desync, unparsable payload, missing table, module exception | no | **yes** | yes | always |
+
+Rules:
+
+- Errors go to stderr **always**, regardless of verbosity, and are counted.
+- Every module gets its logger through `ctx.log`, named after its module id,
+  so `--debug` output says which module produced each line.
+- The log file (`logs/<capture-stem>.log`) receives all three levels plus the
+  invoking command line, appended per run with a timestamp separator, so one
+  file holds a target's whole processing history.
+- Output is ASCII-only and written UTF-8: the local console is cp1250 and a
+  stray arrow character is a real, previously observed crash source.
+
+Exit codes: `0` clean, `2` completed with errors, `1` fatal (could not start).
+
+---
+
+## 9. Text emission
+
+The module declares the shape; the core does the mapping and all the
+surroundings.
+
+- `text_templates[kind]` is a `str.format` template. The core renders it with
+  `text_fields(event)`, defaulting to `event.data`.
+- The core owns everything around the template: the timestamp column, the
+  section header, the `--entry` highlight marker, ordering, and the
+  "(no records)" note for an empty section.
+- Two layouts, `--text-layout`:
+  - `grouped` (default) — one section per module, in registration order;
+    reads like the prototype's report.
+  - `stream` — strictly chronological across modules; reads like a timeline.
+- A missing template for an emitted kind is an error naming the module and
+  the kind, not a crash.
+
+A module never calls `print`. That keeps output ordering, log interleaving
+and file redirection a single concern.
+
+---
+
+## 10. SQL emission
+
+Also declarative: the module states the table and the mapping, the core
+writes the statements.
+
+```python
+TableSpec(name, columns, key=(), managed=True, conflict="ignore", comment="")
+Column(name, type, nullable=True)
+Row(table, values)
+```
+
+- `managed=True` (default) — a table this toolkit owns; the writer emits
+  `CREATE TABLE IF NOT EXISTS` from the spec, then the inserts.
+- `managed=False` — a table that already exists in `tw_world`
+  (e.g. `creature_movement`): **no DDL is emitted**, only inserts. That is
+  the difference between "here is what I captured" and "here is a migration
+  for your world database", and getting it wrong would hand the user a
+  `CREATE TABLE` for a table the server owns.
+- `conflict` selects the insert form (`ignore` / `replace` / `plain`).
+- Dialect: MySQL by default (the `tw_world` target), SQLite selectable for
+  local analysis. Quoting, escaping, batching and `NULL` handling live in
+  `emit/sql.py` alone — a module never builds a SQL string.
+- Output is a file (`out/<stem>.sql`), not a live connection: this
+  environment has no `mysql` client on PATH, and a reviewable file is the
+  right artifact for something that will be applied to a world database.
+  A direct-connection sink can be added later behind the same interface.
+
+---
+
+## 11. Source-derived tables
+
+Opcode names/numbers and update-field indices are parsed at runtime from the
+`tortoise-wow` checkout (`Opcodes_1_12_1.h` + `Opcodes.cpp`,
+`UpdateFields.h`), never hardcoded — that is what keeps the toolkit correct
+against a fork that renumbers anything.
+
+Decision: **parse at runtime, cache on disk, never commit the result.**
+
+- The cache key is the source files' size and mtime; a changed checkout
+  invalidates it automatically.
+- The cache lives under `.cache/` (git-ignored). A generated table checked
+  into the repository would silently drift from the checkout it claims to
+  describe — precisely the failure mode the live parsing exists to prevent.
+- A missing or moved checkout is an error naming the path it looked at, and
+  degrades to numeric-only output rather than aborting.
+- `tct opcodes` prints the resolved table; `--coverage` adds which opcodes
+  have a module.
+
+`EUnitFields` names are valid **only** for units and pets. `fields/tables.py`
+gates naming on the GUID high word (`0xF130`/`0xF140`); other object types
+resolve to numeric indices until their own layouts are added. This was a real
+bug in the prototype (a GameObject field printed as `UNIT_FIELD_HEALTH`) and
+carries a regression test.
+
+---
+
+## 12. Coverage and roadmap
+
+Support arrives one module at a time; the tool reports where it stands:
+
+```
+tct opcodes --coverage        # opcode -> module, and the gaps
+tct decode ... --report       # end of run: seen / decoded / uncovered / failed
+```
+
+Planned order, highest content value first:
+
+1. `SMSG_MONSTER_MOVE` / `_TRANSPORT` — waypoints (validated in the prototype)
+2. `SMSG_UPDATE_OBJECT` — create/values blocks, combat stats
+3. `SMSG_COMPRESSED_MOVES`, `SMSG_COMPRESSED_UPDATE_OBJECT` — containers
+4. `SMSG_AI_REACTION`, `SMSG_PARTYKILLLOG`, `SMSG_SPELL_GO` — behaviour
+5. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE` — identity, script text
+6. everything else, as the content being authored demands it
+
+---
+
+## 13. Testing
+
+- **Synthetic packets.** Each module ships a test that builds its payload
+  byte by byte from the documented layout and asserts the decoded `Event`.
+  No capture needed, no privacy question, runs anywhere.
+- **Golden output.** Small committed expected-text / expected-SQL files guard
+  the template and mapping layers.
+- **Regression tests** for the two known traps: object-type gating of unit
+  field names, and the differing inner framing of the two compressed
+  containers.
+- **Opt-in integration.** Tests that want the real `Ralthas` session read
+  `TCT_TEST_CAPTURE`; unset means skipped. **No capture, JSONL, log or
+  extracted record is ever committed** — a capture contains the recorded
+  account name, and `.gitignore` covers those formats by extension.
+- **Architecture test.** Fails if anything under `core/`, `wire/`, `emit/` or
+  `cli.py` imports `modules/`.
+
+---
+
+## 14. Failure handling
+
+| failure | handling |
+|---|---|
+| module raises while decoding | caught per packet, logged as error with module id and packet seq, counted, run continues |
+| stream desync (opcode above the fork's ceiling, or body length overrun) | error, that direction stops, the other direction still completes |
+| unknown opcode | not an error — counted as uncovered, reported at the end |
+| unsupported update-block type | error, that message stops (the offset is unrecoverable past it), the run continues |
+| missing checkout or table | error naming the path, numeric-only fallback |
+
+The principle: a single bad packet must never cost the run. Half a session
+decoded with an accurate error count is far more useful than a traceback.
+
+---
+
+## 15. Decisions taken
+
+| # | Decision | Rationale |
+|---|---|---|
+| D1 | Registry of strategies with auto-discovery | One file per opcode, zero core edits (R1–R3) |
+| D2 | `Event.data` is a plain mapping | Uniform across text/SQL/JSONL; core never imports module types |
+| D3 | Compressed containers are modules, not core code | Removes the last opcode branch from the runner |
+| D4 | Registration by opcode symbol, resolved from source | Survives a fork renumbering; gaps are reported, not silently mis-decoded |
+| D5 | Tables parsed at runtime, cached on disk, never committed | A committed table drifts from the checkout it describes |
+| D6 | SQL to a file, MySQL dialect, `managed` flag per table | No mysql client available; world tables must not receive DDL |
+| D7 | Three log levels, no WARNING | Matches the required vocabulary; removes "is this bad?" ambiguity |
+| D8 | Module errors are isolated and counted | Incremental development over 825 opcodes needs a forgiving runner |
+| D9 | Python 3.14 + scapy only | Same as the prototype; no new runtime to maintain |
+
+Deferred, with the seam already in place:
+
+- **`analyze/`** — cross-opcode correlation (death/respawn timelines, patrol
+  loop trimming, per-entry behaviour profiles). Consumes the `Event` stream;
+  needs no change to any module.
+- **Live DB comparison** — diffing decoded content against `tw_world` and
+  emitting only the delta. A second consumer of the same `TableSpec`s.
+- **pcapng rewriting** — splicing decrypted headers back into the capture for
+  Wireshark, a capability worth keeping from the local `wow_decrypt2`
+  experiment. A sink over the `Packet` stream, below the module layer.
