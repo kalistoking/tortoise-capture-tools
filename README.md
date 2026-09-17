@@ -131,6 +131,7 @@ Tests run with `pytest` after `pip install -e ".[dev]"`, or without it via
 | [docs/adding-an-opcode.md](docs/adding-an-opcode.md) | the one-file recipe for new opcode support |
 | [docs/wire-format.md](docs/wire-format.md) | verified packet layouts, with source references |
 | [docs/baseline-ralthas.md](docs/baseline-ralthas.md) | the known-good numbers regressions are measured against |
+| [docs/feasibility-ralthas-pr.md](docs/feasibility-ralthas-pr.md) | how much of a hand-authored content PR a capture can reproduce, measured |
 | [docs/prototype-notes.md](docs/prototype-notes.md) | what the superseded prototype was, and what is already ruled out |
 
 ## Data policy
