@@ -40,3 +40,19 @@ class BaseModule:
     def event(self, pkt: Packet, kind: str, **data: Any) -> Event:
         """Builds an Event stamped with this module's id."""
         return Event(packet=pkt, module_id=self.id, kind=kind, data=data)
+
+
+class BaseAnalyzer(BaseModule):
+    """Optional convenience base for analyzers.
+
+    Shares BaseModule's defaults and `event()` helper because a finding is an
+    ordinary Event and reaches the sinks the same way. Only `feed`/`finish`
+    are new; `decode` stays the inherited no-op, since an analyzer is never
+    registered against an opcode.
+    """
+
+    def feed(self, ev: Event) -> None:
+        return None
+
+    def finish(self, ctx: DecodeContext) -> Iterable[Event]:
+        return ()

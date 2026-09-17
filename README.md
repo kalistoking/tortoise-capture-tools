@@ -43,15 +43,23 @@ The module system works end to end. Nine modules cover ten opcodes: creature
 query, monster chat, party kill log, spell go, AI reaction, update object,
 monster move (+ transport) and the two compressed containers.
 
+Two analyzers answer what no single packet can: `patrol` reconstructs a
+creature's route from the hops it broadcast (validated against the live
+database — all 41 waypoints in the authored order, mean XY error 0.006 yards),
+and `behaviour` correlates across opcodes to derive respawn timers, which
+trigger fires which line of dialogue, and spell cast timing. Findings carry
+their sample counts, and say so when a capture is too short to support a
+conclusion.
+
 Support grows one module at a time — see
 [docs/adding-an-opcode.md](docs/adding-an-opcode.md) — and the current extent
 is reported by `tct opcodes --coverage`. The design behind it is in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-The working prototype this project supersedes lives outside the repository
-(`C:\WOW\source\extract_wow_data`) and is deliberately **not** imported: its
-validated wire knowledge is documented in [docs/wire-format.md](docs/wire-format.md)
-and re-implemented against the architecture here.
+The working prototype this project supersedes lives outside the repository and
+is deliberately **not** imported: its validated wire knowledge is documented in
+[docs/wire-format.md](docs/wire-format.md) and re-implemented against the
+architecture here.
 
 ## Requirements
 
@@ -115,6 +123,7 @@ src/tortoise_capture/
   wire/      pcap reassembly, header crypto, framing, opcode table
   fields/    UpdateFields tables and value typing
   modules/   one module per opcode — the part that grows
+  analyze/   cross-opcode analyzers: patrol routes, behaviour correlation
   emit/      text / SQL / JSONL sinks
 docs/        wire-format knowledge, how to add an opcode
 tests/       synthetic-packet and golden tests

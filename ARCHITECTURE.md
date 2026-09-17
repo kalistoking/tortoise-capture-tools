@@ -19,6 +19,7 @@ cost one new file and nothing else**, for 825 opcodes, over a long time.
 | R6b | Verbosity set from a config file, per run and per module | [§8.2 The config file](#82-the-config-file) |
 | R7 | Incremental opcode coverage, measurable | [§12 Coverage and roadmap](#12-coverage-and-roadmap) |
 | R8 | Captures and records never reach the repository | [§13 Testing](#13-testing) |
+| R9 | Answer questions no single packet can, without special-casing the runner | [§16 The `analyze` layer](#16-the-analyze-layer) |
 
 ---
 
@@ -40,7 +41,8 @@ Data flows one way; no layer imports a layer above it.
      |
  [emit]     text / SQL / JSONL sinks consume Events
      |
- [analyze]  (later) cross-opcode correlation: timelines, path assembly
+ [analyze]  cross-opcode correlation: patrol routes, behaviour timelines
+            -- findings re-enter the Event stream and reach the same sinks
 ```
 
 Two data types cross every boundary, and only those two:
@@ -111,8 +113,8 @@ accepted too, for opcodes absent from a given checkout.
 ```
 src/tortoise_capture/
   cli.py              subcommands: key, dump, decode, opcodes
-  log.py              three-level logging (info/debug/error)
-  config.py           run configuration, resolved once from CLI/env
+  config.py           tct.toml + environment + flags, in that precedence
+  log.py              four-level logging (error/warn/info/debug)
   core/
     contracts.py      Packet, Event, TableSpec, the Protocols
     registry.py       @module decorator, discovery, symbol resolution
@@ -132,7 +134,7 @@ src/tortoise_capture/
     text.py           template renderer + section grouping
     sql.py            TableSpec -> DDL/INSERT, dialect handling
     jsonl.py          raw record / event dump
-  analyze/            (later) cross-opcode correlation
+  analyze/            <-- also grows; patrol reconstruction, behaviour correlation
 ```
 
 ---
@@ -481,13 +483,78 @@ decoded with an accurate error count is far more useful than a traceback.
 | D8 | Module errors are isolated and counted | Incremental development over 825 opcodes needs a forgiving runner |
 | D9 | Python 3.14 + scapy only | Same as the prototype; no new runtime to maintain |
 
+| D10 | Analyzers are Event-in, Event-out | Findings reach the text and SQL sinks through the module contracts, so the emit layer never learns analysis exists |
+
+Built since: **`analyze/`** (see [§16](#16-the-analyze-layer)).
+
 Deferred, with the seam already in place:
 
-- **`analyze/`** — cross-opcode correlation (death/respawn timelines, patrol
-  loop trimming, per-entry behaviour profiles). Consumes the `Event` stream;
-  needs no change to any module.
 - **Live DB comparison** — diffing decoded content against `tw_world` and
   emitting only the delta. A second consumer of the same `TableSpec`s.
 - **pcapng rewriting** — splicing decrypted headers back into the capture for
   Wireshark, a capability worth keeping from the local `wow_decrypt2`
   experiment. A sink over the `Packet` stream, below the module layer.
+
+---
+
+## 16. The `analyze` layer
+
+A decoder answers "what does this packet say". An analyzer answers "what does
+the session as a whole say" — the patrol behind 113 hops, the respawn timer
+behind a death and a create, the trigger behind a line of creature dialogue.
+
+### 16.1 Shape
+
+```python
+class Analyzer(Protocol):
+    id: str
+    def feed(self, ev: Event) -> None: ...          # every decoded event, in order
+    def finish(self, ctx: DecodeContext) -> Iterable[Event]: ...   # findings, at the end
+```
+
+The return type is the point: **a finding is an ordinary `Event`**. An
+analyzer therefore declares `text_templates` and `sql_tables` exactly like an
+opcode module, and its output reaches the same sinks through the same
+contracts. The emit layer contains no analysis-aware code at all, and adding
+an analyzer costs one file in `analyze/` — the same bargain `modules/` offers.
+
+Discovery, ordering and the independence rule work the same way too:
+`analyze/` is imported by string at runtime, nothing in `core/`, `wire/`,
+`emit/` or `cli.py` may import it, and the architecture test enforces both
+packages together.
+
+Analyzers see the **filtered** stream, so `--entry` scopes analysis exactly as
+it scopes output. `--no-analyze` skips them.
+
+### 16.2 Why findings carry their evidence
+
+An analyzer's output is inference, not decoding, and the two must not be
+presented as if they were the same thing. So every finding carries the sample
+count behind it, and refuses to round a guess into a conclusion:
+
+- A text is attributed to a trigger only when **every** occurrence coincides
+  with it. One coincidence out of three is reported as `text_untriggered`.
+- A spell's repeat delay carries `confident: false` until enough intervals
+  exist to bound it — the Ralthas capture holds exactly one, and one interval
+  cannot recover an authored `min/max` (see
+  [feasibility-ralthas-pr.md](docs/feasibility-ralthas-pr.md) §7).
+- Intervals spanning a death are dropped: two engagements are not one cooldown.
+
+### 16.3 Patrol reconstruction
+
+Worth stating because the obvious approach does not work. Cutting the hop
+stream at its first return to the start needs one uninterrupted lap to exist,
+and in a real session there often is none — the Ralthas capture holds 113 hops
+over ~2.7 laps with a fight, a death and a respawn in the middle, and not one
+clean lap.
+
+Instead: **cluster** hop destinations by proximity (one cluster is one
+waypoint, since every lap re-broadcasts the same authored position), **count
+the transitions** between clusters, then **walk** from the waypoint nearest the
+spawn point along the busiest outgoing edge until the walk closes. Combat
+detours drop out on their own — they are never the busiest edge — and a
+capture that starts mid-route still numbers from the spawn, because the
+respawn sighting pins the origin.
+
+Validated against the live `tw_world`: all 41 distinct waypoints of Ralthas's
+route, in the authored order, mean XY error 0.006 yards.

@@ -23,18 +23,21 @@ def _python_files():
         yield from sorted((SRC / package).glob("*.py"))
 
 
-def test_nothing_outside_modules_imports_modules():
+def test_nothing_outside_modules_imports_modules_or_analyzers():
+    """Both plugin packages are reached by string at runtime, never imported."""
     offenders = []
     for path in _python_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module and "modules" in node.module:
-                offenders.append(f"{path.name}: from {node.module}")
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if any(p in node.module for p in ("modules", "analyze")):
+                    offenders.append(f"{path.name}: from {node.module}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if "tortoise_capture.modules" in alias.name:
+                    if any(f"tortoise_capture.{p}" in alias.name for p in ("modules", "analyze")):
                         offenders.append(f"{path.name}: import {alias.name}")
-    assert not offenders, "the runner must not import opcode modules: " + "; ".join(offenders)
+    assert not offenders, ("the runner must not import opcode modules or analyzers: "
+                           + "; ".join(offenders))
 
 
 def test_only_framing_names_an_opcode_outside_modules():

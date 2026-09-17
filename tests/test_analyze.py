@@ -1,0 +1,148 @@
+"""Analyzers: patrol reconstruction and cross-opcode behaviour correlation."""
+
+from __future__ import annotations
+
+import math
+
+from support import findings_by_kind, make_event, run_analyzer
+from tortoise_capture.analyze.behaviour import Behaviour
+from tortoise_capture.analyze.patrol import Patrol
+
+ENTRY = 62635
+GUID = 0xF130_00F4AB_2787EA
+
+# A square route. The spawn corner is first, as an authored route would be.
+SQUARE = [(0.0, 0.0, 10.0), (10.0, 0.0, 10.0), (10.0, 10.0, 10.0), (0.0, 10.0, 10.0)]
+
+
+def _hops(laps: float, jitter: float = 0.0):
+    """Hop events walking the square, optionally starting mid-route."""
+    events, t = [], 1.0
+    total = int(len(SQUARE) * laps)
+    for i in range(total):
+        x, y, z = SQUARE[i % len(SQUARE)]
+        events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY,
+                                 dest=(x + jitter, y + jitter, z)))
+        t += 1.0
+    return events
+
+
+def test_patrol_recovers_the_loop_and_its_order():
+    found = run_analyzer(Patrol(), _hops(laps=2.5))
+    route = findings_by_kind(found)["patrol_route"]
+    assert route.data["count"] == len(SQUARE)
+    assert route.data["closes_loop"] is True
+
+    points = [ev for ev in found if ev.kind == "patrol_waypoint"]
+    assert [p.data["point"] for p in points] == [1, 2, 3, 4]
+    for point, (x, y, _) in zip(points, SQUARE):
+        assert math.isclose(point.data["position_x"], x, abs_tol=0.01)
+        assert math.isclose(point.data["position_y"], y, abs_tol=0.01)
+
+
+def test_repeated_sightings_of_one_waypoint_collapse_into_one_point():
+    """2.5 laps of a 4-point square is 10 hops but still only 4 waypoints."""
+    found = run_analyzer(Patrol(), _hops(laps=2.5))
+    route = findings_by_kind(found)["patrol_route"]
+    assert route.data["hops"] == 10 and route.data["count"] == 4
+    seen = {ev.data["point"]: ev.data["observations"] for ev in found
+            if ev.kind == "patrol_waypoint"}
+    assert sum(seen.values()) == 10
+
+
+def test_numbering_starts_at_the_spawn_point_not_the_capture_start():
+    """A capture that begins mid-route must still number from the spawn."""
+    # Start walking at the third corner, so hop order is 3,4,1,2,3,4,...
+    events, t = [], 1.0
+    for i in range(10):
+        x, y, z = SQUARE[(i + 2) % len(SQUARE)]
+        events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(x, y, z)))
+        t += 1.0
+    # ... and the respawn sighting pins the origin to the square's first corner.
+    events.append(make_event("object_create", 50.0, guid=GUID, entry=ENTRY,
+                             movement={"movement_info": {"pos": (0.0, 0.0, 10.0, 0.0)}}))
+
+    points = [ev for ev in run_analyzer(Patrol(), events) if ev.kind == "patrol_waypoint"]
+    first = points[0].data
+    assert (round(first["position_x"]), round(first["position_y"])) == (0, 0)
+
+
+def test_combat_detours_do_not_enter_the_route():
+    """Positions visited once while fighting are not part of the patrol."""
+    events = _hops(laps=2.5)
+    events.append(make_event("move_linear", 99.0, guid=GUID, entry=ENTRY,
+                             dest=(500.0, 500.0, 10.0)))      # dragged off to fight
+    route = findings_by_kind(run_analyzer(Patrol(), events))["patrol_route"]
+    assert route.data["count"] == len(SQUARE)
+
+
+def test_too_few_points_is_not_a_route():
+    events = [make_event("move_linear", 1.0, guid=GUID, entry=ENTRY, dest=(0.0, 0.0, 0.0))]
+    assert run_analyzer(Patrol(), events) == []
+
+
+# --------------------------------------------------------------------------
+# behaviour
+# --------------------------------------------------------------------------
+
+AGGRO_TEXT = "The Brotherhood Stands for Justice!"
+DEATH_TEXT = "The lies of Stormwind, must be told!"
+
+
+def _session():
+    """The Ralthas shape: aggro, casts, death, respawn, aggro again."""
+    return [
+        make_event("object_create", 12.904, guid=GUID, entry=ENTRY),
+        make_event("ai_reaction", 59.979, guid=GUID, entry=ENTRY, reaction=2),
+        make_event("monster_say", 59.979, guid=GUID, entry=ENTRY, message=AGGRO_TEXT),
+        make_event("spell_go", 60.026, guid=GUID, entry=ENTRY, spell_id=1449),
+        make_event("spell_go", 78.317, guid=GUID, entry=ENTRY, spell_id=1449),
+        make_event("monster_say", 90.307, guid=GUID, entry=ENTRY, message=DEATH_TEXT),
+        make_event("party_kill", 90.307, guid=GUID, entry=ENTRY),
+        make_event("object_create", 389.841, guid=GUID, entry=ENTRY),
+        make_event("ai_reaction", 395.152, guid=GUID, entry=ENTRY, reaction=2),
+        make_event("monster_say", 395.152, guid=GUID, entry=ENTRY, message=AGGRO_TEXT),
+        make_event("spell_go", 395.199, guid=GUID, entry=ENTRY, spell_id=1449),
+    ]
+
+
+def test_respawn_timer_is_the_death_to_create_gap():
+    found = findings_by_kind(run_analyzer(Behaviour(), _session()))
+    assert math.isclose(found["respawn_timer"].data["value_min"], 299.534, abs_tol=0.01)
+
+
+def test_texts_are_attributed_to_the_trigger_they_coincide_with():
+    found = run_analyzer(Behaviour(), _session())
+    triggers = {ev.data["subject"]: ev.data["trigger"]
+                for ev in found if ev.kind == "text_trigger"}
+    assert triggers == {AGGRO_TEXT: "aggro", DEATH_TEXT: "death"}
+
+
+def test_a_text_that_only_sometimes_coincides_is_not_attributed():
+    """One coincidence out of two is not evidence, and must not be reported as one."""
+    events = _session()
+    events.append(make_event("monster_say", 200.0, guid=GUID, entry=ENTRY, message=AGGRO_TEXT))
+    found = run_analyzer(Behaviour(), events)
+    kinds = {ev.kind for ev in found if ev.data.get("subject") == AGGRO_TEXT}
+    assert "text_untriggered" in kinds and "text_trigger" not in kinds
+
+
+def test_initial_cast_delay_is_measured_from_engagement():
+    found = findings_by_kind(run_analyzer(Behaviour(), _session()))
+    delay = found["spell_initial_delay"].data
+    assert math.isclose(delay["value_min"], 0.047, abs_tol=0.001) and delay["samples"] == 2
+
+
+def test_a_single_repeat_interval_is_reported_but_not_trusted():
+    """The honest failure: one interval cannot bound an authored min/max."""
+    found = findings_by_kind(run_analyzer(Behaviour(), _session()))
+    repeat = found["spell_repeat_delay"].data
+    assert repeat["samples"] == 1 and repeat["confident"] is False
+    assert math.isclose(repeat["value_min"], 18.291, abs_tol=0.01)
+
+
+def test_an_interval_spanning_a_death_is_not_a_repeat_delay():
+    """Casts either side of a respawn are two engagements, not one cooldown."""
+    found = findings_by_kind(run_analyzer(Behaviour(), _session()))
+    # 60.026 -> 78.317 counts; 78.317 -> 395.199 spans the death and must not.
+    assert found["spell_repeat_delay"].data["samples"] == 1

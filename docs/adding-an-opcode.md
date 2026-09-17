@@ -112,3 +112,44 @@ tct decode out/Ralthas.jsonl --only my_thing --report
 
 `--only` narrows decoding to your module while leaving container expansion
 intact, and `--report` shows what is still uncovered.
+
+---
+
+## Adding an analyzer instead
+
+When the question spans packets — a route behind many hops, a timer behind a
+death and a create — it belongs in `analyze/`, not in a module. Same bargain:
+one file, no core edit.
+
+```python
+@analyzer(id="my_finding", order=30)
+class MyFinding(BaseAnalyzer):
+    def __init__(self):
+        self._seen = {}
+
+    def feed(self, ev: Event) -> None:          # every decoded event, in order
+        if ev.kind == "ai_reaction":
+            self._seen.setdefault(ev.data["entry"], []).append(ev.packet.t)
+
+    def finish(self, ctx: DecodeContext) -> Iterator[Event]:
+        for entry, times in self._seen.items():
+            yield self.event(<last packet>, "my_finding", entry=entry, samples=len(times))
+
+    text_section = "My finding"
+    text_templates = {"my_finding": "entry={entry:<7} seen {samples}x"}
+```
+
+A finding is an ordinary `Event`, so `text_templates` and `sql_tables` work
+exactly as they do on a module and reach the same sinks.
+
+Two rules specific to analysis, because its output is inference rather than
+decoding:
+
+- **Carry the evidence.** Emit the sample count, and mark low-confidence
+  findings as such rather than rounding them into a conclusion. A capture
+  containing one interval cannot bound an authored min/max.
+- **Attribute only when every occurrence agrees.** One coincidence is not a
+  correlation; report it as unattributed instead of guessing.
+
+Analyzers see the filtered stream, so `--entry` scopes them automatically, and
+`--no-analyze` turns them off.

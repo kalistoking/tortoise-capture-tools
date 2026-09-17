@@ -167,6 +167,29 @@ class SqlEmitter(Protocol):
     def sql_rows(self, ev: Event, ctx: SqlContext) -> Iterable[Row]: ...
 
 
+@runtime_checkable
+class Analyzer(Protocol):
+    """Stateful consumer of the whole event stream, producing more events.
+
+    Where a decoder answers "what does this packet say", an analyzer answers
+    "what does the session as a whole say" -- the patrol behind 113 hops, the
+    respawn timer behind a death and a create. It sees every decoded event in
+    order, keeps whatever state it needs, and emits its findings once the
+    stream ends.
+
+    Findings are ordinary `Event`s, so an analyzer declares `text_templates`
+    and `sql_tables` exactly like a module does and reaches the same sinks.
+    That is the whole integration: the emit layer never learns that analysis
+    exists.
+    """
+
+    id: str
+
+    def feed(self, ev: Event) -> None: ...
+
+    def finish(self, ctx: DecodeContext) -> Iterable[Event]: ...
+
+
 def offers_text(mod: object) -> bool:
     return bool(getattr(mod, "text_templates", None))
 

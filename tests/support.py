@@ -77,3 +77,20 @@ def decode_one(mod, pkt: Packet, ctx: DecodeContext):
     events = list(mod.decode(pkt, ctx))
     assert len(events) == 1, f"expected 1 event, got {len(events)}"
     return events[0]
+
+
+def make_event(kind: str, t: float, module_id: str = "test", **data: Any) -> "Event":
+    """A decoded event as an analyzer sees it: a timestamp and a data mapping."""
+    from tortoise_capture.core.contracts import Event
+    return Event(packet=make_packet(0, b"", t=t), module_id=module_id, kind=kind, data=data)
+
+
+def run_analyzer(an, events, ctx: DecodeContext | None = None) -> list["Event"]:
+    """Feeds an analyzer a whole stream and returns its findings."""
+    for ev in events:
+        an.feed(ev)
+    return list(an.finish(ctx or make_ctx()))
+
+
+def findings_by_kind(found) -> dict:
+    return {ev.kind: ev for ev in found}

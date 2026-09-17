@@ -71,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_dec.add_argument("--entry", type=int, help="only events about this creature_template entry")
     p_dec.add_argument("--guid", type=lambda v: int(v, 0), help="only events about this wire GUID")
     p_dec.add_argument("--only", help="comma-separated module ids to decode with")
+    p_dec.add_argument("--no-analyze", action="store_true",
+                       help="skip the analyzers (patrol reconstruction, behaviour correlation)")
     p_dec.add_argument("--text-layout", choices=("grouped", "stream"),
                        help="default: grouped, or [output] text_layout in the config")
     p_dec.add_argument("--text-out", help="write the text report to a file instead of stdout")
@@ -156,7 +158,10 @@ def cmd_decode(args, cfg: RunConfig) -> int:
 
     only = {mid.strip() for mid in args.only.split(",")} if args.only else None
     formats = {f.strip() for f in args.format.split(",") if f.strip()}
-    modules = [m for m in registry.modules() if only is None or m.id in only]
+    analyzers = [] if args.no_analyze else registry_mod.load_analyzers().all()
+    # Analyzers render their findings through the same sinks as modules, so the
+    # text sink needs their sections too.
+    modules = [m for m in registry.modules() if only is None or m.id in only] + analyzers
 
     open_files, sinks = [], []
     if "text" in formats:
@@ -180,7 +185,8 @@ def cmd_decode(args, cfg: RunConfig) -> int:
         _logger.error("no usable --format given (want text, sql or jsonl)")
         return EXIT_WITH_ERRORS
 
-    runner = Runner(registry, ctx, sinks, Filters(entry=args.entry, guid=args.guid), only=only)
+    runner = Runner(registry, ctx, sinks, Filters(entry=args.entry, guid=args.guid),
+                    only=only, analyzers=analyzers)
     try:
         stats = runner.run(packets)
     finally:

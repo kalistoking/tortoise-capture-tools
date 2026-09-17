@@ -51,6 +51,7 @@ class RunStats:
     packets: int = 0
     events: int = 0
     emitted: int = 0
+    findings: int = 0        # events produced by analyzers, not by decoding
     errors: int = 0
     seen: Counter = field(default_factory=Counter)        # opcode -> count
     covered: Counter = field(default_factory=Counter)     # opcode -> count
@@ -59,7 +60,7 @@ class RunStats:
     def report(self, table) -> list[str]:
         lines = [
             f"packets {self.packets}, events {self.events}, emitted {self.emitted}, "
-            f"errors {self.errors}",
+            f"findings {self.findings}, errors {self.errors}",
             f"opcodes seen {len(self.seen)}, covered {len(self.covered)}, "
             f"uncovered {len(self.uncovered)}",
         ]
@@ -70,7 +71,8 @@ class RunStats:
 
 class Runner:
     def __init__(self, registry: Registry, ctx: DecodeContext, sinks: Iterable[Sink],
-                 filters: Filters | None = None, only: set[str] | None = None) -> None:
+                 filters: Filters | None = None, only: set[str] | None = None,
+                 analyzers: Iterable[Any] = ()) -> None:
         self._registry = registry
         self._ctx = ctx
         self._sinks = list(sinks)
@@ -78,6 +80,7 @@ class Runner:
         # `only` narrows decoding, never expansion: dropping a container module
         # would silently hide every packet inside it.
         self._only = only
+        self._analyzers = list(analyzers)
         self._contexts: dict[str, DecodeContext] = {}
 
     def _context_for(self, module_id: str) -> DecodeContext:
@@ -101,9 +104,31 @@ class Runner:
             stats.covered[pkt.opcode] += 1
             for mod in modules:
                 self._dispatch(mod, pkt, stats)
+
+        # Analysis runs once the whole stream has been seen: its findings are
+        # ordinary events and go to the same sinks, so nothing downstream has
+        # to know the difference.
+        for found in self._drain_analyzers(stats):
+            stats.findings += 1
+            for sink in self._sinks:
+                self._to_sink(sink, found, self._analyzer_by_id(found.module_id), stats)
+
         for sink in self._sinks:
             sink.close()
         return stats
+
+    def _analyzer_by_id(self, module_id: str) -> Any:
+        return next((a for a in self._analyzers if a.id == module_id), None)
+
+    def _drain_analyzers(self, stats: RunStats) -> list[Event]:
+        out: list[Event] = []
+        for an in self._analyzers:
+            try:
+                out.extend(an.finish(self._context_for(an.id)))
+            except Exception as exc:
+                stats.errors += 1
+                _logger.error("analyzer %s failed: %s: %s", an.id, type(exc).__name__, exc)
+        return out
 
     def _dispatch(self, mod: Any, pkt: Packet, stats: RunStats) -> None:
         try:
@@ -123,10 +148,24 @@ class Runner:
             if not self._filters.accept(ev):
                 continue
             stats.emitted += 1
-            for sink in self._sinks:
+            # Analyzers see the filtered stream, so --entry scopes analysis
+            # the same way it scopes output.
+            for an in self._analyzers:
                 try:
-                    sink.handle(ev, mod)
+                    an.feed(ev)
                 except Exception as exc:
                     stats.errors += 1
-                    _logger.error("sink %s failed on %s/%s: %s: %s",
-                                  type(sink).__name__, mod.id, ev.kind, type(exc).__name__, exc)
+                    _logger.error("analyzer %s failed on %s/%s: %s: %s",
+                                  an.id, mod.id, ev.kind, type(exc).__name__, exc)
+            for sink in self._sinks:
+                self._to_sink(sink, ev, mod, stats)
+
+    def _to_sink(self, sink: Sink, ev: Event, mod: Any, stats: RunStats) -> None:
+        if mod is None:
+            return
+        try:
+            sink.handle(ev, mod)
+        except Exception as exc:
+            stats.errors += 1
+            _logger.error("sink %s failed on %s/%s: %s: %s",
+                          type(sink).__name__, ev.module_id, ev.kind, type(exc).__name__, exc)

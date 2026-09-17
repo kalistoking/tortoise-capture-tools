@@ -23,8 +23,22 @@ from .. import log as _log
 from .contracts import Tables
 
 MODULES_PACKAGE = "tortoise_capture.modules"  # imported dynamically, never statically
+ANALYZE_PACKAGE = "tortoise_capture.analyze"  # likewise
 
 _logger = _log.get_logger("registry")
+
+
+def _import_submodules(package: str, logger) -> int:
+    """Imports every submodule so its decorators run. Discovery, by string."""
+    pkg = importlib.import_module(package)
+    found = 0
+    for info in pkgutil.iter_modules(pkg.__path__):
+        if info.name.startswith("_"):
+            continue
+        importlib.import_module(f"{package}.{info.name}")
+        found += 1
+    logger.debug("discovered %d file(s) in %s", found, package)
+    return found
 
 
 @dataclass(slots=True)
@@ -54,15 +68,7 @@ class Registry:
 
     def discover(self, package: str = MODULES_PACKAGE) -> int:
         """Imports every submodule of `package`; decorators do the rest."""
-        pkg = importlib.import_module(package)
-        found = 0
-        for info in pkgutil.iter_modules(pkg.__path__):
-            if info.name.startswith("_"):
-                continue
-            importlib.import_module(f"{package}.{info.name}")
-            found += 1
-        _logger.debug("discovered %d module file(s) in %s", found, package)
-        return found
+        return _import_submodules(package, _logger)
 
     # -- resolution --------------------------------------------------------
 
@@ -114,7 +120,33 @@ class Registry:
         return iter(self._ordered())
 
 
+class AnalyzerRegistry:
+    """Analyzers in declared order. No opcode key -- every one sees everything.
+
+    Kept apart from the opcode Registry because the lookup is different in
+    kind: modules are selected by what a packet is, analyzers all run.
+    """
+
+    def __init__(self) -> None:
+        self._regs: dict[str, tuple[int, Any]] = {}
+
+    def add(self, id: str, order: int, instance: Any) -> None:
+        if id in self._regs:
+            raise ValueError(f"duplicate analyzer id {id!r}")
+        self._regs[id] = (order, instance)
+
+    def discover(self, package: str = ANALYZE_PACKAGE) -> int:
+        return _import_submodules(package, _logger)
+
+    def all(self) -> list[Any]:
+        return [inst for _, (order, inst) in sorted(self._regs.items(), key=lambda kv: (kv[1][0], kv[0]))]
+
+    def __len__(self) -> int:
+        return len(self._regs)
+
+
 REGISTRY = Registry()
+ANALYZERS = AnalyzerRegistry()
 
 
 def module(*, id: str, opcodes: Sequence[str | int], order: int = 100):
@@ -134,9 +166,32 @@ def module(*, id: str, opcodes: Sequence[str | int], order: int = 100):
     return decorate
 
 
+def analyzer(*, id: str, order: int = 100):
+    """Class decorator that registers one analyzer.
+
+    `order` fixes the order findings appear in, nothing else: analyzers are
+    independent and never see each other's output.
+    """
+
+    def decorate(cls):
+        cls.id = id
+        cls.order = order
+        ANALYZERS.add(id, order, cls())
+        return cls
+
+    return decorate
+
+
 def load(tables: Tables, package: str = MODULES_PACKAGE) -> Registry:
     """Discovers modules once and resolves them against the opcode table."""
     if not REGISTRY._regs:
         REGISTRY.discover(package)
     REGISTRY.resolve(tables)
     return REGISTRY
+
+
+def load_analyzers(package: str = ANALYZE_PACKAGE) -> AnalyzerRegistry:
+    """Discovers analyzers once."""
+    if not len(ANALYZERS):
+        ANALYZERS.discover(package)
+    return ANALYZERS
