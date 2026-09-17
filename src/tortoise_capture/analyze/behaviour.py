@@ -20,6 +20,15 @@ Three questions that no single packet answers:
   samples. The finding carries its sample count for exactly that reason, and
   `confident` stays false until there are enough of them.
 
+A fourth question is answered across creatures rather than within one:
+`SMSG_PLAY_SOUND` carries a sound id and nothing else -- no sender, no
+target -- so attributing a captured sound to a particular line of dialogue is
+pure timestamp coincidence. `_sound_for` looks across *every* creature's
+dialogue at once and attributes a sound only when exactly one line, from any
+of them, falls inside the coincidence window: two creatures talking in the
+same instant makes that sound's owner a coin flip, not a fact, and it is left
+unattributed rather than guessed.
+
 Findings are observations with their evidence attached, never rounded into a
 conclusion they cannot support.
 """
@@ -94,13 +103,22 @@ class Behaviour(BaseAnalyzer):
 
     def __init__(self) -> None:
         self._seen: dict[int, _Creature] = {}
+        self._sounds: list[tuple[float, int]] = []     # session-wide: no entry on the wire
 
     # -- collect -----------------------------------------------------------
 
     def feed(self, ev: Event) -> None:
-        entry = ev.data.get("entry")
         t = ev.packet.t
-        if entry is None or t is None:
+        if t is None:
+            return
+        if ev.kind == "play_sound":
+            # Not entry-scoped: SMSG_PLAY_SOUND carries no sender, so it is
+            # matched against every creature's dialogue at once in finish().
+            self._sounds.append((t, ev.data["sound_id"]))
+            return
+
+        entry = ev.data.get("entry")
+        if entry is None:
             return
         creature = self._seen.setdefault(entry, _Creature(entry=entry))
         creature.last_packet = ev.packet
@@ -119,12 +137,29 @@ class Behaviour(BaseAnalyzer):
     # -- report ------------------------------------------------------------
 
     def finish(self, ctx: DecodeContext) -> Iterator[Event]:
+        sound_for = self._sound_attribution()
         for entry, creature in sorted(self._seen.items()):
             if creature.last_packet is None:
                 continue
             yield from self._respawn(creature)
-            yield from self._text_triggers(creature)
+            yield from self._text_triggers(creature, sound_for)
             yield from self._spell_timing(creature)
+
+    def _sound_attribution(self) -> dict[tuple[int, str], int]:
+        """(entry, message) -> sound_id, only where exactly one line -- from
+        any creature -- falls inside the window of a captured sound."""
+        occurrences = [(entry, message, t) for entry, creature in self._seen.items()
+                       for message, times in creature.texts.items() for t in times]
+
+        attributed: dict[tuple[int, str], int] = {}
+        for t_sound, sound_id in self._sounds:
+            candidates = {(entry, message) for entry, message, t in occurrences
+                          if abs(t - t_sound) <= COINCIDENCE_WINDOW}
+            if len(candidates) == 1:
+                attributed[next(iter(candidates))] = sound_id
+            # 0 candidates: nothing nearby. >1: two lines equally close --
+            # which one actually made the sound is a coin flip, not derivable.
+        return attributed
 
     def _respawn(self, c: _Creature) -> Iterator[Event]:
         gaps = []
@@ -136,7 +171,8 @@ class Behaviour(BaseAnalyzer):
             yield self.event(c.last_packet, "respawn_timer", entry=c.entry,
                              value_min=min(gaps), value_max=max(gaps), samples=len(gaps))
 
-    def _text_triggers(self, c: _Creature) -> Iterator[Event]:
+    def _text_triggers(self, c: _Creature,
+                       sound_for: dict[tuple[int, str], int]) -> Iterator[Event]:
         for message, times in c.texts.items():
             matched: dict[str, list[float]] = defaultdict(list)
             for t in times:
@@ -146,6 +182,9 @@ class Behaviour(BaseAnalyzer):
                     if near:
                         matched[name].append(min(near))
 
+            sound_id = sound_for.get((c.entry, message))
+            extra = {"sound_id": sound_id} if sound_id is not None else {}
+
             # Only attribute when one trigger explains every occurrence: a text
             # that lines up once out of three has told us nothing.
             winner = next((name for name, offsets in matched.items()
@@ -154,10 +193,10 @@ class Behaviour(BaseAnalyzer):
                 offsets = matched[winner]
                 yield self.event(c.last_packet, "text_trigger", entry=c.entry, subject=message,
                                  trigger=winner, samples=len(times),
-                                 offset=sum(offsets) / len(offsets))
+                                 offset=sum(offsets) / len(offsets), **extra)
             else:
                 yield self.event(c.last_packet, "text_untriggered", entry=c.entry,
-                                 subject=message, samples=len(times))
+                                 subject=message, samples=len(times), **extra)
 
     def _spell_timing(self, c: _Creature) -> Iterator[Event]:
         engagements = sorted(c.triggers.get("aggro", []))

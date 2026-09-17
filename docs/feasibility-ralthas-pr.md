@@ -152,19 +152,25 @@ row: **5276**, *"Monster - Staff, 3 Piece Taped Staff"*, whose
 This is the first output that **needs the world database as an input**, not
 just as a comparison target — worth deciding deliberately (see §8).
 
-## 5. `broadcast_text` — text exact, sound and emote unobservable here
+## 5. `broadcast_text` — text exact, sound wired up but unexercised here
 
 | PR field | from capture |
 |---|---|
 | `male_text` / `female_text` | **exact strings**, both of them |
 | `chat_type = 0` | `SMSG_MESSAGECHAT` msgtype `0x0B` (MONSTER_SAY) |
 | `language_id = 0` | the language field (now kept by the chat module) |
-| `sound_id = 0` | no `SMSG_PLAY_SOUND` in this capture |
+| `sound_id = 0` | schema default — no `SMSG_PLAY_SOUND` in this capture |
 | `emote_id1..3 = 0` | the two `SMSG_EMOTE` packets belong to the **player**, not Ralthas |
 | `entry = 6263501/02` | authoring convention (`entry*100 + n`), not wire data |
 
-Sound and emote are zero here, so nothing is lost — but a creature that does
-play a sound would need an `SMSG_PLAY_SOUND` module to capture it.
+`sound_id` is built now (`modules/play_sound.py` decodes the opcode,
+`behaviour.py._sound_attribution` matches it to a line by timestamp,
+attributing only when exactly one line across *every* creature's dialogue
+falls inside the window — the same discipline `text_trigger` applies within
+one, generalised across entries because the opcode has no sender to key on).
+Ralthas never plays a sound, so this path stays unexercised against real
+data; the synthetic tests in `test_analyze.py` are what it stands on
+(ARCHITECTURE.md §16.4).
 
 ## 6. `creature_ai_events` + `creature_ai_scripts` — correlation, and it is clean
 
@@ -262,13 +268,14 @@ Ordered by value per unit of work. The first three have since been built.
    spell *hit* -- the resolved outcome, not the rule that picked it. No
    decoder could ever close this gap; §7 above corrects the earlier framing.
    ~~keep `language` in `messagechat`~~ — **done**
-7. **`SMSG_PLAY_SOUND` → `broadcast_text.sound_id`** — the one gap actually
-   left. The opcode is a clean 4-byte body (`Object.cpp` `PlayDirectSound`),
-   but it carries no sender guid at all, so attributing a sound to a specific
-   creature's line needs the same timestamp-coincidence discipline as
-   `behaviour.py`'s `text_trigger` (attribute only when unambiguous). The
-   Ralthas capture contains none, so this would ship with zero real-capture
-   validation -- synthetic tests only, honestly labelled as such.
+7. ~~**`SMSG_PLAY_SOUND` → `broadcast_text.sound_id`**~~ — **done**
+   (`modules/play_sound.py`). The opcode is a clean 4-byte body (`Object.cpp`
+   `PlayDirectSound`) with no sender guid at all, so attribution is
+   timestamp-coincidence across *every* creature's dialogue at once, matching
+   only when exactly one line qualifies (`behaviour.py._sound_attribution`,
+   ARCHITECTURE.md §16.4). The Ralthas capture contains no `SMSG_PLAY_SOUND`,
+   so this path ships with zero real-capture validation — synthetic tests
+   only, said plainly rather than left implicit.
 8. **Longer captures** for anything statistical (`delayRepeat*`). Not a code
    problem.
 

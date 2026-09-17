@@ -566,6 +566,29 @@ respawn sighting pins the origin.
 Validated against the live `tw_world`: all 41 distinct waypoints of Ralthas's
 route, in the authored order, mean XY error 0.006 yards.
 
+### 16.4 Attributing a sound with no sender
+
+`SMSG_PLAY_SOUND` (`modules/play_sound.py`) carries a sound id and nothing
+else — no caster, no target — so `behaviour.py` attributes a captured sound to
+a line of dialogue purely by timestamp, and does it **across every
+creature's dialogue at once**, not per entry: a sound is attributed only when
+exactly one line, from any creature in the whole session, falls inside the
+coincidence window. Two creatures talking in the same instant makes the
+sound's owner a coin flip, and `_sound_attribution` leaves it unattributed
+rather than guess — the same discipline as `text_trigger`'s
+one-trigger-explains-every-occurrence rule, applied across entries instead of
+within one.
+
+This needed `_sounds: list[tuple[float, int]]` collected ahead of the usual
+`entry is None -> return` guard in `feed()`, since a session-scoped fact by
+definition has no entry to key on — the same category `Event.scope="session"`
+exists for ([§17.5](#175-not-every-fact-is-about-a-creature)), though here the
+cross-entry matching happens inside one analyzer rather than at the filter.
+
+Ralthas's own capture contains no `SMSG_PLAY_SOUND` at all, so this path has
+no real-capture validation — only the synthetic tests in `test_analyze.py`.
+Said plainly rather than left to be discovered.
+
 ---
 
 ## 17. The `author` layer

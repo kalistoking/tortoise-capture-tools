@@ -79,6 +79,20 @@ def test_the_text_is_wire_but_the_ids_are_only_convention():
     assert event.provenance["event_type"] == DERIVED
 
 
+def test_a_sound_attributed_by_behaviour_becomes_broadcast_text_sound_id():
+    events = _dialogue_events() + [
+        make_event("text_trigger", 999.0, entry=ENTRY, subject=AGGRO_TEXT,
+                   trigger="aggro", sound_id=5150),
+    ]
+    # The plain text_trigger for AGGRO_TEXT (no sound_id) comes first in
+    # _dialogue_events(); Dialogue must key off the message, not "first wins".
+    rows, _ = author_rows(Dialogue(), events, ENTRY)
+    aggro_text = next(r for r in rows if r.table == "broadcast_text"
+                      and r.values["male_text"] == AGGRO_TEXT)
+    assert aggro_text.values["sound_id"] == 5150
+    assert aggro_text.provenance["sound_id"] == DERIVED
+
+
 def test_unattributed_dialogue_becomes_a_gap_not_a_row():
     events = [
         make_event("monster_say", 5.0, guid=GUID, entry=ENTRY, message="Who knows why",

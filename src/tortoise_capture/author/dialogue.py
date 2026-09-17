@@ -9,12 +9,15 @@ What comes from where:
 
   the text itself, its chat type and language   read off the wire
   which trigger fires it                        inferred by correlation
+  which sound accompanies it (if any)           inferred by correlation
   the ids, the 100% chance, the script linkage  authoring convention
 
-`sound_id` and the emote columns are left out rather than written as zero:
-this capture holds no `SMSG_PLAY_SOUND`, and a zero that means "not observed"
-is indistinguishable from a zero that means "silent" once it is in a table.
-Omitting them lets the column defaults apply and keeps the claim honest.
+`sound_id` comes from `behaviour.py`'s `_sound_attribution` -- `SMSG_PLAY_SOUND`
+carries no sender, so it is only ever attributed when exactly one line, from
+any creature, falls inside the coincidence window. Left out (rather than
+written as `0`) whenever no such match exists: a zero meaning "not observed"
+is indistinguishable from a zero meaning "silent" once it is in a table, so
+the emote columns stay left out the same way for the same reason.
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ class Dialogue(BaseAuthorRule):
     def __init__(self) -> None:
         self._said: dict[str, dict[str, Any]] = {}     # message -> what the wire said
         self._triggers: dict[str, str] = {}            # message -> aggro | death
+        self._sounds: dict[str, int] = {}               # message -> sound_id, when attributed
         self._untriggered: list[str] = []
         self._name: str | None = None
 
@@ -58,6 +62,10 @@ class Dialogue(BaseAuthorRule):
             })
         elif ev.kind == "text_trigger":
             self._triggers[ev.data["subject"]] = ev.data["trigger"]
+            if "sound_id" in ev.data:
+                # behaviour.py only sets this when exactly one line -- across
+                # every creature -- fell inside the coincidence window.
+                self._sounds[ev.data["subject"]] = ev.data["sound_id"]
         elif ev.kind == "text_untriggered":
             self._untriggered.append(ev.data["subject"])
         elif ev.kind == "creature_query":
@@ -86,6 +94,11 @@ class Dialogue(BaseAuthorRule):
             bt_provenance = {"entry": CONVENTION, "male_text": WIRE, "female_text": WIRE,
                              "chat_type": WIRE, "language_id": WIRE}
             bt_notes = []
+            if message in self._sounds:
+                bt_values["sound_id"] = self._sounds[message]
+                bt_provenance["sound_id"] = DERIVED
+                bt_notes.append(f"sound_id {self._sounds[message]}: the only SMSG_PLAY_SOUND "
+                                "in this capture that coincided with exactly this line")
             self.fill_schema_defaults(ctx, "broadcast_text", bt_values, bt_provenance, bt_notes)
             yield AuthoredRow(table="broadcast_text", values=bt_values,
                               provenance=bt_provenance, notes=tuple(bt_notes))

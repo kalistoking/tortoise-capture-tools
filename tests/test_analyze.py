@@ -146,3 +146,42 @@ def test_an_interval_spanning_a_death_is_not_a_repeat_delay():
     found = findings_by_kind(run_analyzer(Behaviour(), _session()))
     # 60.026 -> 78.317 counts; 78.317 -> 395.199 spans the death and must not.
     assert found["spell_repeat_delay"].data["samples"] == 1
+
+
+# --------------------------------------------------------------------------
+# sound attribution: SMSG_PLAY_SOUND has no sender, only timestamp coincidence
+# --------------------------------------------------------------------------
+
+def test_a_sound_next_to_one_creatures_text_is_attributed():
+    events = _session() + [make_event("play_sound", 59.98, sound_id=5150)]  # next to aggro text
+    found = findings_by_kind(run_analyzer(Behaviour(), events))
+    aggro = next(ev for ev in run_analyzer(Behaviour(), events)
+                if ev.kind == "text_trigger" and ev.data["subject"] == AGGRO_TEXT)
+    assert aggro.data.get("sound_id") == 5150
+
+
+def test_a_sound_matching_nothing_is_simply_not_attributed():
+    events = _session() + [make_event("play_sound", 200.0, sound_id=999)]  # nowhere near any text
+    found = run_analyzer(Behaviour(), events)
+    assert all("sound_id" not in ev.data for ev in found if ev.kind == "text_trigger")
+
+
+def test_a_sound_equidistant_between_two_creatures_texts_is_attributed_to_neither():
+    """No sender guid on SMSG_PLAY_SOUND: if two creatures' lines land in the
+    same instant, guessing which one played the sound would be a coin flip
+    dressed up as data."""
+    other_entry = 9999
+    events = _session() + [
+        make_event("monster_say", 59.979, guid=make_guid_for(other_entry), entry=other_entry,
+                   message="Also right here"),
+        make_event("text_trigger", 999.0, entry=other_entry, subject="Also right here",
+                   trigger="aggro"),
+        make_event("play_sound", 59.979, sound_id=42),
+    ]
+    found = run_analyzer(Behaviour(), events)
+    triggers = [ev for ev in found if ev.kind == "text_trigger"]
+    assert all("sound_id" not in ev.data for ev in triggers)
+
+
+def make_guid_for(entry):
+    return (0xF130 << 48) | (entry << 24) | 1

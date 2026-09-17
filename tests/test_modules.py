@@ -223,3 +223,24 @@ def test_a_later_transfer_is_what_authoring_should_use():
     ev2 = decode_one(WorldTransfer(), make_packet(0x3E, _transfer_body(1),
                                                   "SMSG_NEW_WORLD"), make_ctx())
     assert ev1.data["map_id"] == 0 and ev2.data["map_id"] == 1
+
+
+# --------------------------------------------------------------------------
+# play_sound: SMSG_PLAY_SOUND -- sound id only, no sender identification
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.play_sound import PlaySound  # noqa: E402
+
+
+def test_play_sound_reads_the_sound_id():
+    body = struct.pack("<I", 5150)
+    ev = decode_one(PlaySound(), make_packet(0x2D2, body, "SMSG_PLAY_SOUND"), make_ctx())
+    assert ev.kind == "play_sound" and ev.data["sound_id"] == 5150
+
+
+def test_play_sound_carries_no_sender_so_no_entry_key():
+    """Object.cpp's PlayDirectSound writes only uint32 sound_id -- no guid.
+    No entry key means the event correctly drops out of a --entry run,
+    same as MONSTER_EMOTE."""
+    ev = decode_one(PlaySound(), make_packet(0x2D2, struct.pack("<I", 1)), make_ctx())
+    assert "entry" not in ev.data and "guid" not in ev.data
