@@ -23,9 +23,14 @@ numbers and update-field indices (see [Source-derived tables](#source-derived-ta
 
 ## Status
 
-Bootstrapping. The architecture is specified in [ARCHITECTURE.md](ARCHITECTURE.md);
-opcode support is added one module at a time and its current extent is
-reported by `tct opcodes --coverage`.
+The module system works end to end. Nine modules cover ten opcodes: creature
+query, monster chat, party kill log, spell go, AI reaction, update object,
+monster move (+ transport) and the two compressed containers.
+
+Support grows one module at a time — see
+[docs/adding-an-opcode.md](docs/adding-an-opcode.md) — and the current extent
+is reported by `tct opcodes --coverage`. The design behind it is in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 The working prototype this project supersedes lives outside the repository
 (`C:\WOW\source\extract_wow_data`) and is deliberately **not** imported: its
@@ -67,6 +72,19 @@ src/tortoise_capture/
 docs/        wire-format knowledge, how to add an opcode
 tests/       synthetic-packet and golden tests
 ```
+
+Tests run with `pytest` after `pip install -e ".[dev]"`, or without it via
+`python tests/run_tests.py`.
+
+## Documentation
+
+| | |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | the module system and why it is shaped that way |
+| [docs/adding-an-opcode.md](docs/adding-an-opcode.md) | the one-file recipe for new opcode support |
+| [docs/wire-format.md](docs/wire-format.md) | verified packet layouts, with source references |
+| [docs/baseline-ralthas.md](docs/baseline-ralthas.md) | the known-good numbers regressions are measured against |
+| [docs/prototype-notes.md](docs/prototype-notes.md) | what the superseded prototype was, and what is already ruled out |
 
 ## Data policy
 
