@@ -14,7 +14,7 @@ not estimated. Nothing here is aspirational.
 
 | table | derivable from capture | blocker |
 |---|---|---|
-| `creature_template` (UPDATE, 9 fields) | **9/9** — exact | none |
+| `creature_template` (UPDATE, 9 fields) | **9/9** — integers exact, floats ~3e-6 off | the wire carries computed, not authored, values |
 | `creature` (spawn row) | **13/18** — rest are constant defaults | `map` id |
 | `creature_movement` (42 waypoints) | **42/42** X/Y exact | Z within ~0.35 yd; needs loop detection |
 | `creature_equip_template` | **1/1** — exact | needs an `item_template` lookup |
@@ -29,7 +29,7 @@ blocker in the last row.
 
 ---
 
-## 1. `creature_template` — fully recoverable, verified exact
+## 1. `creature_template` — fully recoverable
 
 The PR sets nine fields. Eight come straight out of the `CREATE` block's
 UpdateFields; the ninth is a convention.
@@ -46,9 +46,32 @@ UpdateFields; the ninth is a convention.
 | `ranged_attack_power = 36` | `UNIT_FIELD_RANGED_ATTACK_POWER` | 36 |
 | `spell_list_id = entry` | — | authoring convention |
 
-The raw uint32 slots carry full float precision (`1101115897` →
-`20.211887…`); only the text report rounds to four places. SQL output must
-emit the full value, not the display string.
+### 1.1 Correction: the floats are not bit-exact, and it matters
+
+An earlier version of this document called this section "exact". Measured
+against the live database, that is true of the integers and not quite true of
+the floats:
+
+| column | database (authored) | wire (broadcast) | apart |
+|---|---|---|---|
+| `dmg_min` | 20.2118873596 | 20.2119007111 | 6.6e-7 |
+| `dmg_max` | 24.4670829773 | 24.4671001434 | 7.0e-7 |
+| `ranged_dmg_min` | 17.1929473877 | 17.1928997040 | 2.8e-6 |
+| `ranged_dmg_max` | 23.6403007507 | 23.6403007507 | **0** |
+| `scale` | 1.0 | 1.0 | **0** |
+| `attack_power`, `ranged_attack_power`, `unit_class` | 44 / 36 / 2 | 44 / 36 / 2 | **0** |
+
+Damage is broadcast *after* the stat system has run, so what reaches the wire
+is the server's computed value, not the number an author typed. The two agree
+to about six significant figures, which is far past anything observable in
+play — but writing the broadcast value back into the column it came from would
+nudge it every time, and a capture/author/capture loop would walk it.
+
+So the authoring emitter diffs against the database and **leaves a column alone
+when the stored value already agrees within 1e-4 relative** ([§9](#9-proposed-sql-output-shape)).
+The capture confirms the row rather than revising it. Where a value does get
+proposed, it is written with nine significant digits — the IEEE guarantee for a
+float32 round trip — so it lands in the column bit-identically.
 
 ## 2. `creature` — spawn row from the respawn, not the first sighting
 
@@ -125,7 +148,7 @@ just as a comparison target — worth deciding deliberately (see §8).
 |---|---|
 | `male_text` / `female_text` | **exact strings**, both of them |
 | `chat_type = 0` | `SMSG_MESSAGECHAT` msgtype `0x0B` (MONSTER_SAY) |
-| `language_id = 0` | the language field, currently read and discarded |
+| `language_id = 0` | the language field (now kept by the chat module) |
 | `sound_id = 0` | no `SMSG_PLAY_SOUND` in this capture |
 | `emote_id1..3 = 0` | the two `SMSG_EMOTE` packets belong to the **player**, not Ralthas |
 | `entry = 6263501/02` | authoring convention (`entry*100 + n`), not wire data |
@@ -182,31 +205,28 @@ it is simply not implemented yet.
 
 ## 8. What the toolkit would need
 
-Ordered by value per unit of work:
+Ordered by value per unit of work. The first three have since been built.
 
-1. **`analyze/` layer** (already designed, deferred) — waypoint loop detection,
-   aggro/death correlation, per-entry timelines. Unlocks `creature_movement`,
-   `creature_ai_events`, `creature_ai_scripts`.
-2. **SQL authoring emitter** — a second consumer of the same `TableSpec`s that
-   writes *world* rows (`managed=False`) instead of capture rows, with the
-   `entry*100+n` id convention and `INSERT` ordering that satisfies foreign
-   keys. See §9.
-3. **`item_template` lookup** — the first case needing the world DB as an
-   *input*. Either a read-only connection in config, or an exported
-   display→entry map. This is a deliberate architectural change: the toolkit
-   is file-in/file-out today, on purpose.
+1. ~~**`analyze/` layer**~~ — **done**. `patrol` reconstructs the route,
+   `behaviour` correlates aggro/death/respawn and cast timing
+   (ARCHITECTURE.md §16).
+2. ~~**Authoring emitter**~~ — **done**. `tct author --entry N` writes a world
+   migration with per-field provenance (§9, ARCHITECTURE.md §17).
+3. ~~**`item_template` lookup**~~ — **done**. A read-only accessor shelling out
+   to the `mysql` client, configured under `[database]`; no driver dependency.
 4. **Small decoder gaps**, each one file:
    - `SMSG_SPELL_GO` target block → `castTarget`
-   - keep `language` in `messagechat` → `language_id`
+   - ~~keep `language` in `messagechat`~~ — **done**
    - `SMSG_LOGIN_VERIFY_WORLD` / `SMSG_NEW_WORLD` → `map`
-   - `SMSG_PLAY_SOUND`, `SMSG_EMOTE` → `sound_id`, `emote_id*`
+   - `SMSG_PLAY_SOUND` → `sound_id` (`SMSG_EMOTE` is decoded but the emotes in
+     this capture are the player's, not the creature's)
 5. **Longer captures** for anything statistical (`delayRepeat*`,
    `probability`). Not a code problem.
 
-## 9. Proposed SQL output shape
+## 9. SQL output shape (built)
 
 The existing SQL path writes `capture_*` observation tables. Authoring output
-is a different thing and should stay separate rather than overloading it:
+is a different thing and stays separate rather than overloading it:
 
 - **`tct author --entry N`** — a distinct subcommand, so nobody mistakes
   observations for a migration.
@@ -220,17 +240,20 @@ is a different thing and should stay separate rather than overloading it:
   statement rather than defaulted silently. A reviewer must be able to see
   which numbers came off the wire and which are assumptions.
 - Values that exist in the DB already are diffed, not blindly re-inserted —
-  the point is a reviewable delta, as §10 of ARCHITECTURE.md argues.
+  the point is a reviewable delta, as §10 of ARCHITECTURE.md argues. For
+  Ralthas this means all eight stat columns come back "already correct in the
+  database, so not re-stated" and only `spell_list_id` is proposed.
 
 ## 10. Bottom line
 
 For a creature like Ralthas — one that spawns, patrols, aggros, talks, casts
-one spell, dies and respawns inside the capture — this toolkit could have
-produced **everything in that PR except the spell repeat delays and
-`castTarget`**, with stats and geometry matching the hand-authored values to
-float precision.
+one spell, dies and respawns inside the capture — this toolkit now produces
+**everything in that PR except the spell repeat delays, `castTarget` and the
+map id**: 52 rows across 8 tables, ids matching the hand-authored ones, and
+three gaps stated in the file rather than papered over.
 
-The work is not in the decoding, which already reaches these numbers. It is in
-the `analyze/` layer that turns 113 hops into 42 waypoints and three
-timestamps into two AI events, and in an authoring emitter honest enough to
-mark its own guesses.
+The work was never in the decoding, which already reached these numbers. It was
+in the `analyze/` layer that turns 113 hops into 41 waypoints and three
+timestamps into two AI events, and in an emitter honest enough to mark its own
+guesses — including the one that matters most, refusing to invent a repeat
+delay from a single observed interval.

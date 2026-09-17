@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
-from .contracts import DecodeContext, Event, Packet, Row, SqlContext, TableSpec
+from .contracts import (
+    AuthorContext, AuthoredRow, DecodeContext, Event, Packet, Row, SqlContext, TableSpec,
+)
 
 
 class BaseModule:
@@ -40,6 +42,56 @@ class BaseModule:
     def event(self, pkt: Packet, kind: str, **data: Any) -> Event:
         """Builds an Event stamped with this module's id."""
         return Event(packet=pkt, module_id=self.id, kind=kind, data=data)
+
+
+class BaseAuthorRule:
+    """Optional convenience base for authoring rules.
+
+    A rule is a sink over the whole stream -- decoded events and analyzer
+    findings alike -- that produces world rows once it ends. `close()` is the
+    sink contract and is deliberately a no-op: rows are asked for afterwards,
+    by `rows()`, so the caller controls when the database is consulted.
+    """
+
+    id: str = ""
+    table: str = ""
+    order: int = 100
+
+    def handle(self, ev: Event, mod: Any = None) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def rows(self, ctx: "AuthorContext") -> Iterable["AuthoredRow"]:
+        return ()
+
+    def gaps(self, ctx: "AuthorContext") -> Iterable[str]:
+        return ()
+
+    # -- helpers -----------------------------------------------------------
+
+    def row(self, values: Mapping[str, Any], provenance: Mapping[str, str],
+            **kwargs: Any) -> "AuthoredRow":
+        return AuthoredRow(table=self.table, values=dict(values),
+                           provenance=dict(provenance), **kwargs)
+
+    @staticmethod
+    def authored_id(entry: int, index: int) -> int:
+        """`entry * 100 + n` -- the id convention hand-authored content uses."""
+        return entry * 100 + index
+
+    @staticmethod
+    def wire_float(value: float) -> float:
+        """Shortest decimal that still lands on the same float32.
+
+        Nine significant digits is the IEEE guarantee for a float32 round trip,
+        so a value written this way stores into a FLOAT column bit-identically
+        to what came off the wire. Rounding to a fixed number of decimal places
+        carries no such guarantee -- it just looks tidier while quietly moving
+        the value.
+        """
+        return float(f"{value:.9g}")
 
 
 class BaseAnalyzer(BaseModule):

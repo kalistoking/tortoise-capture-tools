@@ -41,3 +41,16 @@ dir = "out"                     # generated .sql / .jsonl / text reports
 cache_dir = ".cache"            # parsed opcode and field tables
 sql_dialect = "mysql"           # mysql | sqlite
 text_layout = "grouped"         # grouped | stream
+
+# Read-only, and only needed by `tct author`: resolving an item's display id to
+# its entry, and checking a value before proposing to change it. Leave the
+# section out entirely and authoring still runs -- the lookups become gaps.
+#
+# The password is deliberately NOT a key here. Set TCT_DB_PASSWORD in the
+# environment instead, so this file stays safe to share.
+# [database]
+# client = "C:/path/to/mariadb/bin/mysql.exe"   # or just "mysql" if on PATH
+# host = "127.0.0.1"
+# port = 3306
+# user = "mangos"
+# world = "tw_world"

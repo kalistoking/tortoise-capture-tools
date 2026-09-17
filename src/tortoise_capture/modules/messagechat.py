@@ -61,7 +61,7 @@ class MessageChat(BaseModule):
     def decode(self, pkt: Packet, ctx: DecodeContext) -> Iterator[Event]:
         r = ByteReader(pkt.body, pkt.name or "SMSG_MESSAGECHAT")
         msg_type = r.u8("msgType")
-        r.u32("language")
+        language = r.u32("language")
 
         if msg_type in _KINDS:
             kind, label = _KINDS[msg_type]
@@ -70,12 +70,14 @@ class MessageChat(BaseModule):
             r.u64("target")
             yield self.event(pkt, kind, guid=sender_guid, entry=guid_entry(sender_guid),
                              guid_type=guid_type(sender_guid), label=label, sender=sender,
+                             chat_type=msg_type, language=language,
                              message=r.sized_string("message"))
         elif msg_type == CHAT_MSG_MONSTER_EMOTE:
             sender = r.sized_string("senderName")
             r.u64("target")
             # No sender guid on the wire: no entry key, so --entry skips it.
             yield self.event(pkt, "monster_emote", sender=sender,
+                             chat_type=msg_type, language=language,
                              message=r.sized_string("message"))
         else:
             yield self.event(pkt, "chat_other", chat_type=msg_type, size=len(pkt.body))

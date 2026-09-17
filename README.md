@@ -51,6 +51,12 @@ trigger fires which line of dialogue, and spell cast timing. Findings carry
 their sample counts, and say so when a capture is too short to support a
 conclusion.
 
+`tct author` then turns those observations into proposed world-database rows.
+Measured against a hand-authored content PR, it reproduces everything in it
+except the spell repeat delays, `castTarget` and the map id — and states those
+three in the output rather than inventing them
+([docs/feasibility-ralthas-pr.md](docs/feasibility-ralthas-pr.md)).
+
 Support grows one module at a time — see
 [docs/adding-an-opcode.md](docs/adding-an-opcode.md) — and the current extent
 is reported by `tct opcodes --coverage`. The design behind it is in
@@ -80,7 +86,15 @@ tct dump capture.pcap --port 8090 --repo /path/to/tortoise-wow
 
 # 3. run every registered opcode module over those records
 tct decode capture.jsonl --entry <creature_template.entry> --format text,sql
+
+# 4. propose world-database rows for one creature, provenance included
+tct author capture.jsonl --entry <creature_template.entry>
 ```
+
+`tct author` writes a migration for a human to review, never one that applies
+itself: every value says whether it was read off the wire, inferred, resolved
+against the database or fixed by convention, and anything the capture could not
+support is listed at the end instead of being defaulted to zero.
 
 ## Configuration
 
@@ -106,6 +120,11 @@ Precedence: built-in default → `tct.toml` → environment (`TCT_REPO`,
 flag. So `--log-level debug` overrides the file for a single run, and
 `--debug` is a shortcut for it.
 
+An optional `[database]` section points `tct author` at a read-only world
+database for the two things that need one: resolving an item's display id to
+its entry, and confirming a value before proposing to change it. The password
+is not a config key — set `TCT_DB_PASSWORD` instead.
+
 `tct.toml` is git-ignored (machine-specific paths); `tct.example.toml` is
 versioned and documents every key.
 
@@ -124,7 +143,8 @@ src/tortoise_capture/
   fields/    UpdateFields tables and value typing
   modules/   one module per opcode — the part that grows
   analyze/   cross-opcode analyzers: patrol routes, behaviour correlation
-  emit/      text / SQL / JSONL sinks
+  author/    one rule per world table it can propose rows for
+  emit/      text / SQL / JSONL / migration sinks
 docs/        wire-format knowledge, how to add an opcode
 tests/       synthetic-packet and golden tests
 ```

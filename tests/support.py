@@ -94,3 +94,30 @@ def run_analyzer(an, events, ctx: DecodeContext | None = None) -> list["Event"]:
 
 def findings_by_kind(found) -> dict:
     return {ev.kind: ev for ev in found}
+
+
+class StubWorld:
+    """A world database stand-in: answers from a dict, records nothing."""
+
+    def __init__(self, columns: dict | None = None, displays: dict | None = None):
+        self._columns = columns or {}      # (table, column) -> stored value as string
+        self._displays = displays or {}    # display id -> item entry
+
+    def column(self, table: str, column: str, where: str):
+        return self._columns.get((table, column))
+
+    def item_entry_for_display(self, display_id: int):
+        return self._displays.get(display_id)
+
+    def row_exists(self, table: str, where: str) -> bool:
+        return False
+
+
+def author_rows(rule, events, entry: int, world=None):
+    """Feeds an authoring rule a stream and returns (rows, gaps)."""
+    from tortoise_capture.core.contracts import AuthorContext
+    from tortoise_capture.log import get_logger
+    for ev in events:
+        rule.handle(ev, None)
+    ctx = AuthorContext(capture_id="test", entry=entry, log=get_logger("test"), world=world)
+    return list(rule.rows(ctx)), list(rule.gaps(ctx))

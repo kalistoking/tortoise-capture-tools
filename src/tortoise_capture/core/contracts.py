@@ -167,6 +167,57 @@ class SqlEmitter(Protocol):
     def sql_rows(self, ev: Event, ctx: SqlContext) -> Iterable[Row]: ...
 
 
+# --------------------------------------------------------------------------
+# Authoring: turning observations into rows for the world database.
+# --------------------------------------------------------------------------
+
+# Where a value came from. The distinction is the whole point of authoring
+# output: a reviewer must be able to see which numbers were read off the wire
+# and which were inferred, before any of it reaches a world database.
+WIRE = "wire"                # read directly out of a packet
+DERIVED = "derived"          # inferred by correlation or reconstruction
+LOOKUP = "lookup"            # resolved against the world database
+CONVENTION = "convention"    # fixed by the authoring convention, not observed
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoredRow:
+    """One row destined for a world table, with its provenance attached."""
+
+    table: str
+    values: Mapping[str, Any]
+    provenance: Mapping[str, str] = field(default_factory=dict)   # column -> WIRE/DERIVED/...
+    statement: str = "insert"                                     # insert | update
+    where: Mapping[str, Any] = field(default_factory=dict)        # update only
+    notes: tuple[str, ...] = ()                                   # caveats for the reviewer
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorContext:
+    capture_id: str
+    entry: int
+    log: "logging.Logger"
+    world: Any = None        # a read-only world database accessor, or None
+
+
+@runtime_checkable
+class AuthorRule(Protocol):
+    """Builds one world table from the event stream.
+
+    A rule is a sink: it sees every emitted event *and* every analyzer finding,
+    in order, then produces its rows once the stream ends. That is why it needs
+    no place of its own in the runner.
+    """
+
+    id: str
+    table: str
+
+    def handle(self, ev: Event, mod: Any) -> None: ...
+    def close(self) -> None: ...
+    def rows(self, ctx: AuthorContext) -> Iterable[AuthoredRow]: ...
+    def gaps(self, ctx: AuthorContext) -> Iterable[str]: ...
+
+
 @runtime_checkable
 class Analyzer(Protocol):
     """Stateful consumer of the whole event stream, producing more events.

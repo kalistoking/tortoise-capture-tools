@@ -45,6 +45,11 @@ SCHEMA: dict[str, dict[str, str]] = {
             "file": "log_to_file", "modules": "module_levels"},
     "output": {"dir": "out_dir", "cache_dir": "cache_dir", "sql_dialect": "sql_dialect",
                "text_layout": "text_layout"},
+    # Read-only, and only for the lookups authoring needs. The password is not
+    # a key here on purpose: it comes from TCT_DB_PASSWORD, so a config file
+    # stays safe to share.
+    "database": {"client": "db_client", "host": "db_host", "port": "db_port",
+                 "user": "db_user", "world": "db_world"},
 }
 
 _DEFAULTS: dict[str, Any] = {
@@ -60,6 +65,11 @@ _DEFAULTS: dict[str, Any] = {
     "cache_dir": ".cache",
     "sql_dialect": "mysql",
     "text_layout": "grouped",
+    "db_client": None,
+    "db_host": "127.0.0.1",
+    "db_port": 3306,
+    "db_user": "mangos",
+    "db_world": "tw_world",
 }
 
 
@@ -76,6 +86,7 @@ class RunConfig:
     cache_dir: Path
     sql_dialect: str
     text_layout: str
+    database: dict[str, Any]
     quiet: bool = False
     source: Path | None = None       # the config file actually used
     issues: tuple[tuple[str, str], ...] = field(default_factory=tuple)
@@ -115,6 +126,9 @@ class RunConfig:
             cache_dir=Path(values["cache_dir"]),
             sql_dialect=values["sql_dialect"],
             text_layout=values["text_layout"],
+            database={"client": values["db_client"], "host": values["db_host"],
+                      "port": values["db_port"], "user": values["db_user"],
+                      "world": values["db_world"]},
             quiet=bool(getattr(args, "key_only", False)),
             source=path,
             issues=tuple(issues),

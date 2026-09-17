@@ -24,6 +24,7 @@ from .contracts import Tables
 
 MODULES_PACKAGE = "tortoise_capture.modules"  # imported dynamically, never statically
 ANALYZE_PACKAGE = "tortoise_capture.analyze"  # likewise
+AUTHOR_PACKAGE = "tortoise_capture.author"    # likewise
 
 _logger = _log.get_logger("registry")
 
@@ -147,6 +148,7 @@ class AnalyzerRegistry:
 
 REGISTRY = Registry()
 ANALYZERS = AnalyzerRegistry()
+AUTHOR_RULES = AnalyzerRegistry()      # same shape: everything registered, in order
 
 
 def module(*, id: str, opcodes: Sequence[str | int], order: int = 100):
@@ -190,8 +192,33 @@ def load(tables: Tables, package: str = MODULES_PACKAGE) -> Registry:
     return REGISTRY
 
 
+def author_rule(*, id: str, table: str, order: int = 100):
+    """Class decorator that registers one authoring rule.
+
+    `order` is the section order in the generated migration, which must
+    satisfy the target tables' own dependencies -- scripts before the events
+    that reference them, and so on.
+    """
+
+    def decorate(cls):
+        cls.id = id
+        cls.table = table
+        cls.order = order
+        AUTHOR_RULES.add(id, order, cls())
+        return cls
+
+    return decorate
+
+
 def load_analyzers(package: str = ANALYZE_PACKAGE) -> AnalyzerRegistry:
     """Discovers analyzers once."""
     if not len(ANALYZERS):
         ANALYZERS.discover(package)
     return ANALYZERS
+
+
+def load_author_rules(package: str = AUTHOR_PACKAGE) -> AnalyzerRegistry:
+    """Discovers authoring rules once."""
+    if not len(AUTHOR_RULES):
+        AUTHOR_RULES.discover(package)
+    return AUTHOR_RULES

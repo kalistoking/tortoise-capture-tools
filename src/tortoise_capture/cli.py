@@ -3,6 +3,7 @@
     tct key     <capture>        recover the 40-byte session key
     tct dump    <capture>        decrypt and frame the session into JSONL
     tct decode  <capture|jsonl>  run every registered module over the packets
+    tct author  <capture|jsonl>  propose world-database rows for one creature
     tct opcodes                  show the opcode table and module coverage
 
 Nothing here knows any module: it loads the registry, hands it to the runner,
@@ -19,9 +20,11 @@ from pathlib import Path
 from . import log as _log
 from .config import CONFIG_NAME, RunConfig
 from .core import pipeline, registry as registry_mod
-from .core.contracts import DecodeContext, Tables
+from .core.contracts import AuthorContext, DecodeContext, Tables
 from .core.dispatch import Filters, Runner
+from . import world as world_db
 from .emit import jsonl as jsonl_emit
+from .emit.migration import MigrationWriter, migration_name
 from .emit.sql import SqlSink
 from .emit.text import TextSink
 from .fields import tables as field_tables
@@ -80,6 +83,16 @@ def build_parser() -> argparse.ArgumentParser:
                        help="default: mysql, or [output] sql_dialect in the config")
     p_dec.add_argument("--report", action="store_true", help="print the coverage summary at the end")
 
+    p_auth = sub.add_parser("author", parents=[common],
+                            help="propose world-database rows for one creature")
+    p_auth.add_argument("source", help="a capture, or a .jsonl produced by `tct dump`")
+    p_auth.add_argument("--entry", type=int, required=True,
+                        help="the creature_template entry to author")
+    p_auth.add_argument("--session-key", help="hex key, skips recovery (captures only)")
+    p_auth.add_argument("--out", help="output .sql (default: <out-dir>/<timestamp>_world.sql)")
+    p_auth.add_argument("--no-db", action="store_true",
+                        help="skip database lookups and diffing even if one is configured")
+
     p_ops = sub.add_parser("opcodes", parents=[common], help="opcode table and coverage")
     p_ops.add_argument("--coverage", action="store_true", help="show which opcodes have a module")
     p_ops.add_argument("--grep", help="only opcodes whose name contains this text")
@@ -104,6 +117,18 @@ def _session_key(session: pcap.CaptureSession, given: str | None) -> bytes | Non
     if given:
         return bytes.fromhex(given)
     return crypt.recover_session_key(session.c2s.segments)
+
+
+def _packet_source(args, cfg: RunConfig, registry, ctx):
+    """Packets from a dump or straight from a capture. (None, stem) if no key."""
+    source = Path(args.source)
+    if source.suffix.lower() == ".jsonl":
+        return jsonl_emit.read_packets(source), source.stem
+    session = pcap.read_session(source, cfg.server_ip, cfg.port)
+    key = _session_key(session, args.session_key)
+    if key is None:
+        return None, source.stem
+    return pipeline.packets(session, key, registry, ctx), source.stem
 
 
 # --------------------------------------------------------------------------
@@ -145,16 +170,9 @@ def cmd_decode(args, cfg: RunConfig) -> int:
     registry = registry_mod.load(tables)
     ctx = _context(tables, cfg, entry=args.entry, guid=args.guid)
 
-    source = Path(args.source)
-    stem = source.stem
-    if source.suffix.lower() == ".jsonl":
-        packets = jsonl_emit.read_packets(source)
-    else:
-        session = pcap.read_session(source, cfg.server_ip, cfg.port)
-        key = _session_key(session, args.session_key)
-        if key is None:
-            return EXIT_WITH_ERRORS
-        packets = pipeline.packets(session, key, registry, ctx)
+    packets, stem = _packet_source(args, cfg, registry, ctx)
+    if packets is None:
+        return EXIT_WITH_ERRORS
 
     only = {mid.strip() for mid in args.only.split(",")} if args.only else None
     formats = {f.strip() for f in args.format.split(",") if f.strip()}
@@ -199,6 +217,50 @@ def cmd_decode(args, cfg: RunConfig) -> int:
     return EXIT_OK
 
 
+def cmd_author(args, cfg: RunConfig) -> int:
+    """Proposes world rows for one creature -- a file to review, never applied.
+
+    Authoring rules are sinks, so they see the decoded events and the analyzer
+    findings in the same stream the text and SQL outputs see. That is why this
+    command is the decode pipeline with a different set of sinks, not a
+    separate traversal of the capture.
+    """
+    tables = _load_tables(cfg)
+    registry = registry_mod.load(tables)
+    ctx = _context(tables, cfg, entry=args.entry)
+
+    packets, stem = _packet_source(args, cfg, registry, ctx)
+    if packets is None:
+        return EXIT_WITH_ERRORS
+
+    world = None if args.no_db else world_db.from_config(cfg.database)
+    rules = registry_mod.load_author_rules().all()
+    analyzers = registry_mod.load_analyzers().all()
+
+    runner = Runner(registry, ctx, rules, Filters(entry=args.entry), analyzers=analyzers)
+    stats = runner.run(packets)
+
+    out_path = Path(args.out) if args.out else cfg.out_dir / migration_name()
+    writer = MigrationWriter(out_path, capture_id=stem, entry=args.entry,
+                             dialect=cfg.sql_dialect)
+    author_ctx = AuthorContext(capture_id=stem, entry=args.entry,
+                               log=_log.get_logger("author"), world=world)
+    for rule in rules:
+        try:
+            writer.add(rule.rows(author_ctx))
+            writer.add_gaps(rule.gaps(author_ctx))
+        except Exception as exc:
+            _logger.error("authoring rule %s failed: %s: %s",
+                          rule.id, type(exc).__name__, exc)
+
+    if writer.write() is None:
+        _logger.warning("entry %d produced no rows -- was it in this capture? "
+                        "(%d event(s) matched)", args.entry, stats.emitted)
+        return EXIT_WITH_ERRORS
+    _logger.info("review the file before applying it to any database")
+    return EXIT_OK
+
+
 def cmd_opcodes(args, cfg: RunConfig) -> int:
     tables = _load_tables(cfg)
     registry = registry_mod.load(tables)
@@ -221,7 +283,8 @@ def cmd_opcodes(args, cfg: RunConfig) -> int:
     return EXIT_OK
 
 
-_COMMANDS = {"key": cmd_key, "dump": cmd_dump, "decode": cmd_decode, "opcodes": cmd_opcodes}
+_COMMANDS = {"key": cmd_key, "dump": cmd_dump, "decode": cmd_decode,
+             "author": cmd_author, "opcodes": cmd_opcodes}
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -20,6 +20,7 @@ cost one new file and nothing else**, for 825 opcodes, over a long time.
 | R7 | Incremental opcode coverage, measurable | [§12 Coverage and roadmap](#12-coverage-and-roadmap) |
 | R8 | Captures and records never reach the repository | [§13 Testing](#13-testing) |
 | R9 | Answer questions no single packet can, without special-casing the runner | [§16 The `analyze` layer](#16-the-analyze-layer) |
+| R10 | Propose world-database rows, with every value's provenance visible | [§17 The `author` layer](#17-the-author-layer) |
 
 ---
 
@@ -42,7 +43,10 @@ Data flows one way; no layer imports a layer above it.
  [emit]     text / SQL / JSONL sinks consume Events
      |
  [analyze]  cross-opcode correlation: patrol routes, behaviour timelines
-            -- findings re-enter the Event stream and reach the same sinks
+     |      -- findings re-enter the Event stream and reach the same sinks
+     |
+ [author]   world-table rows with per-value provenance   ==> migration file
+            -- rules are sinks, so they see events and findings alike
 ```
 
 Two data types cross every boundary, and only those two:
@@ -112,7 +116,7 @@ accepted too, for opcodes absent from a given checkout.
 
 ```
 src/tortoise_capture/
-  cli.py              subcommands: key, dump, decode, opcodes
+  cli.py              subcommands: key, dump, decode, author, opcodes
   config.py           tct.toml + environment + flags, in that precedence
   log.py              four-level logging (error/warn/info/debug)
   core/
@@ -134,7 +138,10 @@ src/tortoise_capture/
     text.py           template renderer + section grouping
     sql.py            TableSpec -> DDL/INSERT, dialect handling
     jsonl.py          raw record / event dump
+    migration.py      AuthoredRow -> world migration, with provenance
   analyze/            <-- also grows; patrol reconstruction, behaviour correlation
+  author/             <-- also grows; one rule per world table it can propose
+  world.py            read-only world-database lookups (no driver dependency)
 ```
 
 ---
@@ -558,3 +565,83 @@ respawn sighting pins the origin.
 
 Validated against the live `tw_world`: all 41 distinct waypoints of Ralthas's
 route, in the authored order, mean XY error 0.006 yards.
+
+---
+
+## 17. The `author` layer
+
+Analysis says what the session showed. Authoring says what a world database
+should therefore contain — a different claim, made to a different standard,
+and kept in a different output.
+
+### 17.1 A rule is a sink
+
+```python
+class AuthorRule(Protocol):
+    id: str
+    table: str
+    def handle(self, ev: Event, mod: Any) -> None: ...   # the sink contract
+    def close(self) -> None: ...
+    def rows(self, ctx: AuthorContext) -> Iterable[AuthoredRow]: ...
+    def gaps(self, ctx: AuthorContext) -> Iterable[str]: ...
+```
+
+Rules are registered as **sinks**, which is what makes them free: a sink
+already receives every emitted event *and* every analyzer finding, in order,
+and is already closed at the end of the stream. `tct author` is therefore the
+decode pipeline with a different set of sinks — not a second traversal, and
+not a line of new runner code.
+
+One rule may fill several tables (`dialogue` fills three), because
+`creature_ai_events` → `creature_ai_scripts` → `broadcast_text` share an id
+convention that would otherwise have to be agreed on across files. The writer
+groups by each row's own table, in first-appearance order, so the migration
+applies in dependency order.
+
+### 17.2 Provenance is the product
+
+Every value carries where it came from — `WIRE`, `DERIVED`, `LOOKUP` or
+`CONVENTION` — and each section of the migration states the breakdown:
+
+```sql
+-- creature  (1 row(s))
+--   wire        (read off the wire): guid, id, position_x, position_y, ...
+--   derived     (inferred by analysis): spawntimesecsmin, movement_type
+--   convention  (authoring convention, not observed): health_percent, ...
+-- NOTE: respawn 300s from the death-to-create gap (299.534s observed once ...)
+```
+
+Three rules follow from taking that seriously:
+
+1. **Nothing undecidable is defaulted.** A column the capture cannot support is
+   omitted and listed under `NOT DERIVED`, with the reason. A zero meaning
+   "not observed" is indistinguishable from a zero meaning "none" once it is in
+   a table.
+2. **The database is consulted before proposing a change.** Broadcast floats
+   are the server's *computed* values and sit ~3e-6 from the authored ones, so
+   a column that already agrees is confirmed rather than re-stated. Otherwise
+   every capture/author cycle would walk the stored value.
+3. **Floats are written to round-trip.** Nine significant digits is the IEEE
+   guarantee for float32, so a proposed value lands in the column
+   bit-identically instead of "tidily" moving.
+
+### 17.3 The database as an input
+
+`world.py` is the first place the toolkit reads the world database rather than
+just comparing against it — resolving an item's display id to its entry needs
+`item_template`. It shells out to the `mysql`/`mariadb` client instead of
+taking a driver dependency (D9), is read-only by construction, and takes its
+password from `TCT_DB_PASSWORD` rather than a config file or a command line.
+
+Every lookup that can be cross-checked is: the item resolved from
+`UNIT_VIRTUAL_ITEM_DISPLAY` must match the class, subclass and inventory type
+packed into `UNIT_VIRTUAL_ITEM_INFO`, and a disagreement withholds the row
+rather than guessing between two answers.
+
+Without a database the command still runs; the lookups become gaps.
+
+### 17.4 What it does not do
+
+It does not apply anything. The output is a file for a human to read, argue
+with and run — which is why the gaps and the provenance are in the file itself
+rather than in a log the reviewer will never see.
