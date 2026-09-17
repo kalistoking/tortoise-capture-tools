@@ -426,14 +426,22 @@ tct opcodes --coverage        # opcode -> module, and the gaps
 tct decode ... --report       # end of run: seen / decoded / uncovered / failed
 ```
 
-Planned order, highest content value first:
+Order followed so far, highest content value first:
 
 1. `SMSG_MONSTER_MOVE` / `_TRANSPORT` — waypoints (validated in the prototype)
 2. `SMSG_UPDATE_OBJECT` — create/values blocks, combat stats
 3. `SMSG_COMPRESSED_MOVES`, `SMSG_COMPRESSED_UPDATE_OBJECT` — containers
 4. `SMSG_AI_REACTION`, `SMSG_PARTYKILLLOG`, `SMSG_SPELL_GO` — behaviour
 5. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE` — identity, script text
-6. everything else, as the content being authored demands it
+6. `SMSG_LOGIN_VERIFY_WORLD`/`SMSG_NEW_WORLD`, `SMSG_PLAY_SOUND` — map, sound
+7. `SMSG_ATTACKERSTATEUPDATE` — melee swing outcomes, observational only (see
+   `modules/attacker_state.py`'s docstring: the damage on the wire is
+   post-armor-mitigation *and* post-attack-power-bonus, empirically higher
+   than `dmg_min/dmg_max` in the real capture, not lower as armor alone would
+   predict — reversing it needs the target's armor, which needs a player
+   field table this toolkit does not have yet, so it stays raw combat-log
+   data rather than a stat-refinement source it cannot honestly be yet)
+8. everything else, as the content being authored demands it
 
 ---
 

@@ -244,3 +244,73 @@ def test_play_sound_carries_no_sender_so_no_entry_key():
     same as MONSTER_EMOTE."""
     ev = decode_one(PlaySound(), make_packet(0x2D2, struct.pack("<I", 1)), make_ctx())
     assert "entry" not in ev.data and "guid" not in ev.data
+
+
+# --------------------------------------------------------------------------
+# attacker_state: SMSG_ATTACKERSTATEUPDATE -- one melee swing's outcome
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.attacker_state import (  # noqa: E402
+    HITINFO_CRITICALHIT, HITINFO_MISS, VICTIMSTATE_NORMAL, AttackerState,
+)
+
+ATTACKER = make_guid(62635, 42)
+TARGET = make_guid(0, 7, 0x0000)   # a player: high word 0x0000
+
+
+def _swing_body(hit_info=0, total_damage=18, sub_damage=(0, 18, 0, 0),
+               target_state=VICTIMSTATE_NORMAL, spell_id=0, blocked=0):
+    school, dmg, absorb, resist = sub_damage
+    return (struct.pack("<I", hit_info) + pack_guid(ATTACKER) + pack_guid(TARGET)
+            + struct.pack("<I", total_damage) + bytes([1])
+            + struct.pack("<IfIiI", school, (dmg / total_damage) if total_damage else 0.0,
+                          dmg, absorb, resist)
+            + struct.pack("<IIII", target_state, 0, spell_id, blocked))
+
+
+def test_a_normal_hit_reads_attacker_target_and_damage():
+    ev = decode_one(AttackerState(), make_packet(0x14A, _swing_body(total_damage=18)), make_ctx())
+    assert ev.kind == "attacker_state"
+    assert ev.data["guid"] == ATTACKER and ev.data["entry"] == 62635
+    assert ev.data["target_guid"] == TARGET
+    assert ev.data["total_damage"] == 18
+    assert ev.data["target_state"] == VICTIMSTATE_NORMAL
+    assert ev.data["sub_damage"] == [{"school": 0, "damage": 18, "absorb": 0, "resist": 0}]
+
+
+def test_hit_info_and_target_state_flags_are_exposed_not_just_the_raw_int():
+    ev = decode_one(AttackerState(), make_packet(0x14A, _swing_body(
+        hit_info=HITINFO_CRITICALHIT, total_damage=36)), make_ctx())
+    assert ev.data["is_miss"] is False
+    assert ev.data["is_critical"] is True
+    assert ev.data["is_normal_hit"] is True
+
+
+def test_a_miss_is_flagged_and_carries_no_usable_damage():
+    ev = decode_one(AttackerState(), make_packet(0x14A, _swing_body(
+        hit_info=HITINFO_MISS, total_damage=0, sub_damage=(0, 0, 0, 0),
+        target_state=0)), make_ctx())
+    assert ev.data["is_miss"] is True
+    assert ev.data["is_normal_hit"] is False
+
+
+def test_multiple_sub_damage_entries_are_all_decoded():
+    """A weapon with more than one damage school (rare, but the count is on
+    the wire) must not silently lose entries past the first."""
+    total = 20
+    body = (struct.pack("<I", 0) + pack_guid(ATTACKER) + pack_guid(TARGET)
+            + struct.pack("<I", total) + bytes([2])
+            + struct.pack("<IfIiI", 0, 15/total, 15, 0, 0)
+            + struct.pack("<IfIiI", 3, 5/total, 5, 0, 0)
+            + struct.pack("<IIII", VICTIMSTATE_NORMAL, 0, 0, 0))
+    ev = decode_one(AttackerState(), make_packet(0x14A, body), make_ctx())
+    assert len(ev.data["sub_damage"]) == 2
+    assert ev.data["sub_damage"][1] == {"school": 3, "damage": 5, "absorb": 0, "resist": 0}
+
+
+def test_target_with_no_entry_bearing_guid_has_no_target_entry_key():
+    """The target here is a player (high word 0x0000) -- guid_entry() would
+    return a meaningless number for one, so it must not be exposed as if it
+    named a creature_template row."""
+    ev = decode_one(AttackerState(), make_packet(0x14A, _swing_body()), make_ctx())
+    assert "target_entry" not in ev.data
