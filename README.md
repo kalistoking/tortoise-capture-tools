@@ -13,7 +13,7 @@ cooperation from the recorded server is required.
 | | |
 |---|---|
 | **Consuming project** | `tortoise-wow` — the private vanilla-protocol server fork whose `tw_world` database the extracted content is authored into. |
-| **Game client** | The latest publicly released [Turtle WoW](https://turtle-wow.org) client, whatever that is at the time — Turtle ships new content patches regularly. It wraps an unmodified vanilla **`WoW.exe` (1.12.1, build 5875)** — verified by reading that executable's own `FileVersion` resource — which is what actually speaks the wire protocol this project decodes, regardless of which Turtle patch is current. |
+| **Game client** | [Turtle WoW](https://turtle-wow.org) client, **1.18.1-7272-Hotfix-2026-04-12**. |
 | **Recorded server** | Any vanilla-protocol server reachable by that client, including third-party ones. |
 
 This repository is **standalone**. It is not a fork, submodule or mirror of
