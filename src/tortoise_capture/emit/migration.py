@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from .. import log as _log
-from ..core.contracts import CONVENTION, DERIVED, LOOKUP, WIRE, AuthoredRow
+from ..core.contracts import CONFIRMED, CONVENTION, DERIVED, LOOKUP, WIRE, AuthoredRow
 from .sql import literal
 
 _logger = _log.get_logger("emit.migration")
@@ -31,9 +31,10 @@ _SOURCE_LABELS = {
     WIRE: "read off the wire",
     DERIVED: "inferred by analysis",
     LOOKUP: "resolved against the world database",
+    CONFIRMED: "matches the wire, restated as the database's own value -- a no-op",
     CONVENTION: "authoring convention, not observed",
 }
-_SOURCE_ORDER = (WIRE, DERIVED, LOOKUP, CONVENTION)
+_SOURCE_ORDER = (WIRE, DERIVED, LOOKUP, CONFIRMED, CONVENTION)
 
 RULE = "-- " + "=" * 62
 

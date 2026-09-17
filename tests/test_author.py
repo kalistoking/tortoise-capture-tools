@@ -12,7 +12,7 @@ from tortoise_capture.author.equipment import Equipment, unpack_item_info
 from tortoise_capture.author.spawn import Spawn
 from tortoise_capture.author.spells import Spells
 from tortoise_capture.author.stats import Stats
-from tortoise_capture.core.contracts import CONVENTION, DERIVED, LOOKUP, WIRE, AuthoredRow
+from tortoise_capture.core.contracts import CONFIRMED, CONVENTION, DERIVED, LOOKUP, WIRE, AuthoredRow
 from tortoise_capture.emit.migration import MigrationWriter
 
 ENTRY = 62635
@@ -133,9 +133,12 @@ def test_a_float_that_round_trips_lands_on_the_same_float32():
     assert struct.pack("<f", emitted) == struct.pack("<f", 20.2119007111)
 
 
-def test_a_column_the_database_already_holds_is_confirmed_not_restated():
-    """The wire carries the server's computed value, which drifts from the
-    authored one. Re-proposing it every capture would walk the stored value."""
+def test_a_column_the_database_already_holds_is_restated_as_its_own_value():
+    """The wire carries the server's computed value, which drifts ~3e-6 from
+    the authored one. Writing the WIRE value back would introduce that drift
+    on every capture/author cycle -- so a confirmed column is still included
+    (the full migration shape matters, same as fill_schema_defaults' width),
+    but with the DATABASE's own stored value, making the SET a safe no-op."""
     world = StubWorld(columns={
         ("creature_template", "dmg_min"): "20.2118873596",   # authored, ~3e-6 away
         ("creature_template", "attack_power"): "44",
@@ -143,7 +146,16 @@ def test_a_column_the_database_already_holds_is_confirmed_not_restated():
         ("creature_template", "scale"): "1",
     })
     rows, _ = author_rows(Stats(), _stats_events(), ENTRY, world=world)
-    assert rows == []          # nothing to change: every column confirmed
+    row = rows[0]
+    # Float32-bit-identical to the DB's stored value (a genuine no-op when
+    # applied), not to the wire's -- exact decimal equality would be the
+    # wrong assertion, since restating 12+ digits of decimal text a 32-bit
+    # column cannot hold is not what "the database's own value" means here.
+    assert struct.pack("<f", row.values["dmg_min"]) == struct.pack("<f", 20.2118873596)
+    assert row.values["dmg_min"] != 20.2119007111       # and NOT the wire's (computed) value
+    assert row.values["attack_power"] == 44 and isinstance(row.values["attack_power"], int)
+    assert row.provenance["dmg_min"] == CONFIRMED
+    assert row.provenance["attack_power"] == CONFIRMED
 
 
 def test_a_genuinely_different_value_is_still_proposed():
@@ -409,6 +421,22 @@ def test_the_migration_states_provenance_and_lists_gaps():
     assert "-- NOTE: cross-checked" in sql
     assert "NOT DERIVED" in sql and "creature.map" in sql
     assert "INSERT INTO `creature_equip_template`" in sql
+
+
+def test_confirmed_provenance_appears_in_the_summary_line():
+    """Regression: CONFIRMED was added to the provenance vocabulary but
+    forgotten in the migration writer's own label table, so a restated
+    column's category silently vanished from the summary line."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "out.sql"
+        writer = MigrationWriter(path, capture_id="test", entry=ENTRY)
+        writer.add([AuthoredRow(table="creature_template", statement="update",
+                                where={"entry": ENTRY}, values={"dmg_min": 20.2118874},
+                                provenance={"dmg_min": CONFIRMED})])
+        writer.write()
+        sql = path.read_text(encoding="utf-8")
+
+    assert "confirmed" in sql and "no-op): dmg_min" in sql
 
 
 def test_rows_group_by_their_own_table_in_first_appearance_order():

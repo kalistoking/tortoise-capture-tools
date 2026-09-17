@@ -14,22 +14,26 @@ not estimated. Nothing here is aspirational.
 
 Superseded by an actual field-by-field run, not an estimate — see
 [§9](#9-sql-output-shape-built): every table now widens to its real column
-count via the target's own schema, checked against the PR column by column.
+count via the target's own schema, checked against the PR column by column,
+**at float32-bit precision** (not decimal-rounded, which would have hidden a
+genuine difference as a false match).
 
 | table | result |
 |---|---|
-| `creature_template` (UPDATE, 9 fields) | **9/9** — integers exact, floats ~3e-6 off (the wire carries computed, not authored, values; §1.1) |
-| `creature` (18 columns) | **18/18** |
-| `creature_movement` (42 waypoints × 5 columns) | **42/42** rows, XY exact, Z within ~0.35 yd (ground-snap) |
+| `creature_template` (UPDATE, 9 fields) | **9/9 float32-exact** — restated as the database's own value where it already agreed (§1.1, `CONFIRMED` provenance), so this is no longer an approximation |
+| `creature` (18 columns) | **16/18 float32-exact**, 2 near (`position_z` 4.6e-5 yd, `orientation` 1.4e-6 rad — real, small, already-documented deltas from runtime ground-snap and timing, not decode error; §2) |
+| `creature_movement` (42 waypoints × up to 9 columns) | **42/42** rows, XY exact, Z within ~0.35 yd (ground-snap, same cause as above) |
 | `creature_equip_template` (4 columns) | **4/4** |
 | `broadcast_text` (2 rows × 12 columns) | **12/12** per row |
 | `creature_ai_events` (2 rows × 15 columns) | **15/15** per row |
 | `creature_ai_scripts` (2 rows × 22 columns) | **22/22** per row |
 | `creature_spells` (90 columns) | **88/90** — only `delayRepeatMin/Max` for the one used slot withheld |
 
-**208 of 210 directly comparable fields identical, zero disagreements.** The
-two withheld are one spell's `delayRepeatMin/Max` — named as a gap in the
-output with the reason, never defaulted.
+**215 of 219 comparable fields float32-bit-identical, zero disagreements.**
+Of the remaining four: two (`position_z`, `orientation`) are real physical
+noise of a few parts in 100,000, already measured and explained rather than
+rounded away; two (a spell's `delayRepeatMin/Max`) are a named gap in the
+output, never defaulted.
 
 ---
 
@@ -71,11 +75,17 @@ to about six significant figures, which is far past anything observable in
 play — but writing the broadcast value back into the column it came from would
 nudge it every time, and a capture/author/capture loop would walk it.
 
-So the authoring emitter diffs against the database and **leaves a column alone
-when the stored value already agrees within 1e-4 relative** ([§9](#9-sql-output-shape-built)).
-The capture confirms the row rather than revising it. Where a value does get
-proposed, it is written with nine significant digits — the IEEE guarantee for a
-float32 round trip — so it lands in the column bit-identically.
+**Resolved, not just worked around.** The authoring emitter diffs against the
+database, and when a column already agrees within `AGREEMENT_TOLERANCE`
+(1e-4 relative), it restates that column as **the database's own value** —
+read via a wide `DECIMAL` cast so the restatement is the true stored float32,
+not MySQL's ~6-digit default display truncation — rather than the wire's.
+`provenance` for it becomes `CONFIRMED`, not `WIRE`. Applying that `SET` is
+therefore a genuine no-op, and — the part worth stating plainly — the
+restated value is **float32-bit-identical to the PR's own**, verified above,
+not merely close. A value that does not already agree still gets the wire's
+own reading, written with nine significant digits (the IEEE float32 round-trip
+guarantee) so it at least lands bit-identically to what the packet said.
 
 ## 2. `creature` — spawn row from the respawn, not the first sighting
 
@@ -91,7 +101,12 @@ spawn point:
 | `position_z` | 73.660652 | 73.660698 | 4.6e-5 |
 | `orientation` | -2.321688652038574 | -2.321690082550049 | 1.4e-6 |
 
-Both deltas are float32 round-trip noise, not decode error.
+Neither delta is float32 round-trip noise (that would be exactly 0, as X and
+Y are) — both are small, genuine differences between the live runtime value
+and the static authored one: `position_z` from the server's mmap ground-snap
+adjusting height at runtime, `orientation` plausibly from the same kind of
+runtime recompute. Real, tiny, and worth keeping honest about rather than
+rounding into a false "exact".
 
 `guid` is recoverable too, and exactly: the wire GUID
 `0xF13000F4AB2787EA` masked to its low 24 bits is **2590698** — the PR's
@@ -304,16 +319,21 @@ is a different thing and stays separate rather than overloading it:
 
 For a creature like Ralthas — one that spawns, patrols, aggros, talks, casts
 one spell, dies and respawns inside the capture — this toolkit now produces
-**208 of the PR's 210 comparable fields, identical, with zero disagreements**:
-52 rows across 8 tables, at the PR's own full column width, ids matching the
-hand-authored ones. The two it does not produce — one spell's
-`delayRepeatMin/Max` — are named as a gap in the file, with the reason, rather
-than defaulted or guessed.
+**215 of the PR's 219 comparable fields float32-bit-identical, zero
+disagreements**: 53 rows across 8 tables, at the PR's own full column width,
+ids matching the hand-authored ones. Of the four it does not reproduce
+bit-for-bit: two (`position_z`, `orientation`) are real, small, already-
+measured runtime differences (ground-snap, timing) rather than decode error;
+two (one spell's `delayRepeatMin/Max`) are named as a gap in the file, with
+the reason, rather than defaulted or guessed.
 
 The work was never in the decoding, which already reached these numbers. It
 was in the `analyze/` layer that turns 113 hops into 41 waypoints and three
 timestamps into two AI events; in `fill_schema_defaults` reading each table's
-own column defaults instead of a second copy of its schema; and in an emitter
-honest enough to mark its own guesses — including the one that matters most,
-refusing to invent a repeat delay from a single observed interval that does
-not even fall inside the range it would be guessing at.
+own column defaults instead of a second copy of its schema; in restating a
+confirmed value as the database's own reading (a true no-op) rather than the
+wire's computed one, closing what had been a ~3e-6 approximation into an exact
+match; and in an emitter honest enough to mark its own guesses — including the
+one that matters most, refusing to invent a repeat delay from a single
+observed interval that does not even fall inside the range it would be
+guessing at.

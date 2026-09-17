@@ -135,6 +135,20 @@ class World:
     def column(self, table: str, column: str, where: str) -> str | None:
         return self.scalar(f"SELECT `{column}` FROM `{table}` WHERE {where} LIMIT 1")
 
+    def numeric_column(self, table: str, column: str, where: str) -> float | None:
+        """Like `column`, but at full precision for a FLOAT/DOUBLE column.
+
+        A plain `SELECT` of a FLOAT truncates to the client library's default
+        display precision (MySQL shows ~6 significant digits -- "20.2119" for
+        a column that actually stores 20.2118873596), which is fine for a
+        coarse agreement check but would be a *worse* value to restate than
+        the one it is being compared against. Casting to a wide DECIMAL makes
+        the server print what is actually stored.
+        """
+        text = self.scalar(f"SELECT CAST(`{column}` AS DECIMAL(30,10)) "
+                           f"FROM `{table}` WHERE {where} LIMIT 1")
+        return float(text) if text is not None else None
+
     def check(self) -> bool:
         """True when the database answers. Logged once, at startup."""
         try:

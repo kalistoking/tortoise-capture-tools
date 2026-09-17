@@ -108,6 +108,10 @@ class StubWorld:
     def column(self, table: str, column: str, where: str):
         return self._columns.get((table, column))
 
+    def numeric_column(self, table: str, column: str, where: str):
+        value = self._columns.get((table, column))
+        return float(value) if value is not None else None
+
     def item_entry_for_display(self, display_id: int):
         return self._displays.get(display_id)
 

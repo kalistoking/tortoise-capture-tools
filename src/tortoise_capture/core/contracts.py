@@ -190,6 +190,7 @@ WIRE = "wire"                # read directly out of a packet
 DERIVED = "derived"          # inferred by correlation or reconstruction
 LOOKUP = "lookup"            # resolved against the world database
 CONVENTION = "convention"    # fixed by the authoring convention, not observed
+CONFIRMED = "confirmed"      # matches the wire, restated as the DB's own value -- a safe no-op
 
 
 @dataclass(frozen=True, slots=True)

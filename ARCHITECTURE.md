@@ -623,30 +623,41 @@ applies in dependency order.
 
 ### 17.2 Provenance is the product
 
-Every value carries where it came from — `WIRE`, `DERIVED`, `LOOKUP` or
-`CONVENTION` — and each section of the migration states the breakdown:
+Every value carries where it came from — `WIRE`, `DERIVED`, `LOOKUP`,
+`CONFIRMED` or `CONVENTION` — and each section of the migration states the
+breakdown:
 
 ```sql
--- creature  (1 row(s))
---   wire        (read off the wire): guid, id, position_x, position_y, ...
---   derived     (inferred by analysis): spawntimesecsmin, movement_type
---   convention  (authoring convention, not observed): health_percent, ...
--- NOTE: respawn 300s from the death-to-create gap (299.534s observed once ...)
+-- creature_template  (1 row(s))
+--   confirmed   (matches the wire, restated as the database's own value -- a no-op): scale, dmg_min, ...
+--   convention  (authoring convention, not observed): spell_list_id
+-- NOTE: restated as the database's own value, a no-op -- already agreed with the wire ...
 ```
 
-Three rules follow from taking that seriously:
+Four rules follow from taking that seriously:
 
 1. **Nothing undecidable is defaulted.** A column the capture cannot support is
    omitted and listed under `NOT DERIVED`, with the reason. A zero meaning
    "not observed" is indistinguishable from a zero meaning "none" once it is in
    a table.
-2. **The database is consulted before proposing a change.** Broadcast floats
-   are the server's *computed* values and sit ~3e-6 from the authored ones, so
-   a column that already agrees is confirmed rather than re-stated. Otherwise
-   every capture/author cycle would walk the stored value.
+2. **An already-correct column is restated as the database's own value, not
+   omitted, and not the wire's.** Broadcast floats are the server's *computed*
+   values and sit ~3e-6 from the authored ones (§1.1 of
+   [feasibility-ralthas-pr.md](docs/feasibility-ralthas-pr.md)), so writing
+   the wire value back would nudge the stored one on every capture/author
+   cycle. Restating it as what the database (read via a wide `DECIMAL` cast,
+   not a plain `SELECT`'s ~6-digit display truncation) already holds keeps the
+   migration's shape complete — matching a hand-authored one, which was the
+   whole point of `fill_schema_defaults` too — while making the `SET` a
+   genuine no-op. `provenance=CONFIRMED` marks the difference from a column
+   whose value is actually changing.
 3. **Floats are written to round-trip.** Nine significant digits is the IEEE
    guarantee for float32, so a proposed value lands in the column
    bit-identically instead of "tidily" moving.
+4. Checked against tortoise-wow `37a2392e` at float32-bit precision (not
+   decimal-rounded, which would hide a real difference as a false match):
+   215 of 219 comparable fields identical, two real-and-small runtime deltas
+   already measured and explained rather than rounded away, two honest gaps.
 
 ### 17.3 Matching a table's full width without a second copy of its schema
 

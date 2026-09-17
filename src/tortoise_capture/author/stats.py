@@ -18,10 +18,15 @@ capture into the same column would therefore nudge the authored value every
 time, and enough cycles would visibly drift it.
 
 So when a database is reachable, **a column whose stored value already agrees
-within `AGREEMENT_TOLERANCE` is left alone** -- the capture confirms it rather
-than revising it, and the migration says so instead of proposing churn. Without
-a database there is nothing to compare against, and the broadcast value is
-emitted with that caveat attached.
+within `AGREEMENT_TOLERANCE` is restated as the database's own value, not the
+wire's** -- `provenance=CONFIRMED` rather than `WIRE`. Restating it (instead of
+omitting it) keeps the `UPDATE`'s shape complete, matching a hand-authored
+migration's -- an earlier version of this rule omitted confirmed columns
+entirely, which left the statement looking incomplete next to one. Using the
+database's value rather than the wire's keeps that restatement a genuine
+no-op: applying it cannot introduce the ~3e-6 drift a straight round-trip of
+the broadcast value would. Without a database there is nothing to compare
+against, and the broadcast value is proposed with that caveat attached.
 
 Integers do not have this problem: level, attack power, unit class and the rest
 match the database exactly.
@@ -36,7 +41,7 @@ from __future__ import annotations
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
-from ..core.contracts import CONVENTION, WIRE, AuthorContext, AuthoredRow, Event
+from ..core.contracts import CONFIRMED, CONVENTION, WIRE, AuthorContext, AuthoredRow, Event
 from ..core.registry import author_rule
 from ..fields import values as fv
 
@@ -84,21 +89,30 @@ class Stats(BaseAuthorRule):
         value = fv.decode(name, self._fields[name])
         return self.wire_float(value) if isinstance(value, float) else value
 
-    def _agrees(self, ctx: AuthorContext, column: str, observed: Any) -> bool:
-        """True when the database already holds this value, allowing for drift."""
+    def _confirmed_value(self, ctx: AuthorContext, column: str, observed: Any) -> Any | None:
+        """The database's own (full-precision) value, if it agrees with the
+        wire within drift tolerance -- None when it disagrees or is unknown.
+
+        Deliberately reads via `numeric_column` (a wide-DECIMAL CAST), not the
+        plain string `column()` would give: a plain SELECT of a FLOAT column
+        truncates to ~6 significant digits, which is *less* precise than the
+        wire value it would be compared against -- restating that truncated
+        text would be a regression, not a no-op.
+        """
         if ctx.world is None:
-            return False
-        stored = ctx.world.column("creature_template", column, f"entry = {ctx.entry}")
-        if stored is None:
-            return False
-        try:
-            stored_value = float(stored)
-        except ValueError:
-            return False
+            return None
+        stored_value = ctx.world.numeric_column("creature_template", column,
+                                                 f"entry = {ctx.entry}")
+        if stored_value is None:
+            return None
         if isinstance(observed, float):
             scale = max(abs(stored_value), abs(observed), 1.0)
-            return abs(stored_value - observed) / scale <= AGREEMENT_TOLERANCE
-        return stored_value == float(observed)
+            if abs(stored_value - observed) / scale > AGREEMENT_TOLERANCE:
+                return None
+            return self.wire_float(stored_value)
+        if stored_value != float(observed):
+            return None
+        return int(round(stored_value))
 
     def rows(self, ctx: AuthorContext) -> Iterator[AuthoredRow]:
         values: dict[str, Any] = {}
@@ -109,15 +123,21 @@ class Stats(BaseAuthorRule):
             if name not in self._fields:
                 continue
             observed = self._typed(name)
-            if self._agrees(ctx, column, observed):
+            stored = self._confirmed_value(ctx, column, observed)
+            if stored is not None:
+                values[column] = stored
+                provenance[column] = CONFIRMED
                 confirmed.append(column)
-                continue
-            values[column] = observed
-            provenance[column] = WIRE
+            else:
+                values[column] = observed
+                provenance[column] = WIRE
 
         if "UNIT_FIELD_BYTES_0" in self._fields:
             unit_class = fv.bytes_0(self._fields["UNIT_FIELD_BYTES_0"])["class"]
-            if self._agrees(ctx, "unit_class", unit_class):
+            stored = self._confirmed_value(ctx, "unit_class", unit_class)
+            if stored is not None:
+                values["unit_class"] = stored
+                provenance["unit_class"] = CONFIRMED
                 confirmed.append("unit_class")
             else:
                 values["unit_class"] = unit_class
@@ -131,8 +151,8 @@ class Stats(BaseAuthorRule):
 
         notes = []
         if confirmed:
-            notes.append("already correct in the database, so not re-stated: "
-                         + ", ".join(sorted(confirmed)))
+            notes.append("restated as the database's own value, a no-op -- already agreed "
+                         "with the wire within drift tolerance: " + ", ".join(sorted(confirmed)))
         if ctx.world is None:
             notes.append("float stats are the server's computed broadcast values, which "
                          "drift ~3e-6 from the authored ones; no database was available to "
@@ -152,9 +172,6 @@ class Stats(BaseAuthorRule):
         if values:
             yield self.row(values, provenance, statement="update",
                            where={"entry": ctx.entry}, notes=tuple(notes))
-        elif confirmed:
-            ctx.log.info("creature_template for entry %d already matches the capture "
-                         "in every column it could confirm", ctx.entry)
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
         if not self._fields:
