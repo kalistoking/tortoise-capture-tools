@@ -508,7 +508,8 @@ Deferred, with the seam already in place:
 
 A decoder answers "what does this packet say". An analyzer answers "what does
 the session as a whole say" — the patrol behind 113 hops, the respawn timer
-behind a death and a create, the trigger behind a line of creature dialogue.
+behind a death and the creature's next sighting, the trigger behind a line of
+creature dialogue.
 
 ### 16.1 Shape
 
@@ -588,6 +589,34 @@ cross-entry matching happens inside one analyzer rather than at the filter.
 Ralthas's own capture contains no `SMSG_PLAY_SOUND` at all, so this path has
 no real-capture validation — only the synthetic tests in `test_analyze.py`.
 Said plainly rather than left to be discovered.
+
+### 16.5 A respawn is not always a `CREATE`
+
+The respawn timer was first built against a capture where the player died,
+left, and came back — a fresh `CREATE` block on every respawn. A second
+capture, recorded specifically to get enough repeat-cast samples for
+[§16.2](#162-why-findings-carry-their-evidence)'s confidence threshold, was
+taken by staying in sight of the creature the whole time — and its respawn
+timer came back empty, on a capture with three confirmed deaths.
+
+The cause: `CREATE_OBJECT` is sent when an object *enters* a client's known-
+objects set, not on every state change. A player who never loses sight of the
+creature never has it leave that set, so the server never needs to resend a
+`CREATE` on respawn — it just resets `UNIT_FIELD_HEALTH` back up through an
+ordinary `VALUES` block. `_respawn`'s only sighting source was `c.creates`, so
+it had nothing to find, even though the respawn timing was sitting in the
+capture the whole time (confirmed by hand: two `VALUES` blocks resetting
+health off 0, timed 299.217 s and 300.022 s after their deaths — both within
+a second of the authored 300 s).
+
+`_Creature.revivals` is the second sighting source this needed: a `HEALTH>0`
+reading (`_health_of`, scanning a CREATE or VALUES block's field list) is
+counted only when it follows a confirmed death (`alive` flag, set by
+`party_kill`) — an ordinary damage-then-heal cycle while already alive is not
+a respawn, and does not need to be a "sighting" at all, since nothing was
+lost. `_respawn` then merges `creates` and `revivals` into one sorted list of
+"alive again" timestamps. Position stays CREATE-only — a `VALUES` block
+carries no coordinates — but the timer does not need to, and now does not.
 
 ---
 

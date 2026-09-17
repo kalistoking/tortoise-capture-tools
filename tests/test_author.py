@@ -204,6 +204,24 @@ def test_the_spawn_position_is_taken_from_the_respawn_not_first_sighting():
     assert creature.values["movement_type"] == 2
 
 
+def test_multiple_respawn_samples_give_a_genuine_min_max_range():
+    """A player who never loses sight of the creature gets no fresh CREATE on
+    respawn, only a VALUES health reset -- behaviour.py's respawn_timer
+    already handles that; this checks spawn.py doesn't collapse a real
+    two-sample range down to one number, or claim "observed once" when it
+    was not. Real capture numbers: 299.217s and 300.022s."""
+    events = _spawn_events() + [
+        make_event("respawn_timer", 999.0, entry=ENTRY,
+                   value_min=299.217, value_max=300.022, samples=2),
+    ]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["spawntimesecsmin"] == 299
+    assert creature.values["spawntimesecsmax"] == 300
+    assert any("2 observation" in note for note in creature.notes)
+    assert not any("observed once" in note for note in creature.notes)
+
+
 def test_without_a_death_the_position_is_emitted_but_flagged():
     events = [_create(12.9, -9177.9, -1026.8)]
     rows, gaps = author_rows(Spawn(), events, ENTRY)

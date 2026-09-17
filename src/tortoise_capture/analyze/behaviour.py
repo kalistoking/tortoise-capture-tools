@@ -2,9 +2,14 @@
 
 Three questions that no single packet answers:
 
-  **Respawn timer** -- the gap between a death and the next create block for
-  the same creature. Straightforward, and it lands within half a second of the
-  authored `spawntimesecsmin/max`.
+  **Respawn timer** -- the gap between a death and the creature's next
+  sighting. Usually that sighting is a fresh `CREATE` block, but not always:
+  a player who never loses sight of the creature gets no fresh `CREATE` on
+  respawn at all (the object never left the client's known-objects set), just
+  a `VALUES` block resetting `HEALTH` back up from 0. Both count as "the
+  creature is alive again" -- `_health_of` and the `alive` flag on
+  `_Creature` exist to catch the second case, which a `CREATE`-only check
+  would miss entirely, not just measure less precisely.
 
   **What triggers a text** -- a creature's lines arrive as plain chat packets
   with no hint of why. But an aggro line lands on the same timestamp as
@@ -73,6 +78,15 @@ _TABLE = TableSpec(
 )
 
 
+def _health_of(ev: Event) -> int | None:
+    """The raw UNIT_FIELD_HEALTH value in a CREATE/VALUES block's field list,
+    or None when this event carries no health field at all."""
+    for f in ev.data.get("fields", ()):
+        if f.get("name") == "UNIT_FIELD_HEALTH":
+            return f["raw"]
+    return None
+
+
 @dataclass
 class _Creature:
     entry: int
@@ -81,6 +95,8 @@ class _Creature:
     spells: dict[int, list[float]] = field(default_factory=lambda: defaultdict(list))
     deaths: list[float] = field(default_factory=list)
     creates: list[float] = field(default_factory=list)
+    revivals: list[float] = field(default_factory=list)   # HEALTH>0 sightings after a death
+    alive: bool = True                                     # gates a revival: must follow a death
     last_packet: Packet | None = None
 
 
@@ -88,8 +104,8 @@ class _Creature:
 class Behaviour(BaseAnalyzer):
     text_section = "Behaviour (correlated across opcodes)"
     text_templates = {
-        "respawn_timer": "entry={entry:<7} respawn {value_min:.1f}s "
-                         "(death -> create, {samples} observation(s))",
+        "respawn_timer": "entry={entry:<7} respawn {value_min:.1f}-{value_max:.1f}s "
+                         "(death -> next sighting, {samples} observation(s))",
         "text_trigger": "entry={entry:<7} {trigger} text: {subject!r} "
                         "({samples}x, offset {offset:+.3f}s)",
         "text_untriggered": "entry={entry:<7} text with no matching trigger: {subject!r} "
@@ -127,12 +143,24 @@ class Behaviour(BaseAnalyzer):
             creature.triggers[_TRIGGERS[ev.kind]].append(t)
             if ev.kind == "party_kill":
                 creature.deaths.append(t)
+                creature.alive = False
         elif ev.kind in ("monster_say", "monster_yell"):
             creature.texts[ev.data["message"]].append(t)
         elif ev.kind == "spell_go":
             creature.spells[ev.data["spell_id"]].append(t)
         elif ev.kind == "object_create":
             creature.creates.append(t)
+            creature.alive = True
+
+        # Checked regardless of kind: a revival can arrive as either a fresh
+        # CREATE (handled above too, for the creates list) or a VALUES block
+        # -- only the latter needs this extra path, since CREATE already
+        # counts as a sighting on its own.
+        if ev.kind in ("object_create", "object_values"):
+            health = _health_of(ev)
+            if health is not None and health > 0 and not creature.alive:
+                creature.revivals.append(t)
+                creature.alive = True
 
     # -- report ------------------------------------------------------------
 
@@ -162,9 +190,14 @@ class Behaviour(BaseAnalyzer):
         return attributed
 
     def _respawn(self, c: _Creature) -> Iterator[Event]:
+        # Either signal counts as "alive again": a fresh CREATE, or -- when the
+        # player never lost sight of the creature and the server never had to
+        # resend one -- a VALUES block resetting HEALTH off 0. See the module
+        # docstring.
+        sightings = sorted(c.creates + c.revivals)
         gaps = []
         for death in c.deaths:
-            after = [t for t in c.creates if t > death]
+            after = [t for t in sightings if t > death]
             if after:
                 gaps.append(min(after) - death)
         if gaps:

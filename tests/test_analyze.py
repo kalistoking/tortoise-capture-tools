@@ -111,6 +111,51 @@ def test_respawn_timer_is_the_death_to_create_gap():
     assert math.isclose(found["respawn_timer"].data["value_min"], 299.534, abs_tol=0.01)
 
 
+def _fields(**named):
+    return [{"index": i, "name": name, "raw": raw} for i, (name, raw) in enumerate(named.items())]
+
+
+def test_respawn_is_also_detected_from_a_health_reset_with_no_fresh_create():
+    """A player who never loses sight of the creature never gets a fresh
+    CREATE on respawn -- the server just resets HEALTH via a VALUES block,
+    since the object never left the client's known-objects set. Real capture
+    data: two such gaps landed at 300.022s and 299.217s against an authored
+    300s timer."""
+    events = [
+        make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
+                  fields=_fields(UNIT_FIELD_HEALTH=342)),
+        make_event("party_kill", 755.841, guid=GUID, entry=ENTRY),
+        make_event("object_values", 756.0, guid=GUID, entry=ENTRY,
+                  fields=_fields(UNIT_FIELD_HEALTH=0)),
+        make_event("object_values", 1055.863, guid=GUID, entry=ENTRY,
+                  fields=_fields(UNIT_FIELD_HEALTH=342)),
+        make_event("party_kill", 1499.668, guid=GUID, entry=ENTRY),
+        make_event("object_values", 1798.885, guid=GUID, entry=ENTRY,
+                  fields=_fields(UNIT_FIELD_HEALTH=342)),
+    ]
+    found = findings_by_kind(run_analyzer(Behaviour(), events))
+    respawn = found["respawn_timer"].data
+    assert respawn["samples"] == 2
+    assert math.isclose(respawn["value_min"], 299.217, abs_tol=0.01)
+    assert math.isclose(respawn["value_max"], 300.022, abs_tol=0.01)
+
+
+def test_a_health_update_while_already_alive_is_not_mistaken_for_a_respawn():
+    """Ordinary combat damage (health going up and down while alive, e.g. a
+    heal) must not be counted -- only a HEALTH>0 sighting that follows a
+    confirmed death is a revival."""
+    events = [
+        make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
+                  fields=_fields(UNIT_FIELD_HEALTH=342)),
+        make_event("object_values", 20.0, guid=GUID, entry=ENTRY,
+                  fields=_fields(UNIT_FIELD_HEALTH=200)),      # took damage
+        make_event("object_values", 25.0, guid=GUID, entry=ENTRY,
+                  fields=_fields(UNIT_FIELD_HEALTH=342)),      # healed back up
+    ]
+    found = run_analyzer(Behaviour(), events)
+    assert "respawn_timer" not in {ev.kind for ev in found}
+
+
 def test_texts_are_attributed_to_the_trigger_they_coincide_with():
     found = run_analyzer(Behaviour(), _session())
     triggers = {ev.data["subject"]: ev.data["trigger"]

@@ -16,6 +16,13 @@ only the create that follows a death puts it back at its spawn point. When the
 capture has no death, the position is still emitted but flagged, because it is
 then wherever the creature was when the capture started.
 
+`spawntimesecsmin/max` is looser about this than position has to be: it reads
+`behaviour.py`'s `respawn_timer` finding, which counts a respawn from *either*
+a fresh CREATE or a VALUES block resetting HEALTH off 0 -- position genuinely
+needs the CREATE (a VALUES block carries no coordinates), but the timer only
+needs to know the creature is alive again, and a player who never lost sight
+of it never gets a fresh CREATE to say so.
+
 **Z is what the creature walked, not what an author typed.** The server
 ground-snaps at runtime, so broadcast Z tracks the terrain to within a few
 tenths of a yard of the authored value. X and Y match to sub-centimetre; Z is
@@ -40,7 +47,7 @@ class Spawn(BaseAuthorRule):
         self._guid: int | None = None
         self._creates: list[tuple[float, tuple[float, ...]]] = []
         self._deaths: list[float] = []
-        self._respawn: float | None = None
+        self._respawn: dict[str, Any] | None = None   # the respawn_timer finding's own data
         self._waypoints: list[dict[str, Any]] = []
         self._closes_loop = False
         self._map_id: int | None = None
@@ -57,7 +64,7 @@ class Spawn(BaseAuthorRule):
             if ev.packet.t is not None:
                 self._deaths.append(ev.packet.t)
         elif ev.kind == "respawn_timer":
-            self._respawn = ev.data.get("value_min")
+            self._respawn = dict(ev.data)
         elif ev.kind == "patrol_waypoint":
             self._waypoints.append(dict(ev.data))
         elif ev.kind == "patrol_route":
@@ -96,12 +103,21 @@ class Spawn(BaseAuthorRule):
             notes = []
 
             if self._respawn is not None:
-                seconds = int(round(self._respawn))
-                values["spawntimesecsmin"] = values["spawntimesecsmax"] = seconds
+                r = self._respawn
+                samples = r.get("samples", 1)
+                min_s, max_s = int(round(r["value_min"])), int(round(r.get("value_max", r["value_min"])))
+                values["spawntimesecsmin"], values["spawntimesecsmax"] = min_s, max_s
                 provenance["spawntimesecsmin"] = provenance["spawntimesecsmax"] = DERIVED
-                notes.append(f"respawn {seconds}s from the death-to-create gap "
-                             f"({self._respawn:.3f}s observed once; min and max are "
-                             "indistinguishable from a single observation)")
+                if samples <= 1:
+                    notes.append(f"respawn {min_s}s from the death-to-next-sighting gap "
+                                 f"({r['value_min']:.3f}s observed once; min and max are "
+                                 "indistinguishable from a single observation)")
+                else:
+                    notes.append(f"respawn {min_s}-{max_s}s from {samples} observation(s) of the "
+                                 f"death-to-next-sighting gap ({r['value_min']:.3f}"
+                                 f"-{r['value_max']:.3f}s) -- a spread this tight against an "
+                                 "authored single value is plausibly measurement noise around a "
+                                 "fixed timer, not genuine randomisation; worth a human's judgement")
             if self._waypoints:
                 values["movement_type"] = MOVEMENT_TYPE_WAYPOINT
                 provenance["movement_type"] = DERIVED
