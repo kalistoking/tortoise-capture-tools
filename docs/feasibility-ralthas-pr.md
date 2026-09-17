@@ -12,20 +12,24 @@ not estimated. Nothing here is aspirational.
 
 ## Verdict
 
-| table | derivable from capture | blocker |
-|---|---|---|
-| `creature_template` (UPDATE, 9 fields) | **9/9** — integers exact, floats ~3e-6 off | the wire carries computed, not authored, values |
-| `creature` (spawn row) | **13/18** — rest are constant defaults | `map` id |
-| `creature_movement` (42 waypoints) | **42/42** X/Y exact | Z within ~0.35 yd; needs loop detection |
-| `creature_equip_template` | **1/1** — exact | needs an `item_template` lookup |
-| `broadcast_text` (2 texts) | text, `chat_type`, `language_id` — exact | `sound_id`/`emote_id*` unobserved (are 0 here) |
-| `creature_ai_events` (2 events) | event types by correlation | needs cross-opcode analysis |
-| `creature_ai_scripts` (2 scripts) | generated from the two above | none |
-| `creature_spells` | `spellId`, `delayInitial*` | **`delayRepeat*`, `castTarget`** |
+Superseded by an actual field-by-field run, not an estimate — see
+[§9](#9-sql-output-shape-built): every table now widens to its real column
+count via the target's own schema, checked against the PR column by column.
 
-Roughly **85–90 % of the PR's data content is recoverable**. The rest is
-either a constant the authoring convention fixes anyway, or the one genuine
-blocker in the last row.
+| table | result |
+|---|---|
+| `creature_template` (UPDATE, 9 fields) | **9/9** — integers exact, floats ~3e-6 off (the wire carries computed, not authored, values; §1.1) |
+| `creature` (18 columns) | **17/18** — only `map` withheld |
+| `creature_movement` (42 waypoints × 5 columns) | **42/42** rows, XY exact, Z within ~0.35 yd (ground-snap) |
+| `creature_equip_template` (4 columns) | **4/4** |
+| `broadcast_text` (2 rows × 12 columns) | **12/12** per row |
+| `creature_ai_events` (2 rows × 15 columns) | **15/15** per row |
+| `creature_ai_scripts` (2 rows × 22 columns) | **22/22** per row |
+| `creature_spells` (90 columns) | **88/90** — only `delayRepeatMin/Max` for the one used slot withheld |
+
+**207 of 210 directly comparable fields identical, zero disagreements.** The
+three withheld are `map` and one spell's `delayRepeatMin/Max` — named as gaps
+in the output with the reason, never defaulted.
 
 ---
 
@@ -179,15 +183,15 @@ This is exactly the cross-opcode correlation the `analyze/` layer exists for.
 `event_chance = 100` is a weak inference from two samples — defensible, but it
 should be emitted as an assumption, not a measurement.
 
-## 7. `creature_spells` — the one real blocker
+## 7. `creature_spells` — one real blocker, one resolved differently than planned
 
 | PR field | status |
 |---|---|
 | `spellId_1 = 1449` | **exact** — `SMSG_SPELL_GO` |
 | `name = 'Ralthas'` | **exact** — `SMSG_CREATURE_QUERY_RESPONSE` |
 | `delayInitialMin/Max = 0` | **supported** — aggro→first cast was +0.047 s, twice |
-| `probability_1 = 100` | weak inference (it cast on every engagement) |
-| `castTarget_1 = 1` | **not decoded** — needs the `SMSG_SPELL_GO` target block |
+| `probability_1 = 100` | authoring convention, matches the table's own default |
+| `castTarget_1 = 1` | **matches**, but as a schema default with a caveat — see below |
 | `delayRepeatMin/Max = 12 / 17` | **not derivable from this capture** |
 
 The repeat delay is the honest failure. This capture contains exactly **one**
@@ -196,10 +200,20 @@ PR's 12–17 s range. An observed interval is `random(min,max)` plus cast time,
 GCD and target availability — recovering the authored bounds needs many
 samples across a long fight, and even then it is statistical inference, not
 extraction. A capture of one 30-second fight cannot produce those two numbers,
-and pretending otherwise would be inventing data.
+and pretending otherwise would be inventing data. `tct author` reports this as
+a gap and leaves the two columns out of the row entirely — no zero, no guess.
 
-`castTarget` is different: the layout is known (`Spell.cpp:4662` target block),
-it is simply not implemented yet.
+`castTarget` turned out not to need the decoder after all. `DESCRIBE
+creature_spells` shows the column's own default is `1`, and the PR itself
+writes `1` into every one of its eight slots, including the seven it never
+uses — which reads as the table's convention, not something measured per
+spell. So the authoring emitter fills it from that schema default, same as
+every other unused-slot column, with an explicit note that the wire layout
+(`Spell.cpp:4662`) is still undecoded and the value is unverified per spell.
+That is a real caveat, not a silent guess dressed up as data — but it does
+mean the earlier framing of this as a hard "not decoded" gap was too strict:
+the schema default and the PR's own value agree, so withholding it produced a
+less complete migration for no accuracy gained.
 
 ---
 
@@ -214,14 +228,21 @@ Ordered by value per unit of work. The first three have since been built.
    migration with per-field provenance (§9, ARCHITECTURE.md §17).
 3. ~~**`item_template` lookup**~~ — **done**. A read-only accessor shelling out
    to the `mysql` client, configured under `[database]`; no driver dependency.
-4. **Small decoder gaps**, each one file:
-   - `SMSG_SPELL_GO` target block → `castTarget`
+4. ~~**Full-width authoring output**~~ — **done**. `fill_schema_defaults`
+   reads a target table's own `DESCRIBE`, so an unused `creature_spells` slot
+   or a `creature_ai_scripts` boilerplate column is proposed from the
+   table's own default instead of being left out (§9,
+   ARCHITECTURE.md §17.3). Confirmed the same way as everything else here:
+   checked field by field against the PR, 207/210 identical.
+5. **Remaining decoder gaps**, each one file:
+   - `SMSG_SPELL_GO` target block → `castTarget` per spell (currently a
+     flagged schema default, not a measurement)
    - ~~keep `language` in `messagechat`~~ — **done**
    - `SMSG_LOGIN_VERIFY_WORLD` / `SMSG_NEW_WORLD` → `map`
    - `SMSG_PLAY_SOUND` → `sound_id` (`SMSG_EMOTE` is decoded but the emotes in
      this capture are the player's, not the creature's)
-5. **Longer captures** for anything statistical (`delayRepeat*`,
-   `probability`). Not a code problem.
+6. **Longer captures** for anything statistical (`delayRepeat*`). Not a code
+   problem.
 
 ## 9. SQL output shape (built)
 
@@ -248,12 +269,16 @@ is a different thing and stays separate rather than overloading it:
 
 For a creature like Ralthas — one that spawns, patrols, aggros, talks, casts
 one spell, dies and respawns inside the capture — this toolkit now produces
-**everything in that PR except the spell repeat delays, `castTarget` and the
-map id**: 52 rows across 8 tables, ids matching the hand-authored ones, and
-three gaps stated in the file rather than papered over.
+**207 of the PR's 210 comparable fields, identical, with zero disagreements**:
+52 rows across 8 tables, at the PR's own full column width, ids matching the
+hand-authored ones. The three fields it does not produce — `map` and one
+spell's `delayRepeatMin/Max` — are named as gaps in the file, with the reason,
+rather than defaulted or guessed.
 
-The work was never in the decoding, which already reached these numbers. It was
-in the `analyze/` layer that turns 113 hops into 41 waypoints and three
-timestamps into two AI events, and in an emitter honest enough to mark its own
-guesses — including the one that matters most, refusing to invent a repeat
-delay from a single observed interval.
+The work was never in the decoding, which already reached these numbers. It
+was in the `analyze/` layer that turns 113 hops into 41 waypoints and three
+timestamps into two AI events; in `fill_schema_defaults` reading each table's
+own column defaults instead of a second copy of its schema; and in an emitter
+honest enough to mark its own guesses — including the one that matters most,
+refusing to invent a repeat delay from a single observed interval that does
+not even fall inside the range it would be guessing at.

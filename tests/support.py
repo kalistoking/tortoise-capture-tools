@@ -99,9 +99,11 @@ def findings_by_kind(found) -> dict:
 class StubWorld:
     """A world database stand-in: answers from a dict, records nothing."""
 
-    def __init__(self, columns: dict | None = None, displays: dict | None = None):
+    def __init__(self, columns: dict | None = None, displays: dict | None = None,
+                schema: dict | None = None):
         self._columns = columns or {}      # (table, column) -> stored value as string
         self._displays = displays or {}    # display id -> item entry
+        self._schema = schema or {}        # table -> {column: default}; empty = no schema-fill
 
     def column(self, table: str, column: str, where: str):
         return self._columns.get((table, column))
@@ -111,6 +113,9 @@ class StubWorld:
 
     def row_exists(self, table: str, where: str) -> bool:
         return False
+
+    def describe(self, table: str) -> dict:
+        return self._schema.get(table, {})
 
 
 def author_rows(rule, events, entry: int, world=None):

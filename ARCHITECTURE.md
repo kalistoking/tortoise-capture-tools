@@ -625,7 +625,41 @@ Three rules follow from taking that seriously:
    guarantee for float32, so a proposed value lands in the column
    bit-identically instead of "tidily" moving.
 
-### 17.3 The database as an input
+### 17.3 Matching a table's full width without a second copy of its schema
+
+A hand-written migration sets every column a table has, including the ones
+that are always `0` for this kind of content — `event_flags`,
+`creature_ai_scripts.x/y/z/o`, seven unused `creature_spells` slots. Retyping
+that shape here would be a second copy of the schema, liable to drift from
+whatever the real table looks like (the same failure D5 already rejects for
+opcode and field tables).
+
+So `fill_schema_defaults` reads it from the table that will receive the row —
+`DESCRIBE <table>`, cached per table — and widens with whatever a column's own
+default is, tagged `CONVENTION`. A rule opts a column *out* by passing it in
+`skip`, for the narrow case where a default is a real value that could be
+wrong rather than harmless boilerplate:
+
+- `creature.map` — default `0` is Eastern Kingdoms, a specific place, not
+  "unknown". Always skipped; always a gap.
+- `creature_spells.delayRepeatMin/Max` for a spell this capture watched
+  actually repeat — default `0` means "does not repeat", which is known
+  false. Skipped only while the observation stays low-confidence
+  ([§16.2](#162-why-findings-carry-their-evidence)); a capture that clears
+  `behaviour.py`'s sample threshold gets its measured range proposed instead.
+- `creature.wander_distance` for a waypoint mover is set explicitly to `0`
+  rather than left to the schema's default of `5`: the column has no reader
+  at all for `WAYPOINT_MOTION_TYPE` (verified against `Creature.cpp`), so the
+  default is inert but reads as a real value sitting next to `movement_type`.
+
+Checked against the hand-authored PR this was validated on
+([docs/feasibility-ralthas-pr.md](docs/feasibility-ralthas-pr.md)): 207 of 210
+comparable fields identical, zero disagreements, and the three differences are
+exactly the skipped columns — present in the PR's output as the numbers a
+longer capture or a decoded target block would supply, and present in this
+migration as a named gap instead.
+
+### 17.4 The database as an input
 
 `world.py` is the first place the toolkit reads the world database rather than
 just comparing against it — resolving an item's display id to its entry needs
@@ -640,7 +674,7 @@ rather than guessing between two answers.
 
 Without a database the command still runs; the lookups become gaps.
 
-### 17.4 What it does not do
+### 17.5 What it does not do
 
 It does not apply anything. The output is a file for a human to read, argue
 with and run — which is why the gaps and the provenance are in the file itself

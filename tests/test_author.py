@@ -66,7 +66,7 @@ def test_dialogue_fills_all_three_tables_with_consistent_ids():
 def test_trigger_becomes_the_event_type():
     rows, _ = author_rows(Dialogue(), _dialogue_events(), ENTRY)
     events = [r for r in rows if r.table == "creature_ai_events"]
-    types = {r.values["comment"].split(" - ")[1]: r.values["event_type"] for r in events}
+    types = {r.values["comment"].split(" - ")[1].lower(): r.values["event_type"] for r in events}
     assert types == {"aggro text": EVENT_T_AGGRO, "death text": EVENT_T_DEATH}
 
 
@@ -199,6 +199,43 @@ def test_the_map_id_is_always_reported_as_missing():
     assert any("creature.map" in gap for gap in gaps)
 
 
+def test_map_is_never_schema_filled_even_when_a_default_is_offered():
+    """0 there is Eastern Kingdoms -- a real place, not a neutral default."""
+    world = StubWorld(schema={"creature": {"map": 0, "id2": 0, "spawn_flags": 0}})
+    rows, gaps = author_rows(Spawn(), _spawn_events(), ENTRY, world=world)
+    creature = next(r for r in rows if r.table == "creature")
+    assert "map" not in creature.values
+    assert any("creature.map" in gap for gap in gaps)
+
+
+def test_boilerplate_columns_are_widened_from_the_schema():
+    world = StubWorld(schema={"creature": {"id2": 0, "id3": 0, "id4": 0,
+                                           "spawn_flags": 0}})
+    rows, _ = author_rows(Spawn(), _spawn_events(), ENTRY, world=world)
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["id2"] == 0
+    assert creature.provenance["id2"] == CONVENTION
+
+
+def test_wander_distance_is_zeroed_for_a_waypoint_mover_not_left_at_the_schema_default():
+    """wander_distance only affects random movement (Creature.cpp has no reader
+    for it on a waypoint-follower); the schema's default (5, sized for random
+    wandering) would be inert but misleading next to movement_type=2."""
+    world = StubWorld(schema={"creature": {"wander_distance": 5}})
+    rows, _ = author_rows(Spawn(), _spawn_events(), ENTRY, world=world)
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["wander_distance"] == 0
+    assert creature.provenance["wander_distance"] == CONVENTION
+
+
+def test_without_a_database_the_row_stays_narrow():
+    """No schema to read from, so no widening -- but nothing else breaks."""
+    rows, _ = author_rows(Spawn(), _spawn_events(), ENTRY, world=None)
+    creature = next(r for r in rows if r.table == "creature")
+    assert "id2" not in creature.values
+    assert creature.values["wander_distance"] == 0    # set explicitly, not schema-filled
+
+
 # --------------------------------------------------------------------------
 # equipment: creature_equip_template
 # --------------------------------------------------------------------------
@@ -276,9 +313,44 @@ def test_an_unbounded_repeat_delay_is_a_gap_never_a_number():
     assert any("delayRepeatMin/Max" in gap and "bounds nothing" in gap for gap in gaps)
 
 
-def test_cast_target_is_reported_as_not_yet_decoded():
-    _, gaps = author_rows(Spells(), _spell_events(), ENTRY)
-    assert any("castTarget" in gap for gap in gaps)
+def test_cast_target_is_schema_filled_with_a_caveat_not_withheld():
+    """Unlike delayRepeat, castTarget's default reads as the table's own
+    convention (the reference PR uses it uniformly, used slots and empty
+    ones alike) -- so it is filled, with a note, rather than left a gap."""
+    world = StubWorld(schema={"creature_spells": {"castTarget_1": 1}})
+    rows, gaps = author_rows(Spells(), _spell_events(), ENTRY, world=world)
+    assert rows[0].values["castTarget_1"] == 1
+    assert rows[0].provenance["castTarget_1"] == CONVENTION
+    assert not any("castTarget" in gap for gap in gaps)
+    assert any("castTarget" in note for note in rows[0].notes)
+
+
+def test_delay_repeat_is_never_schema_filled_even_with_a_default_available():
+    """0 there means "does not repeat", which is known false -- it must stay
+    a real gap, not become a silent (wrong) schema default."""
+    world = StubWorld(schema={"creature_spells": {"delayRepeatMin_1": 0,
+                                                  "delayRepeatMax_1": 0}})
+    rows, gaps = author_rows(Spells(), _spell_events(confident=False), ENTRY, world=world)
+    assert "delayRepeatMin_1" not in rows[0].values
+    assert "delayRepeatMax_1" not in rows[0].values
+    assert any("delayRepeatMin/Max" in gap for gap in gaps)
+
+
+def test_a_confident_repeat_delay_is_proposed_as_derived():
+    """The refusal is about small samples, not the column in general."""
+    events = _spell_events(confident=True, samples=6)
+    rows, _ = author_rows(Spells(), events, ENTRY)
+    assert rows[0].values["delayRepeatMin_1"] == 18
+    assert rows[0].provenance["delayRepeatMin_1"] == DERIVED
+
+
+def test_unused_slots_are_widened_to_match_the_table_shape():
+    """Slot 2 was never cast, but the reference migration still fills it."""
+    world = StubWorld(schema={"creature_spells": {"spellId_2": 0, "probability_2": 100,
+                                                  "castTarget_2": 1}})
+    rows, _ = author_rows(Spells(), _spell_events(), ENTRY, world=world)
+    assert rows[0].values["spellId_2"] == 0
+    assert rows[0].provenance["spellId_2"] == CONVENTION
 
 
 # --------------------------------------------------------------------------
@@ -318,3 +390,47 @@ def test_rows_group_by_their_own_table_in_first_appearance_order():
         sql = path.read_text(encoding="utf-8")
 
     assert sql.index("broadcast_text  (2 row(s))") < sql.index("creature_ai_events")
+
+
+# --------------------------------------------------------------------------
+# World.describe() -- parsing and caching, without a real database
+# --------------------------------------------------------------------------
+
+def _fake_world(responses: dict[str, list[list[str]]]):
+    """A World whose query() answers from a table->rows map instead of a shell."""
+    from tortoise_capture.world import World
+
+    calls: list[str] = []
+
+    class FakeWorld(World):
+        def query(self, sql: str):
+            calls.append(sql)
+            for table, rows in responses.items():
+                if f"`{table}`" in sql:
+                    return rows
+            return []
+
+    return FakeWorld(client="unused"), calls
+
+
+def test_describe_coerces_types_and_treats_null_as_no_default():
+    world, _ = _fake_world({"creature_template": [
+        ["entry", "int", "NO", "PRI", "0", ""],
+        ["scale", "float", "NO", "", "1.5", ""],
+        ["name", "char(100)", "NO", "", "NULL", ""],
+        ["guid", "bigint", "NO", "PRI", "NULL", ""],
+    ]})
+    schema = world.describe("creature_template")
+    assert schema["entry"] == 0 and schema["scale"] == 1.5
+    assert "name" not in schema and "guid" not in schema     # NULL -> no usable default
+
+
+def test_describe_is_cached_per_table():
+    world, calls = _fake_world({
+        "creature": [["x", "int", "NO", "", "0", ""]],
+        "creature_movement": [["y", "int", "NO", "", "0", ""]],
+    })
+    world.describe("creature")
+    world.describe("creature")
+    world.describe("creature_movement")
+    assert len(calls) == 2          # one per distinct table, not per call

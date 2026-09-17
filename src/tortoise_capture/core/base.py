@@ -13,7 +13,8 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping, Sequence
 
 from .contracts import (
-    AuthorContext, AuthoredRow, DecodeContext, Event, Packet, Row, SqlContext, TableSpec,
+    CONVENTION, AuthorContext, AuthoredRow, DecodeContext, Event, Packet, Row, SqlContext,
+    TableSpec,
 )
 
 
@@ -80,6 +81,34 @@ class BaseAuthorRule:
     def authored_id(entry: int, index: int) -> int:
         """`entry * 100 + n` -- the id convention hand-authored content uses."""
         return entry * 100 + index
+
+    def fill_schema_defaults(self, ctx: AuthorContext, table: str, values: dict[str, Any],
+                             provenance: dict[str, str], notes: list[str],
+                             skip: Iterable[str] = ()) -> None:
+        """Widens a row to match the target table, using the table's own defaults.
+
+        Only touches a column that is (a) not already set, (b) has a real
+        schema default to read, and (c) not in `skip`. `skip` is for columns
+        whose default is a genuine value that could be wrong rather than
+        harmless boilerplate -- a map id, or the repeat delay of a spell known
+        to actually repeat -- and those must stay gaps, never a silent zero.
+
+        A no-op without a database: there is nothing to read the schema from,
+        so the row stays as narrow as what was actually derived.
+        """
+        if ctx.world is None:
+            return
+        schema = ctx.world.describe(table)
+        skip = set(skip)
+        filled = []
+        for column, default in schema.items():
+            if column in values or column in skip or default is None:
+                continue
+            values[column] = default
+            provenance[column] = CONVENTION
+            filled.append(column)
+        if filled:
+            notes.append(f"schema default (not observed), from `{table}`: " + ", ".join(filled))
 
     @staticmethod
     def wire_float(value: float) -> float:

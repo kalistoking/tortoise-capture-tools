@@ -1,9 +1,12 @@
 """Read-only access to the world database, for the lookups authoring needs.
 
-Two things genuinely require the database as an *input*, not just as something
-to compare against afterwards: resolving an item's display id (all the wire
-carries) to the item entry a world table wants, and checking whether a row
-already exists before proposing to insert it.
+Three things genuinely require the database as an *input*, not just as
+something to compare against afterwards: resolving an item's display id (all
+the wire carries) to the item entry a world table wants, checking whether a
+row already exists before proposing to insert it, and reading a target
+table's own column defaults (`describe()`) so authoring can match its full
+width without a second, hand-maintained copy of the schema
+(ARCHITECTURE.md §17.3).
 
 It shells out to a `mysql`/`mariadb` client rather than taking a driver
 dependency -- the client ships with the server install this project already
@@ -20,7 +23,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from . import log as _log
@@ -35,6 +38,20 @@ class WorldError(Exception):
     """The database could not answer. Authoring continues without it."""
 
 
+def _coerce(text: str | None) -> Any:
+    """A DESCRIBE Default cell: 'NULL' -> no usable default, else int/float/str."""
+    if text is None or text == "NULL":
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
 @dataclass(frozen=True, slots=True)
 class World:
     client: str                     # path to mysql.exe / mariadb.exe, or a bare name on PATH
@@ -42,6 +59,10 @@ class World:
     port: int = 3306
     user: str = "mangos"
     database: str = "tw_world"
+    # Mutating a frozen dataclass's own attribute is blocked; mutating what
+    # that attribute points at is not, so a plain dict works as a cache here.
+    _schema_cache: dict[str, dict[str, Any]] = field(default_factory=dict, init=False,
+                                                      repr=False, compare=False)
 
     # -- plumbing ----------------------------------------------------------
 
@@ -85,6 +106,28 @@ class World:
                             display_id, len(rows), found)
             return None
         return int(rows[0][0])
+
+    def describe(self, table: str) -> dict[str, Any]:
+        """Column -> the table's own DEFAULT, from DESCRIBE. Cached per table.
+
+        This is what lets authoring match a hand-written migration's full
+        column width without a second, hand-maintained copy of the schema:
+        the boilerplate zeros (`event_flags`, `x`/`y`/`z`/`o`, `emote_id*`...)
+        are read from the table that will receive them, not retyped here.
+        A column with no schema default (NULL, or DESCRIBE failed) is simply
+        absent from the result, and stays a gap.
+        """
+        if table not in self._schema_cache:
+            try:
+                rows = self.query(f"DESCRIBE `{table}`")
+            except WorldError as exc:
+                _logger.warning("could not describe %s: %s", table, exc)
+                self._schema_cache[table] = {}
+            else:
+                # DESCRIBE columns: Field, Type, Null, Key, Default, Extra.
+                defaults = {r[0]: _coerce(r[4] if len(r) > 4 else None) for r in rows}
+                self._schema_cache[table] = {c: d for c, d in defaults.items() if d is not None}
+        return self._schema_cache[table]
 
     def row_exists(self, table: str, where: str) -> bool:
         return (self.scalar(f"SELECT 1 FROM `{table}` WHERE {where} LIMIT 1")) is not None

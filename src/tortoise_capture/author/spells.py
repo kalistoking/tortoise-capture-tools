@@ -1,20 +1,32 @@
 """creature_spells: which spells, and the timings a capture can and cannot give.
 
 The spell ids are read straight off `SMSG_SPELL_GO`, and the delay from
-engagement to first cast is a clean measurement. The repeat delay is not, and
-this rule refuses to invent it.
+engagement to first cast is a clean measurement. Everything else in an unused
+slot (`spellId_2`..`_8` and their siblings, for a creature with only one spell)
+is boilerplate the table already knows the value of, so it comes from
+`fill_schema_defaults` rather than being retyped here -- see
+`BaseAuthorRule.fill_schema_defaults` and ARCHITECTURE.md §17.2.
 
-`delayRepeatMin/Max` is an authored *range* the server draws from. What a
-capture observes is that draw plus cast time, global cooldown and whatever the
-target was doing, and a fight that produced one interval has bounded nothing:
-the Ralthas session yields a single 18.291 s gap where the hand-authored values
-are 12 and 17. Emitting `12` and `17`-shaped numbers from that would be
-fabrication, so the columns are omitted and the observation is reported as a
-gap with its sample count. Enough samples and the range becomes defensible --
-that is a longer capture's job, not a cleverer decoder's.
+Two columns are the deliberate exception, and stay real gaps rather than
+schema-filled zeros:
 
-`castTarget` is a different kind of missing: the `SMSG_SPELL_GO` target block
-has a known layout, it simply is not decoded yet.
+`delayRepeatMin/Max` is an authored *range* the server draws from, and its
+schema default (0) means "does not repeat" -- false for a spell this capture
+watched fire twice. What a capture observes is that draw plus cast time,
+global cooldown and whatever the target was doing, and one interval bounds
+nothing: the Ralthas session yields a single 18.291 s gap where the
+hand-authored values are 12 and 17. A capture long enough to pass
+`behaviour.py`'s confidence threshold (`MIN_INTERVALS_FOR_CONFIDENCE`
+repeats) *does* get its observed range proposed as `DERIVED` -- the refusal
+is about small samples, not about the column in general.
+
+`castTarget` is different in kind, not degree: the wire layout is known
+(`SMSG_SPELL_GO`'s target block, `Spell.cpp:4662`) but not decoded yet. Its
+schema default is `1`, and the hand-authored PR this was checked against sets
+every slot -- including seven it never uses -- to exactly that value, which
+reads as the table's own convention rather than something an author measured
+per spell. So it is schema-filled like any other unused-slot column, with a
+note attached, rather than withheld.
 """
 
 from __future__ import annotations
@@ -56,6 +68,7 @@ class Spells(BaseAuthorRule):
         values: dict[str, Any] = {"entry": ctx.entry, "name": self._name or str(ctx.entry)}
         provenance: dict[str, str] = {"entry": WIRE, "name": WIRE}
         notes: list[str] = []
+        skip: set[str] = set()          # columns fill_schema_defaults must never touch
 
         for slot, spell in enumerate(spells, start=1):
             values[f"spellId_{slot}"] = spell
@@ -72,8 +85,29 @@ class Spells(BaseAuthorRule):
                 notes.append(f"spell {spell}: first cast {self._initial[spell]:.3f}s after "
                              f"engagement, so delayInitial rounds to {seconds}")
 
+            repeat = self._repeat.get(spell)
+            if repeat and repeat.get("confident"):
+                values[f"delayRepeatMin_{slot}"] = int(round(repeat["value_min"]))
+                values[f"delayRepeatMax_{slot}"] = int(round(repeat["value_max"]))
+                provenance[f"delayRepeatMin_{slot}"] = DERIVED
+                provenance[f"delayRepeatMax_{slot}"] = DERIVED
+                notes.append(f"spell {spell}: delayRepeat from {repeat['samples']} observed "
+                             "intervals, enough to bound it")
+            else:
+                # Not enough samples (or none) to trust a bound -- see module
+                # docstring. Left out of `values` entirely, so the generic
+                # schema-fill below must not paper over it with a false zero.
+                skip.add(f"delayRepeatMin_{slot}")
+                skip.add(f"delayRepeatMax_{slot}")
+
         notes.append(f"{len(spells)} spell(s) seen cast; a spell never used during the "
                      "capture cannot appear here at all")
+        notes.append("castTarget is left at the table's own default (1) for every slot: "
+                     "the SMSG_SPELL_GO target block is not decoded yet (Spell.cpp:4662), "
+                     "and the reference migration this was checked against uses the same "
+                     "value uniformly, used slots and empty ones alike")
+
+        self.fill_schema_defaults(ctx, "creature_spells", values, provenance, notes, skip=skip)
         yield self.row(values, provenance, notes=tuple(notes))
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
@@ -87,5 +121,3 @@ class Spells(BaseAuthorRule):
             elif not observed:
                 yield (f"creature_spells.delayRepeatMin/Max for spell {spell} -- cast only "
                        "once, so no interval exists to measure")
-            yield (f"creature_spells.castTarget for spell {spell} -- the SMSG_SPELL_GO "
-                   "target block is not decoded yet (layout known, Spell.cpp:4662)")

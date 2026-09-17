@@ -51,10 +51,14 @@ trigger fires which line of dialogue, and spell cast timing. Findings carry
 their sample counts, and say so when a capture is too short to support a
 conclusion.
 
-`tct author` then turns those observations into proposed world-database rows.
-Measured against a hand-authored content PR, it reproduces everything in it
-except the spell repeat delays, `castTarget` and the map id — and states those
-three in the output rather than inventing them
+`tct author` then turns those observations into proposed world-database rows,
+matching a target table's full column width by reading its own schema
+(`DESCRIBE`) rather than a second, hand-maintained copy of it — the same
+never-hardcode-what-the-source-already-knows rule the opcode and field tables
+follow. Checked field by field against a hand-authored content PR: 207 of 210
+comparable columns identical, zero disagreements, and the three differences
+are the map id and a spell's repeat delay bounds — named as gaps in the
+output rather than guessed at
 ([docs/feasibility-ralthas-pr.md](docs/feasibility-ralthas-pr.md)).
 
 Support grows one module at a time — see
@@ -121,8 +125,9 @@ flag. So `--log-level debug` overrides the file for a single run, and
 `--debug` is a shortcut for it.
 
 An optional `[database]` section points `tct author` at a read-only world
-database for the two things that need one: resolving an item's display id to
-its entry, and confirming a value before proposing to change it. The password
+database for the things that need one: resolving an item's display id to its
+entry, confirming a value before proposing to change it, and reading a target
+table's own column defaults so the output matches its full width. The password
 is not a config key — set `TCT_DB_PASSWORD` instead.
 
 `tct.toml` is git-ignored (machine-specific paths); `tct.example.toml` is

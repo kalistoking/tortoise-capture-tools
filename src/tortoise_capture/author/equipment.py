@@ -76,8 +76,10 @@ class Equipment(BaseAuthorRule):
             notes.append(f"cross-checked against {INFO_FIELD}: class, subclass and "
                          "inventory type all match")
 
-        yield self.row({"entry": ctx.entry, "equipentry1": entry},
-                       {"entry": WIRE, "equipentry1": LOOKUP}, notes=tuple(notes))
+        values = {"entry": ctx.entry, "equipentry1": entry}
+        provenance = {"entry": WIRE, "equipentry1": LOOKUP}
+        self.fill_schema_defaults(ctx, "creature_equip_template", values, provenance, notes)
+        yield self.row(values, provenance, notes=tuple(notes))
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
         if self._unresolved:

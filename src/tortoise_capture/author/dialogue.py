@@ -81,34 +81,38 @@ class Dialogue(BaseAuthorRule):
             text_id = self.authored_id(ctx.entry, n)
             chat_type = _CHAT_TYPES.get(said.get("chat_type"), 0)
 
-            yield AuthoredRow(
-                table="broadcast_text",
-                values={"entry": text_id, "male_text": message, "female_text": message,
-                        "chat_type": chat_type, "language_id": said.get("language", 0)},
-                provenance={"entry": CONVENTION, "male_text": WIRE, "female_text": WIRE,
-                            "chat_type": WIRE, "language_id": WIRE},
-                notes=("sound_id and emote columns omitted: not observed in this capture, "
-                       "so the table defaults apply",),
-            )
-            yield AuthoredRow(
-                table="creature_ai_scripts",
-                values={"id": text_id, "command": SCRIPT_COMMAND_TALK, "dataint": text_id,
-                        "comments": f"{self._name or ctx.entry} - {trigger} text"},
-                provenance={"id": CONVENTION, "command": CONVENTION,
-                            "dataint": CONVENTION, "comments": CONVENTION},
-            )
-            yield AuthoredRow(
-                table="creature_ai_events",
-                values={"id": text_id, "creature_id": ctx.entry,
-                        "event_type": _EVENT_TYPES[trigger], "event_chance": 100,
-                        "action1_script": text_id,
-                        "comment": f"{self._name or ctx.entry} - {trigger} text"},
-                provenance={"id": CONVENTION, "creature_id": WIRE, "event_type": DERIVED,
-                            "event_chance": CONVENTION, "action1_script": CONVENTION,
-                            "comment": CONVENTION},
-                notes=(f"event_type {_EVENT_TYPES[trigger]} ({trigger}) inferred from the text "
-                       "firing on that trigger's timestamp every time it was seen",),
-            )
+            bt_values = {"entry": text_id, "male_text": message, "female_text": message,
+                        "chat_type": chat_type, "language_id": said.get("language", 0)}
+            bt_provenance = {"entry": CONVENTION, "male_text": WIRE, "female_text": WIRE,
+                             "chat_type": WIRE, "language_id": WIRE}
+            bt_notes = []
+            self.fill_schema_defaults(ctx, "broadcast_text", bt_values, bt_provenance, bt_notes)
+            yield AuthoredRow(table="broadcast_text", values=bt_values,
+                              provenance=bt_provenance, notes=tuple(bt_notes))
+
+            script_values = {"id": text_id, "command": SCRIPT_COMMAND_TALK, "dataint": text_id,
+                             "comments": f"{self._name or ctx.entry} - {trigger.capitalize()} text"}
+            script_provenance = {"id": CONVENTION, "command": CONVENTION,
+                                 "dataint": CONVENTION, "comments": CONVENTION}
+            script_notes = []
+            self.fill_schema_defaults(ctx, "creature_ai_scripts", script_values,
+                                      script_provenance, script_notes)
+            yield AuthoredRow(table="creature_ai_scripts", values=script_values,
+                              provenance=script_provenance, notes=tuple(script_notes))
+
+            event_values = {"id": text_id, "creature_id": ctx.entry,
+                            "event_type": _EVENT_TYPES[trigger], "event_chance": 100,
+                            "action1_script": text_id,
+                            "comment": f"{self._name or ctx.entry} - {trigger.capitalize()} text"}
+            event_provenance = {"id": CONVENTION, "creature_id": WIRE, "event_type": DERIVED,
+                                "event_chance": CONVENTION, "action1_script": CONVENTION,
+                                "comment": CONVENTION}
+            event_notes = [f"event_type {_EVENT_TYPES[trigger]} ({trigger}) inferred from the "
+                          "text firing on that trigger's timestamp every time it was seen"]
+            self.fill_schema_defaults(ctx, "creature_ai_events", event_values,
+                                      event_provenance, event_notes)
+            yield AuthoredRow(table="creature_ai_events", values=event_values,
+                              provenance=event_provenance, notes=tuple(event_notes))
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
         for message in self._untriggered:
