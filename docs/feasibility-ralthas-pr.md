@@ -18,6 +18,12 @@ count via the target's own schema, checked against the PR column by column,
 **at float32-bit precision** (not decimal-rounded, which would have hidden a
 genuine difference as a false match).
 
+This verdict was re-measured after a second, much longer capture (several
+patrol loops, multiple full fights to and past death, 3 deaths/respawns
+instead of 1) specifically recorded to settle the one statistical question
+the first capture could not: a spell's repeat delay. See the note under
+`creature_spells` below for what that capture did, and did not, settle.
+
 | table | result |
 |---|---|
 | `creature_template` (UPDATE, 9 fields) | **9/9 float32-exact** — restated as the database's own value where it already agreed (§1.1, `CONFIRMED` provenance), so this is no longer an approximation |
@@ -27,13 +33,14 @@ genuine difference as a false match).
 | `broadcast_text` (2 rows × 12 columns) | **12/12** per row |
 | `creature_ai_events` (2 rows × 15 columns) | **15/15** per row |
 | `creature_ai_scripts` (2 rows × 22 columns) | **22/22** per row |
-| `creature_spells` (90 columns) | **88/90** — only `delayRepeatMin/Max` for the one used slot withheld |
+| `creature_spells` (90 columns) | **88/90 float32-exact, 2 now derived but not matching** — `delayRepeatMin/Max` is no longer withheld (30 samples from the longer capture bound it at 13–27s), but that bound does not bit-match the PR's authored 12–17s, and by design cannot: see below |
 
-**215 of 219 comparable fields float32-bit-identical, zero disagreements.**
-Of the remaining four: two (`position_z`, `orientation`) are real physical
-noise of a few parts in 100,000, already measured and explained rather than
-rounded away; two (a spell's `delayRepeatMin/Max`) are a named gap in the
-output, never defaulted.
+**215 of 219 comparable fields float32-bit-identical.** Of the remaining
+four: two (`position_z`, `orientation`) are real physical noise of a few
+parts in 100,000, already measured and explained rather than rounded away;
+two (a spell's `delayRepeatMin/Max`) are **derived, not withheld, and not an
+exact match** — an honest disagreement with a well-understood cause, not a
+decode error (§7).
 
 ---
 
@@ -113,11 +120,28 @@ rounding into a false "exact".
 `creature.guid`. (`entry` is bits 24–47, which is how the toolkit already
 identifies creatures.)
 
-`spawntimesecsmin/max = 300` follows from death t=90.307 → respawn
-t=389.841 = **299.534 s**, rounded. `movement_type = 2` (waypoint) is
-implied by the closed movement loop. The rest (`id2..4`, `wander_distance`,
-`health_percent`, `mana_percent`, `spawn_flags`, `visibility_mod`) are the
-constants every spawn row carries.
+`spawntimesecsmin/max = 300` in the PR, a single authored value with no
+observable min/max spread. The first (short) capture measured this from one
+death-to-respawn gap — 299.534 s, rounded — which cannot distinguish min from
+max on its own. The longer capture's 3 deaths give **two** such gaps
+(299.217 s, 300.022 s), tight enough (0.8 s spread) to be confident this is
+sampling noise around a single fixed timer rather than genuine randomisation:
+`spawntimesecsmin/max = 299 / 300`, a near-exact match to the PR's `300`.
+`movement_type = 2` (waypoint) is implied by the closed movement loop. The
+rest (`id2..4`, `wander_distance`, `health_percent`, `mana_percent`,
+`spawn_flags`, `visibility_mod`) are the constants every spawn row carries.
+
+Those two gaps were only visible at all because of a fix made for this
+capture specifically: the observing player never lost sight of Ralthas
+across any of its 3 deaths, so no fresh `CREATE` block ever followed a
+respawn — each one showed up only as a `VALUES` block resetting
+`UNIT_FIELD_HEALTH` off 0 (`analyze/behaviour.py`'s "a respawn is not always
+a CREATE"). The position row emitted from this same capture is therefore the
+*first sighting*, not a post-respawn `CREATE` — it happens to land on the
+exact same coordinates as the original short capture's respawn `CREATE`
+above only because Ralthas's spawn point is a fixed location the recording
+began at, not because this capture found a second respawn `CREATE` of its
+own.
 
 **`map` — done.** `SMSG_LOGIN_VERIFY_WORLD` / `SMSG_NEW_WORLD` (identical
 20-byte body: `uint32 mapId` + `Vector4`, `CharacterHandler.cpp:574`,
@@ -207,28 +231,50 @@ Text 1 fires on aggro **twice, to the millisecond** → `event_type = 4`
 `command = 0` (talk), `dataint` = the `broadcast_text` entry.
 
 This is exactly the cross-opcode correlation the `analyze/` layer exists for.
-`event_chance = 100` is a weak inference from two samples — defensible, but it
-should be emitted as an assumption, not a measurement.
+`event_chance = 100` was a weak inference from two samples in the original
+capture; the longer capture's 3 full engagement cycles show the same pair of
+lines firing at the same two triggers every time (`3x, offset +0.000s` for
+both), a somewhat firmer basis for "always" — but 3 is still a small sample,
+so this stays an assumption made explicit, not a measurement.
 
-## 7. `creature_spells` — one real blocker, one resolved differently than planned
+## 7. `creature_spells` — one bounded rather than matched, one resolved differently than planned
 
 | PR field | status |
 |---|---|
 | `spellId_1 = 1449` | **exact** — `SMSG_SPELL_GO` |
-| `name = 'Ralthas'` | **exact** — `SMSG_CREATURE_QUERY_RESPONSE` |
-| `delayInitialMin/Max = 0` | **supported** — aggro→first cast was +0.047 s, twice |
+| `name = 'Ralthas'` | **exact from the short capture** (`SMSG_CREATURE_QUERY_RESPONSE`); the longer capture never contains this opcode at all — the client had the template cached from the earlier session — so `name` falls back to the numeric entry there. Expected, honest fallback, not a regression in the decoder. |
+| `delayInitialMin/Max = 0` | **supported** — aggro→first cast was +0.046–0.047 s, consistently across all 3 engagements in the longer capture |
 | `probability_1 = 100` | authoring convention, matches the table's own default |
 | `castTarget_1 = 1` | **matches**, but as a schema default with a caveat — see below |
-| `delayRepeatMin/Max = 12 / 17` | **not derivable from this capture** |
+| `delayRepeatMin/Max = 12 / 17` | **derived from the longer capture: 13 / 27 — bounds it, does not bit-match it** |
 
-The repeat delay is the honest failure. This capture contains exactly **one**
-repeat interval: 60.026 → 78.317 = **18.291 s**, which is not even inside the
-PR's 12–17 s range. An observed interval is `random(min,max)` plus cast time,
-GCD and target availability — recovering the authored bounds needs many
-samples across a long fight, and even then it is statistical inference, not
-extraction. A capture of one 30-second fight cannot produce those two numbers,
-and pretending otherwise would be inventing data. `tct author` reports this as
-a gap and leaves the two columns out of the row entirely — no zero, no guess.
+### The repeat delay: resolved into an honest bound, not an exact match
+
+The original (short) capture contained exactly **one** repeat interval:
+60.026 → 78.317 = **18.291 s**, not even inside the PR's 12–17 s range — one
+sample cannot support min *or* max, so `tct author` correctly left both
+columns out entirely rather than guess.
+
+A second, deliberately longer capture was recorded specifically to settle
+this: several patrol loops, full fights carried past multiple deaths, staying
+near the creature so more of its cast cycle would be sampled. That capture
+gives **30** repeat intervals, and `analyze/behaviour.py` now reports
+`13.0–27.3 s`, which `tct author` writes into
+`delayRepeatMin_1 = 13, delayRepeatMax_1 = 27`.
+
+That is *not* the PR's `12 / 17` — and by the mechanism itself, it cannot be.
+An observed cast-to-cast gap measures `random(min,max)` **plus** cast time,
+global cooldown and however long retargeting/line-of-sight took, so it is a
+noisy upper bound on the true parameter, not the parameter itself. The data
+matches that prediction exactly: the observed **minimum** (13 s) lands within
+a second of the authored minimum (12 s) — there is little room below it for
+overhead to hide — while the observed **maximum** (27 s) sits 10 s above the
+authored maximum (17 s), because occasional real-world delay (one bad angle,
+one longer reposition) pulls the sample's ceiling up but nothing pulls a
+sample's floor down. Thirty samples turned "no data" into a real, bounded,
+honestly-labelled estimate; they did not, and structurally could not, turn
+into the PR's own hand-tuned numbers. `tct author`'s note says exactly this
+rather than presenting `13–27` as if it settled the question.
 
 `castTarget` was never a pending decoder — that framing was wrong, and worth
 correcting rather than quietly dropping. `Spell.cpp:4662`'s target block
@@ -291,8 +337,15 @@ Ordered by value per unit of work. The first three have since been built.
    ARCHITECTURE.md §16.4). The Ralthas capture contains no `SMSG_PLAY_SOUND`,
    so this path ships with zero real-capture validation — synthetic tests
    only, said plainly rather than left implicit.
-8. **Longer captures** for anything statistical (`delayRepeat*`). Not a code
-   problem.
+8. ~~**Longer captures** for anything statistical (`delayRepeat*`)~~ — **done,
+   with an honest ceiling.** A capture recorded specifically for this (several
+   patrol loops, fights carried past multiple deaths) gave 30 repeat
+   intervals, enough to bound `delayRepeatMin/Max` at `13–27 s` against the
+   PR's `12/17` — closer at the floor than the ceiling, exactly as the
+   overhead-adds-to-the-gap model in §7 predicts. This was never a code
+   problem, and the result confirms it: more samples produced a tighter,
+   still-honest bound, not the authored numbers themselves, because an
+   observed gap and a cast parameter are two different quantities.
 
 ## 9. SQL output shape (built)
 
@@ -318,22 +371,28 @@ is a different thing and stays separate rather than overloading it:
 ## 10. Bottom line
 
 For a creature like Ralthas — one that spawns, patrols, aggros, talks, casts
-one spell, dies and respawns inside the capture — this toolkit now produces
-**215 of the PR's 219 comparable fields float32-bit-identical, zero
-disagreements**: 53 rows across 8 tables, at the PR's own full column width,
-ids matching the hand-authored ones. Of the four it does not reproduce
-bit-for-bit: two (`position_z`, `orientation`) are real, small, already-
-measured runtime differences (ground-snap, timing) rather than decode error;
-two (one spell's `delayRepeatMin/Max`) are named as a gap in the file, with
-the reason, rather than defaulted or guessed.
+one spell, dies and respawns inside the capture — this toolkit produces
+**215 of the PR's 219 comparable fields float32-bit-identical**: 53 rows
+across 8 tables, at the PR's own full column width, ids matching the
+hand-authored ones. Of the four it does not reproduce bit-for-bit: two
+(`position_z`, `orientation`) are real, small, already-measured runtime
+differences (ground-snap, timing) rather than decode error; two (one spell's
+`delayRepeatMin/Max`) went from a named gap to a named, honestly-inexact
+estimate once a longer capture supplied enough samples — `13–27 s` bounding
+the PR's `12/17`, closer at the floor than the ceiling because an observed
+cast-to-cast gap measures more than the pure random parameter it is standing
+in for.
 
-The work was never in the decoding, which already reached these numbers. It
-was in the `analyze/` layer that turns 113 hops into 41 waypoints and three
-timestamps into two AI events; in `fill_schema_defaults` reading each table's
-own column defaults instead of a second copy of its schema; in restating a
-confirmed value as the database's own reading (a true no-op) rather than the
-wire's computed one, closing what had been a ~3e-6 approximation into an exact
-match; and in an emitter honest enough to mark its own guesses — including the
-one that matters most, refusing to invent a repeat delay from a single
-observed interval that does not even fall inside the range it would be
-guessing at.
+The work was never only in the decoding, which already reached most of these
+numbers from the first, short capture. It was in the `analyze/` layer that
+turns dozens of hops into 41 waypoints and a handful of timestamps into two
+AI events; in `fill_schema_defaults` reading each table's own column defaults
+instead of a second copy of its schema; in restating a confirmed value as the
+database's own reading (a true no-op) rather than the wire's computed one,
+closing what had been a ~3e-6 approximation into an exact match; in detecting
+a respawn from a `VALUES` health reset once a longer capture's player never
+lost sight of the creature, so no fresh `CREATE` ever came; and in an emitter
+honest enough to mark its own guesses as guesses — including the one that
+matters most, stating plainly that 30 samples produced a real bound on a
+repeat delay, not the authored parameter itself, and why those are not the
+same thing.
