@@ -710,3 +710,91 @@ def test_attack_state_of_a_player_has_no_entry_keys_and_still_renders():
     assert "entry=-" in text
     row = next(iter(AttackState().sql_rows(ev, _sql_ctx())))
     assert row.values["entry"] is None and row.values["victim_entry"] is None
+
+
+# --------------------------------------------------------------------------
+# periodic_aura: SMSG_PERIODICAURALOG -- one DoT/HoT/mana tick.
+# Unit.cpp:4715-4755 -- shape depends on auraType, verified against
+# SpellAuraDefines.h's AuraType enum before writing any test.
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.periodic_aura import (  # noqa: E402
+    AURA_OBS_MOD_HEALTH, AURA_OBS_MOD_MANA, AURA_PERIODIC_DAMAGE, AURA_PERIODIC_ENERGIZE,
+    AURA_PERIODIC_HEAL, AURA_PERIODIC_MANA_LEECH, PeriodicAura,
+)
+from tortoise_capture.core.reader import WireError  # noqa: E402
+
+CASTER2 = make_guid(62679, 5)
+AURA_TARGET = make_guid(0, 11, 0x0000)   # a player DoT target
+
+
+def _aura_head(spell_id=1120, aura_type=AURA_PERIODIC_DAMAGE, caster=None, target=None):
+    return (pack_guid(target if target is not None else AURA_TARGET)
+            + pack_guid(caster if caster is not None else CASTER2)
+            + struct.pack("<III", spell_id, 1, aura_type))
+
+
+def test_periodic_damage_reads_damage_school_absorb_resist():
+    body = _aura_head(aura_type=AURA_PERIODIC_DAMAGE) + struct.pack("<IIIi", 55, 4, 5, 0)
+    ev = decode_one(PeriodicAura(), make_packet(0x24E, body), make_ctx())
+    assert ev.kind == "periodic_aura"
+    assert ev.data["guid"] == CASTER2 and ev.data["entry"] == 62679
+    assert ev.data["amount"] == 55 and ev.data["school"] == 4
+    assert ev.data["absorb"] == 5 and ev.data["resist"] == 0
+    assert ev.data["aura_type"] == AURA_PERIODIC_DAMAGE
+
+
+def test_periodic_heal_reads_only_the_amount():
+    body = _aura_head(aura_type=AURA_PERIODIC_HEAL) + struct.pack("<I", 120)
+    ev = decode_one(PeriodicAura(), make_packet(0x24E, body), make_ctx())
+    assert ev.data["amount"] == 120
+    assert "school" not in ev.data and "power_type" not in ev.data
+
+
+def test_obs_mod_health_uses_the_same_layout_as_periodic_heal():
+    body = _aura_head(aura_type=AURA_OBS_MOD_HEALTH) + struct.pack("<I", 40)
+    ev = decode_one(PeriodicAura(), make_packet(0x24E, body), make_ctx())
+    assert ev.data["amount"] == 40
+
+
+def test_periodic_energize_reads_power_type_and_amount():
+    body = _aura_head(aura_type=AURA_PERIODIC_ENERGIZE) + struct.pack("<II", 0, 8)
+    ev = decode_one(PeriodicAura(), make_packet(0x24E, body), make_ctx())
+    assert ev.data["power_type"] == 0 and ev.data["amount"] == 8
+
+
+def test_obs_mod_mana_uses_the_same_layout_as_energize():
+    body = _aura_head(aura_type=AURA_OBS_MOD_MANA) + struct.pack("<II", 0, 15)
+    ev = decode_one(PeriodicAura(), make_packet(0x24E, body), make_ctx())
+    assert ev.data["power_type"] == 0 and ev.data["amount"] == 15
+
+
+def test_mana_leech_reads_power_type_amount_and_multiplier():
+    body = _aura_head(aura_type=AURA_PERIODIC_MANA_LEECH) + struct.pack("<IIf", 0, 30, 0.5)
+    ev = decode_one(PeriodicAura(), make_packet(0x24E, body), make_ctx())
+    assert ev.data["power_type"] == 0 and ev.data["amount"] == 30
+    assert abs(ev.data["multiplier"] - 0.5) < 1e-6
+
+
+def test_an_aura_type_this_server_never_sends_is_a_wire_error():
+    """default: never sent -- Unit.cpp:4750 logs an error and returns before
+    building any packet, so there is no byte layout to guess at here."""
+    body = _aura_head(aura_type=999)
+    try:
+        list(PeriodicAura().decode(make_packet(0x24E, body), make_ctx()))
+        assert False, "expected WireError"
+    except WireError:
+        pass
+
+
+def test_periodic_aura_of_a_player_caster_has_no_entry_key_and_still_renders():
+    player_caster = make_guid(0, 9, 0x0000)
+    body = _aura_head(aura_type=AURA_PERIODIC_DAMAGE, caster=player_caster) + \
+        struct.pack("<IIIi", 20, 0, 0, 0)
+    ev = decode_one(PeriodicAura(), make_packet(0x24E, body), make_ctx())
+    assert "entry" not in ev.data
+    text = PeriodicAura().text_templates["periodic_aura"].format_map(
+        PeriodicAura().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(PeriodicAura().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None

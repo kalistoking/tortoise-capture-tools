@@ -477,7 +477,16 @@ Order followed so far, highest content value first:
     resist exceed it — so a fully-resisted hit and a barely-landing one are
     wire-indistinguishable at the low end, on top of needing the target's
     resistance at cast time to reverse at all
-13. everything else, as the content being authored demands it
+13. `SMSG_PERIODICAURALOG` — one DoT/HoT/mana tick per packet. Unlike the two
+    entries above, this one needs no mitigation caveat: `Unit.cpp:4715`
+    writes the already-final per-tick amount, no further processing happens
+    to it. The payload's shape depends on `AuraType`
+    (`SpellAuraDefines.h`) -- five branches decoded, a sixth ("any other
+    value") is provably unreachable on the wire (`Unit.cpp:4750` logs a
+    server-side error and returns before ever building the packet), so
+    `modules/periodic_aura.py` raises `WireError` there instead of guessing
+    a layout that cannot occur
+14. everything else, as the content being authored demands it
 
 ---
 
