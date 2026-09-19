@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from support import findings_by_kind, make_event, run_analyzer
+from support import findings_by_kind, make_event, make_guid, run_analyzer
 from tortoise_capture.analyze.behaviour import Behaviour
 from tortoise_capture.analyze.patrol import Patrol
 
@@ -78,6 +78,20 @@ def test_combat_detours_do_not_enter_the_route():
 
 def test_too_few_points_is_not_a_route():
     events = [make_event("move_linear", 1.0, guid=GUID, entry=ENTRY, dest=(0.0, 0.0, 0.0))]
+    assert run_analyzer(Patrol(), events) == []
+
+
+def test_a_route_with_no_entry_bearing_guid_is_not_reported():
+    """Regression, found decoding a real second capture: SMSG_MONSTER_MOVE
+    also carries forced player movement (knockback etc.), and since the
+    entry-attribution fix this correctly omits `entry` for a non-entry-
+    bearing guid -- route.entry stays None. Rendering `patrol_route`'s
+    "entry={entry:<7}" template on None raised TypeError; the real fix is
+    that a route with no creature to attribute it to is not a patrol at
+    all, so it should never be reported, not just render without crashing."""
+    player_guid = make_guid(0, 9, 0x0000)   # high word 0 == HIGHGUID_PLAYER
+    events = [make_event("move_linear", float(i), guid=player_guid, dest=xyz)
+             for i, xyz in enumerate(SQUARE * 3, start=1)]
     assert run_analyzer(Patrol(), events) == []
 
 

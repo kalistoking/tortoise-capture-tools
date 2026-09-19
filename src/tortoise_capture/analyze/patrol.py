@@ -174,6 +174,12 @@ class Patrol(BaseAnalyzer):
         for guid, route in sorted(self._routes.items()):
             if route.last_packet is None:
                 continue
+            if route.entry is None:
+                # SMSG_MONSTER_MOVE also carries forced player movement
+                # (knockback etc.); a non-entry-bearing guid has no
+                # creature_movement row to reconstruct, so it is not a
+                # patrol at all -- not a route missing a label.
+                continue
             order = route.walk()
             if not order:
                 ctx.log.debug("entry %s: %d hop cluster(s), too few for a route",
