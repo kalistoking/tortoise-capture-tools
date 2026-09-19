@@ -504,7 +504,19 @@ Order followed so far, highest content value first:
     server-side error and returns before ever building the packet), so
     `modules/periodic_aura.py` raises `WireError` there instead of guessing
     a layout that cannot occur
-15. everything else, as the content being authored demands it
+15. `SMSG_LOOT_RESPONSE` — the loot window's contents, or why it did not
+    open. Two shapes share the opcode number (`Player.cpp:9278` vs `:9679`),
+    told apart by remaining byte count after the guid rather than a flag --
+    the error form is always exactly 2 bytes there, no successful response
+    ever is. This is the only wire signal for `creature_loot_template` /
+    `creature_pickpocketing_loot_template` / `skinning_loot_template`
+    content, but each packet is one roll of the table, not a chance --
+    deliberately no `author/` rule turns a handful of these into a proposed
+    row, the same "not enough samples" restraint `delayRepeatMin/Max`
+    already has, made explicit rather than half-built: this data is meant
+    to be recorded and completed by a human (via `trt`), not guessed at
+    here
+16. everything else, as the content being authored demands it
 
 ---
 

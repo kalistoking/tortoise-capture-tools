@@ -873,3 +873,72 @@ def test_spell_delayed_never_has_an_entry_key():
     assert "350ms" in text
     row = next(iter(SpellDelayed().sql_rows(ev, _sql_ctx())))
     assert row.values["delay_ms"] == 350
+
+
+# --------------------------------------------------------------------------
+# loot_response: SMSG_LOOT_RESPONSE -- what a loot window shows, or why it
+# didn't open. Two shapes share this opcode number (Player.cpp:9278 vs
+# :9679), told apart by remaining byte count after the guid, not a flag.
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.loot_response import LootResponse  # noqa: E402
+
+
+def _item(item_id=5276, count=1, display=1234, random_prop=-5, slot_type=0):
+    return struct.pack("<IIIIiB", item_id, count, display, 0, random_prop, slot_type)
+
+
+def test_loot_response_reads_gold_and_items():
+    body = (struct.pack("<Q", GUID) + bytes([1])          # guid, loot_type=LOOT_CORPSE
+            + struct.pack("<IB", 250, 2)                  # gold, item_count
+            + bytes([0]) + _item(item_id=5276, count=1, random_prop=-5)
+            + bytes([1]) + _item(item_id=25382, count=3, random_prop=0))
+    ev = decode_one(LootResponse(), make_packet(0x160, body, "SMSG_LOOT_RESPONSE"), make_ctx())
+    assert ev.kind == "loot_response"
+    assert ev.data["guid"] == GUID and ev.data["entry"] == ENTRY
+    assert ev.data["loot_type"] == 1 and ev.data["gold"] == 250
+    assert len(ev.data["items"]) == 2
+    assert ev.data["items"][0] == {"slot": 0, "item_id": 5276, "count": 1,
+                                   "display_info_id": 1234, "random_property_id": -5,
+                                   "slot_type": 0}
+    assert ev.data["items"][1]["item_id"] == 25382 and ev.data["items"][1]["count"] == 3
+
+
+def test_loot_response_with_no_items_is_still_decoded():
+    """NONE_PERMISSION's gold=0/item_count=0 (LootMgr.cpp:902-906) needs no
+    special-casing -- item_count=0 just means the loop below never runs."""
+    body = struct.pack("<Q", GUID) + bytes([1]) + struct.pack("<IB", 0, 0)
+    ev = decode_one(LootResponse(), make_packet(0x160, body, "SMSG_LOOT_RESPONSE"), make_ctx())
+    assert ev.data["gold"] == 0 and ev.data["items"] == []
+
+
+def test_loot_error_is_told_apart_by_remaining_byte_count():
+    """The error form (Player.cpp:9278) is unconditionally 2 bytes after the
+    guid (a zero placeholder + the error code); no successful response is
+    ever that short, since even an empty LootView needs gold + item_count."""
+    body = struct.pack("<Q", GUID) + bytes([0, 4])   # LOOT_ERROR_TOO_FAR == 4
+    ev = decode_one(LootResponse(), make_packet(0x160, body, "SMSG_LOOT_RESPONSE"), make_ctx())
+    assert ev.kind == "loot_error"
+    assert ev.data["guid"] == GUID and ev.data["entry"] == ENTRY and ev.data["error"] == 4
+
+
+def test_loot_response_of_a_player_corpse_has_no_entry_key_and_still_renders():
+    """A player's own corpse (release/self-res) shares this opcode too --
+    no creature_template entry to attach, same has_entry() gate as everywhere
+    else in this project."""
+    player = make_guid(0, 9, 0x0000)
+    body = struct.pack("<Q", player) + bytes([1]) + struct.pack("<IB", 0, 0)
+    ev = decode_one(LootResponse(), make_packet(0x160, body, "SMSG_LOOT_RESPONSE"), make_ctx())
+    assert "entry" not in ev.data
+    text = LootResponse().text_templates["loot_response"].format_map(
+        LootResponse().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(LootResponse().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None
+
+
+def test_loot_response_with_zero_items_still_exports_one_row_for_the_gold():
+    body = struct.pack("<Q", GUID) + bytes([1]) + struct.pack("<IB", 50, 0)
+    ev = decode_one(LootResponse(), make_packet(0x160, body, "SMSG_LOOT_RESPONSE"), make_ctx())
+    row = next(iter(LootResponse().sql_rows(ev, _sql_ctx())))
+    assert row.values["gold"] == 50 and row.values["item_id"] is None

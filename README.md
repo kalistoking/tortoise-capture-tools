@@ -39,14 +39,16 @@ limitation-of-liability terms (AGPL-3.0 §§15–16).
 
 ## Status
 
-The module system works end to end. Twenty-one modules cover 24 opcodes:
+The module system works end to end. Twenty-two modules cover 25 opcodes:
 creature query, monster chat, visual emote (the non-text counterpart to
 monster say/yell), party kill log, spell go, spell start (cast time), own
 cast success/failure, a cast interrupted (the only wire signal for a
 *creature's* own interruption — `SMSG_CAST_RESULT` is player-only), a cast
 pushed back by damage (structurally player-only, no exceptions — see
-`modules/spell_delayed.py`), melee engage/disengage, DoT/HoT/mana ticks, AI
-reaction, update object, object destroy (leaves visibility), monster move
+`modules/spell_delayed.py`), melee engage/disengage, DoT/HoT/mana ticks, loot
+window contents (one roll of a loot table per kill — recorded, not turned
+into a guessed drop chance; see `modules/loot_response.py`), AI reaction,
+update object, object destroy (leaves visibility), monster move
 (+ transport), the two compressed containers, map (login/teleport), sound,
 and melee and spell damage outcomes (`SMSG_ATTACKERSTATEUPDATE`,
 `SMSG_SPELLNONMELEEDAMAGELOG` — both
