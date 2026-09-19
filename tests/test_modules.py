@@ -826,3 +826,36 @@ def test_emote_of_a_player_has_no_entry_key_and_still_renders():
     assert "entry=-" in text
     row = next(iter(Emote().sql_rows(ev, _sql_ctx())))
     assert row.values["entry"] is None
+
+
+# --------------------------------------------------------------------------
+# spell_delayed: SMSG_SPELL_DELAYED -- pushback on the recording player's own
+# cast. Spell.cpp:7639-7679: `if (!m_caster->IsPlayer()) return;` at the very
+# top -- unlike every other opcode here, this one is unconditionally,
+# structurally player-only, not just usually. No spellId on the wire either.
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.spell_delayed import SpellDelayed  # noqa: E402
+
+PLAYER_CASTER = make_guid(0, 9, 0x0000)
+
+
+def test_spell_delayed_reads_the_guid_and_delay():
+    body = struct.pack("<QI", PLAYER_CASTER, 350)
+    ev = decode_one(SpellDelayed(), make_packet(0x1E2, body, "SMSG_SPELL_DELAYED"), make_ctx())
+    assert ev.kind == "spell_delayed"
+    assert ev.data["guid"] == PLAYER_CASTER and ev.data["delay_ms"] == 350
+
+
+def test_spell_delayed_never_has_an_entry_key():
+    """Not gated by has_entry() like everywhere else -- there is no case to
+    gate, the caster is a player in 100% of instances, so no entry is even
+    computed (same discipline as party_kill.py's killer_entry removal)."""
+    body = struct.pack("<QI", PLAYER_CASTER, 350)
+    ev = decode_one(SpellDelayed(), make_packet(0x1E2, body, "SMSG_SPELL_DELAYED"), make_ctx())
+    assert "entry" not in ev.data
+    text = SpellDelayed().text_templates["spell_delayed"].format_map(
+        SpellDelayed().text_fields(ev))
+    assert "350ms" in text
+    row = next(iter(SpellDelayed().sql_rows(ev, _sql_ctx())))
+    assert row.values["delay_ms"] == 350

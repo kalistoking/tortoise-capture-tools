@@ -455,7 +455,16 @@ Order followed so far, highest content value first:
    with `SMSG_CAST_RESULT(SPELL_FAILED_INTERRUPTED)` as the source predicts
    (`Spell.cpp:3706`) — the creature-caster case ships unexercised against
    real data, same honesty as `SMSG_PLAY_SOUND`'s own gap
-8. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE`, `SMSG_EMOTE` — identity,
+8. `SMSG_SPELL_DELAYED` — pushback added to the recording player's own cast
+   timer on taking damage mid-cast. `Spell::Delayed` (`Spell.cpp:7639`)
+   returns unconditionally for any non-player caster before doing anything
+   else, so unlike every other opcode here there is no `has_entry()` case
+   to gate: no entry is even attempted, matching `party_kill.py`'s
+   `killer_entry` removal rather than its usual gate. The wire also carries
+   no `spellId` -- attributing a delay to a specific cast needs correlating
+   the timestamp against that player's last `SMSG_SPELL_START`, an
+   `analyze/` job left undone (no consumer needed it yet)
+9. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE`, `SMSG_EMOTE` — identity,
    script text and its non-text counterpart: `Unit.cpp:1987`'s
    `HandleEmoteCommand` is called overwhelmingly from `scripts/` as
    `m_creature->HandleEmoteCommand(...)`, the direct wire signal for
@@ -464,28 +473,28 @@ Order followed so far, highest content value first:
    Ralthas himself emits `emote_id=34` (`EMOTE_ONESHOT_WOUNDCRITICAL`,
    `Unit.cpp:1841`) once, alongside the player's own emotes correctly showing
    no entry
-9. `SMSG_LOGIN_VERIFY_WORLD`/`SMSG_NEW_WORLD`, `SMSG_PLAY_SOUND` — map, sound
-10. `SMSG_ATTACKSTART`/`SMSG_ATTACKSTOP` — melee engage/disengage, from
+10. `SMSG_LOGIN_VERIFY_WORLD`/`SMSG_NEW_WORLD`, `SMSG_PLAY_SOUND` — map, sound
+11. `SMSG_ATTACKSTART`/`SMSG_ATTACKSTOP` — melee engage/disengage, from
     `Unit::Attack()` for any unit type. The two opcodes encode their guids
     differently -- START is two plain `uint64`s (`Unit.cpp:2704`), STOP is
     two packGUIDs plus a trailing always-zero word (`Unit.cpp:2714`) -- an
     asymmetry confirmed against source before writing either test, not
     assumed from the pair's shared naming
-11. `SMSG_ATTACKERSTATEUPDATE` — melee swing outcomes, observational only (see
+12. `SMSG_ATTACKERSTATEUPDATE` — melee swing outcomes, observational only (see
     `modules/attacker_state.py`'s docstring: the damage on the wire is
     post-armor-mitigation *and* post-attack-power-bonus, empirically higher
     than `dmg_min/dmg_max` in the real capture, not lower as armor alone would
     predict — reversing it needs the target's armor, which needs a player
     field table this toolkit does not have yet, so it stays raw combat-log
     data rather than a stat-refinement source it cannot honestly be yet)
-12. `SMSG_SPELLNONMELEEDAMAGELOG` — spell damage outcomes, same observational
+13. `SMSG_SPELLNONMELEEDAMAGELOG` — spell damage outcomes, same observational
     caveat as above but sharper: `modules/spell_damage_log.py`'s docstring
     traces `Unit::CalculateAbsorbResistBlock` (`Unit.cpp:2333`), which clamps
     the wire's `damage` to *zero* (not melee's floor of 1) once block+absorb+
     resist exceed it — so a fully-resisted hit and a barely-landing one are
     wire-indistinguishable at the low end, on top of needing the target's
     resistance at cast time to reverse at all
-13. `SMSG_PERIODICAURALOG` — one DoT/HoT/mana tick per packet. Unlike the two
+14. `SMSG_PERIODICAURALOG` — one DoT/HoT/mana tick per packet. Unlike the two
     entries above, this one needs no mitigation caveat: `Unit.cpp:4715`
     writes the already-final per-tick amount, no further processing happens
     to it. The payload's shape depends on `AuraType`
@@ -494,7 +503,7 @@ Order followed so far, highest content value first:
     server-side error and returns before ever building the packet), so
     `modules/periodic_aura.py` raises `WireError` there instead of guessing
     a layout that cannot occur
-14. everything else, as the content being authored demands it
+15. everything else, as the content being authored demands it
 
 ---
 
