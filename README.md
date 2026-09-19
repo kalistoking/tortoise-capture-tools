@@ -106,7 +106,10 @@ tct author capture.jsonl --entry <creature_template.entry>
 `tct author` writes a migration for a human to review, never one that applies
 itself: every value says whether it was read off the wire, inferred, resolved
 against the database or fixed by convention, and anything the capture could not
-support is listed at the end instead of being defaulted to zero.
+support is listed at the end instead of being defaulted to zero. `--format
+json` writes the same proposed rows, grouped and gapped the same way, as JSON
+instead of a commented SQL file — for a consumer that wants to parse the result
+back into structured data (e.g. an editing tool) rather than read it.
 
 ## Configuration
 
@@ -157,7 +160,7 @@ src/tortoise_capture/
   modules/   one module per opcode — the part that grows
   analyze/   cross-opcode analyzers: patrol routes, behaviour correlation
   author/    one rule per world table it can propose rows for
-  emit/      text / SQL / JSONL / migration sinks
+  emit/      text / SQL / JSONL / migration (SQL and JSON) sinks
 docs/        wire-format knowledge, how to add an opcode
 tests/       synthetic-packet and golden tests
 ```

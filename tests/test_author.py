@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import struct
 import tempfile
 from pathlib import Path
@@ -13,6 +14,7 @@ from tortoise_capture.author.spawn import Spawn
 from tortoise_capture.author.spells import Spells
 from tortoise_capture.author.stats import Stats
 from tortoise_capture.core.contracts import CONFIRMED, CONVENTION, DERIVED, LOOKUP, WIRE, AuthoredRow
+from tortoise_capture.emit.author_json import AuthorJsonWriter
 from tortoise_capture.emit.migration import MigrationWriter
 
 ENTRY = 62635
@@ -471,6 +473,83 @@ def test_rows_group_by_their_own_table_in_first_appearance_order():
         sql = path.read_text(encoding="utf-8")
 
     assert sql.index("broadcast_text  (2 row(s))") < sql.index("creature_ai_events")
+
+
+# --------------------------------------------------------------------------
+# the JSON authoring output -- same contract as the migration, as data
+# --------------------------------------------------------------------------
+
+def test_the_json_output_states_provenance_and_lists_gaps():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "out.json"
+        writer = AuthorJsonWriter(path, capture_id="test", entry=ENTRY)
+        writer.add([AuthoredRow(table="creature_equip_template",
+                                values={"entry": ENTRY, "equipentry1": 5276},
+                                provenance={"entry": WIRE, "equipentry1": LOOKUP},
+                                notes=("cross-checked",))])
+        writer.add_gaps(["creature.map -- not in any decoded opcode"])
+        writer.write()
+        doc = json.loads(path.read_text(encoding="utf-8"))
+
+    assert doc["capture_id"] == "test" and doc["entry"] == ENTRY
+    table = doc["tables"][0]
+    assert table["table"] == "creature_equip_template"
+    row = table["rows"][0]
+    assert row["values"] == {"entry": ENTRY, "equipentry1": 5276}
+    assert row["provenance"] == {"entry": WIRE, "equipentry1": LOOKUP}
+    assert row["notes"] == ["cross-checked"]
+    assert doc["gaps"] == ["creature.map -- not in any decoded opcode"]
+
+
+def test_json_rows_group_by_their_own_table_in_first_appearance_order():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "out.json"
+        writer = AuthorJsonWriter(path, capture_id="test", entry=ENTRY)
+        writer.add([
+            AuthoredRow(table="broadcast_text", values={"entry": 1}),
+            AuthoredRow(table="creature_ai_events", values={"id": 1}),
+            AuthoredRow(table="broadcast_text", values={"entry": 2}),
+        ])
+        writer.write()
+        doc = json.loads(path.read_text(encoding="utf-8"))
+
+    assert [t["table"] for t in doc["tables"]] == ["broadcast_text", "creature_ai_events"]
+    assert len(doc["tables"][0]["rows"]) == 2
+
+
+def test_json_update_rows_carry_statement_and_where():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "out.json"
+        writer = AuthorJsonWriter(path, capture_id="test", entry=ENTRY)
+        writer.add([AuthoredRow(table="creature_template", statement="update",
+                                where={"entry": ENTRY}, values={"dmg_min": 20.2118874},
+                                provenance={"dmg_min": CONFIRMED})])
+        writer.write()
+        doc = json.loads(path.read_text(encoding="utf-8"))
+
+    row = doc["tables"][0]["rows"][0]
+    assert row["statement"] == "update"
+    assert row["where"] == {"entry": ENTRY}
+    assert row["provenance"]["dmg_min"] == CONFIRMED
+
+
+def test_json_bytes_values_become_hex_strings():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "out.json"
+        writer = AuthorJsonWriter(path, capture_id="test", entry=ENTRY)
+        writer.add([AuthoredRow(table="t", values={"blob": b"\x01\xab"})])
+        writer.write()
+        doc = json.loads(path.read_text(encoding="utf-8"))
+
+    assert doc["tables"][0]["rows"][0]["values"]["blob"] == "0x01ab"
+
+
+def test_nothing_authored_writes_no_json_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "out.json"
+        writer = AuthorJsonWriter(path, capture_id="test", entry=ENTRY)
+        assert writer.write() is None
+        assert not path.exists()
 
 
 # --------------------------------------------------------------------------

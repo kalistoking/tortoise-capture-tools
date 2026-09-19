@@ -138,7 +138,8 @@ src/tortoise_capture/
     text.py           template renderer + section grouping
     sql.py            TableSpec -> DDL/INSERT, dialect handling
     jsonl.py          raw record / event dump
-    migration.py      AuthoredRow -> world migration, with provenance
+    migration.py      AuthoredRow -> world migration (SQL), with provenance
+    author_json.py    AuthoredRow -> world migration (JSON), same shape
   analyze/            <-- also grows; patrol reconstruction, behaviour correlation
   author/             <-- also grows; one rule per world table it can propose
   world.py            read-only world-database lookups (no driver dependency)

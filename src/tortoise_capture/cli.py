@@ -24,6 +24,7 @@ from .core.contracts import AuthorContext, DecodeContext, Tables
 from .core.dispatch import Filters, Runner
 from . import world as world_db
 from .emit import jsonl as jsonl_emit
+from .emit.author_json import AuthorJsonWriter, author_json_name
 from .emit.migration import MigrationWriter, migration_name
 from .emit.sql import SqlSink
 from .emit.text import TextSink
@@ -89,7 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_auth.add_argument("--entry", type=int, required=True,
                         help="the creature_template entry to author")
     p_auth.add_argument("--session-key", help="hex key, skips recovery (captures only)")
-    p_auth.add_argument("--out", help="output .sql (default: <out-dir>/<timestamp>_world.sql)")
+    p_auth.add_argument("--out", help="output file (default: <out-dir>/<timestamp>_world.<ext>)")
+    p_auth.add_argument("--format", choices=("sql", "json"), default="sql",
+                        help="sql (commented migration) or json (default: sql)")
     p_auth.add_argument("--no-db", action="store_true",
                         help="skip database lookups and diffing even if one is configured")
 
@@ -240,9 +243,13 @@ def cmd_author(args, cfg: RunConfig) -> int:
     runner = Runner(registry, ctx, rules, Filters(entry=args.entry), analyzers=analyzers)
     stats = runner.run(packets)
 
-    out_path = Path(args.out) if args.out else cfg.out_dir / migration_name()
-    writer = MigrationWriter(out_path, capture_id=stem, entry=args.entry,
-                             dialect=cfg.sql_dialect)
+    if args.format == "json":
+        out_path = Path(args.out) if args.out else cfg.out_dir / author_json_name()
+        writer = AuthorJsonWriter(out_path, capture_id=stem, entry=args.entry)
+    else:
+        out_path = Path(args.out) if args.out else cfg.out_dir / migration_name()
+        writer = MigrationWriter(out_path, capture_id=stem, entry=args.entry,
+                                 dialect=cfg.sql_dialect)
     author_ctx = AuthorContext(capture_id=stem, entry=args.entry,
                                log=_log.get_logger("author"), world=world)
     for rule in rules:
