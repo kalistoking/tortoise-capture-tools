@@ -251,6 +251,26 @@ def test_a_closed_route_repeats_its_first_point_to_close_the_loop():
     assert movement[-1].provenance["point"] == CONVENTION
 
 
+def test_a_low_confidence_route_is_not_proposed():
+    """Real finding, Rakameg capture: analyze/patrol.py can reconstruct a
+    closed-looking loop purely from combat repositioning across many
+    re-engagements with a creature the PR authors as stationary
+    (movement_type=0). confident=False (its combat_hop_fraction check)
+    must withhold movement_type/wander_distance and creature_movement
+    entirely, the same refusal spawntimesecsmin/max and delayRepeatMin/Max
+    already get from insufficient evidence."""
+    events = [ev for ev in _spawn_events() if ev.kind != "patrol_route"] + [
+        make_event("patrol_route", 999.0, guid=GUID, entry=ENTRY, count=2,
+                   closes_loop=True, confident=False),
+    ]
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert "movement_type" not in creature.values
+    assert "wander_distance" not in creature.values
+    assert not any(r.table == "creature_movement" for r in rows)
+    assert any("creature_movement" in gap and "combat" in gap for gap in gaps)
+
+
 def test_the_map_id_is_reported_as_missing_when_no_transfer_was_seen():
     _, gaps = author_rows(Spawn(), _spawn_events(), ENTRY)
     assert any("creature.map" in gap for gap in gaps)

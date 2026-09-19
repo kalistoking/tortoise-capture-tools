@@ -50,6 +50,7 @@ class Spawn(BaseAuthorRule):
         self._respawn: dict[str, Any] | None = None   # the respawn_timer finding's own data
         self._waypoints: list[dict[str, Any]] = []
         self._closes_loop = False
+        self._patrol_confident = True
         self._map_id: int | None = None
 
     # -- collect -----------------------------------------------------------
@@ -69,6 +70,7 @@ class Spawn(BaseAuthorRule):
             self._waypoints.append(dict(ev.data))
         elif ev.kind == "patrol_route":
             self._closes_loop = bool(ev.data.get("closes_loop"))
+            self._patrol_confident = bool(ev.data.get("confident", True))
         elif ev.kind == "world_transfer":
             # Session-scoped (see Event.scope): not about this creature
             # specifically, but the map the whole session was observed on.
@@ -120,7 +122,7 @@ class Spawn(BaseAuthorRule):
                 # Left out of `values` entirely; see gaps().
                 skip.add("spawntimesecsmin")
                 skip.add("spawntimesecsmax")
-            if self._waypoints:
+            if self._waypoints and self._patrol_confident:
                 values["movement_type"] = MOVEMENT_TYPE_WAYPOINT
                 provenance["movement_type"] = DERIVED
                 notes.append("movement_type 2 (waypoint) because the creature walked a "
@@ -133,6 +135,14 @@ class Spawn(BaseAuthorRule):
                 # instead of left to the generic schema-fill below.
                 values["wander_distance"] = 0
                 provenance["wander_distance"] = CONVENTION
+            elif self._waypoints:
+                # Most of the reconstructed route's hops happened during
+                # combat -- more likely re-engagement repositioning than a
+                # real patrol (see analyze/patrol.py's combat_hop_fraction).
+                # Left out of `values`/creature_movement entirely; see gaps().
+                notes.append("a route was reconstructed but withheld: most of its hops "
+                             "happened during combat, so it may be re-engagement "
+                             "repositioning rather than a real patrol -- see gaps")
             if not after_death:
                 notes.append("position is the first sighting, NOT a respawn -- the capture "
                              "holds no death for this creature, so this may be mid-route")
@@ -152,7 +162,7 @@ class Spawn(BaseAuthorRule):
 
             yield self.row(values, provenance, notes=tuple(notes))
 
-        if self._waypoints and db_guid is not None:
+        if self._waypoints and self._patrol_confident and db_guid is not None:
             points = sorted(self._waypoints, key=lambda w: w["point"])
             for waypoint in points:
                 mv_values = {"id": db_guid, "point": waypoint["point"],
@@ -199,3 +209,8 @@ class Spawn(BaseAuthorRule):
         if not self._waypoints:
             yield ("creature_movement -- no closed route was reconstructed; the creature may "
                    "be stationary, or the capture may be too short to see a full lap")
+        elif not self._patrol_confident:
+            yield ("creature_movement -- a route was reconstructed, but most of its hops "
+                   "happened during combat; re-engaging a stationary creature many times "
+                   "can produce a closed loop out of nothing but repositioning, so it is "
+                   "not proposed without enough movement seen outside of combat to trust it")

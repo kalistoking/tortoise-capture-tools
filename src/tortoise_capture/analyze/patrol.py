@@ -53,6 +53,12 @@ CLUSTER_TOLERANCE = 1.0
 
 MIN_WAYPOINTS = 3            # fewer than this is not a route
 
+# Above this share of hops seen during an aggro-to-death window, a route is
+# more likely combat repositioning across many re-engagements than a real
+# patrol -- see combat_hop_fraction()'s docstring and docs/feasibility-
+# rakameg-pr.md for the real capture that motivated this.
+MAX_COMBAT_HOP_FRACTION = 0.5
+
 _TABLE = TableSpec(
     name="capture_patrol_waypoint",
     columns=(
@@ -76,11 +82,15 @@ class _Route:
     def __init__(self) -> None:
         self.clusters: list[list[tuple[float, float, float]]] = []
         self.labels: list[int] = []
+        self.hop_times: list[float] = []            # packet time per hop, parallel to labels
         self.spawn: tuple[float, float, float] | None = None
         self.entry: int | None = None
         self.last_packet: Packet | None = None
+        self.engagements: list[float] = []          # aggro-trigger timestamps (ai_reaction)
+        self.deaths: list[float] = []                # party_kill timestamps
 
-    def add_hop(self, point: tuple[float, float, float]) -> None:
+    def add_hop(self, point: tuple[float, float, float], t: float) -> None:
+        self.hop_times.append(t)
         for index, members in enumerate(self.clusters):
             if math.dist(members[0][:2], point[:2]) <= CLUSTER_TOLERANCE:
                 members.append(point)
@@ -88,6 +98,29 @@ class _Route:
                 return
         self.clusters.append([point])
         self.labels.append(len(self.clusters) - 1)
+
+    def combat_hop_fraction(self) -> float:
+        """Share of hops whose timestamp falls inside an aggro-to-death window.
+
+        Mirrors `analyze/behaviour.py`'s own "engagement" (aggro to the death
+        that follows it) rather than sharing state with it -- analyzers each
+        keep their own view of the same stream. An aggro with no later death
+        (still fighting when the capture ends) leaves its window open, which
+        only ever overcounts combat time -- the safe direction for a
+        confidence check that exists to catch overcounting in the first place.
+        """
+        if not self.hop_times:
+            return 0.0
+        deaths = sorted(self.deaths)
+        windows = []
+        for start in sorted(self.engagements):
+            after = [d for d in deaths if d > start]
+            windows.append((start, min(after) if after else math.inf))
+        if not windows:
+            return 0.0
+        in_combat = sum(1 for t in self.hop_times
+                        if any(start <= t <= end for start, end in windows))
+        return in_combat / len(self.hop_times)
 
     def centre(self, index: int) -> tuple[float, float, float]:
         """Mean of every observation of a waypoint -- one lap's noise averaged out."""
@@ -154,10 +187,12 @@ class Patrol(BaseAnalyzer):
             return
 
         if ev.kind == "move_linear":
+            if ev.packet.t is None:
+                return
             route = self._routes.setdefault(guid, _Route())
             route.entry = ev.data.get("entry")
             route.last_packet = ev.packet
-            route.add_hop(tuple(ev.data["dest"]))
+            route.add_hop(tuple(ev.data["dest"]), ev.packet.t)
         elif ev.kind == "object_create":
             # A create block is the creature standing where it spawned -- but
             # only the respawn one is; the first sighting catches it mid-route.
@@ -167,6 +202,10 @@ class Patrol(BaseAnalyzer):
                 route = self._routes.setdefault(guid, _Route())
                 route.entry = ev.data.get("entry")
                 route.spawn = tuple(position[:3])
+        elif ev.kind == "ai_reaction" and ev.data.get("reaction") == 2 and ev.packet.t is not None:
+            self._routes.setdefault(guid, _Route()).engagements.append(ev.packet.t)
+        elif ev.kind == "party_kill" and ev.packet.t is not None:
+            self._routes.setdefault(guid, _Route()).deaths.append(ev.packet.t)
 
     # -- report ------------------------------------------------------------
 
@@ -186,11 +225,15 @@ class Patrol(BaseAnalyzer):
                               route.entry, len(route.clusters))
                 continue
 
-            ctx.log.info("entry %s: %d waypoints from %d hops (%d cluster(s) seen)",
-                         route.entry, len(order), len(route.labels), len(route.clusters))
+            combat_fraction = route.combat_hop_fraction()
+            confident = combat_fraction <= MAX_COMBAT_HOP_FRACTION
+            ctx.log.info("entry %s: %d waypoints from %d hops (%d cluster(s) seen, "
+                         "%.0f%% during combat)", route.entry, len(order), len(route.labels),
+                         len(route.clusters), combat_fraction * 100)
             yield self.event(route.last_packet, "patrol_route", guid=guid, entry=route.entry,
                              count=len(order), hops=len(route.labels),
-                             closes_loop=getattr(route, "returns_to_start", False))
+                             closes_loop=getattr(route, "returns_to_start", False),
+                             combat_hop_fraction=combat_fraction, confident=confident)
             for point, index in enumerate(order, start=1):
                 x, y, z = route.centre(index)
                 yield self.event(route.last_packet, "patrol_waypoint", guid=guid,

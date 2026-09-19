@@ -19,6 +19,11 @@ discipline, different creature, to see what breaks.
 Something did break, and it is more informative than a clean pass would have
 been.
 
+**Status: fixed.** Both weaknesses below were found, then closed the same
+session, against this exact capture — see the "Fixed" note at the end of
+each. This document keeps its original findings rather than editing them
+away, because the fix is only meaningful in light of what it replaced.
+
 ## Headline finding: the capture technique that helped spell timing hurt movement and respawn inference
 
 Both Ralthas and Rakameg were recorded with the same deliberate technique:
@@ -31,11 +36,11 @@ on its one spawn, guid 2591199), fed the `patrol` analyzer enough
 combat-repositioning movement to construct a confident-looking, entirely
 spurious patrol route:
 
-| | PR (hand-authored) | this toolkit |
-|---|---|---|
-| `movement_type` | **0** (stationary) | **2** (waypoint) |
-| `creature_movement` rows for guid 2591199 | **0** | **11**, from 54 hops across 43 clusters |
-| `spawntimesecsmin/max` | **86400 / 86400** (effectively "does not naturally respawn") | **25 / 25** |
+| | PR (hand-authored) | this toolkit, before the fix | after |
+|---|---|---|---|
+| `movement_type` | **0** (stationary) | **2** (waypoint) | *not proposed* |
+| `creature_movement` rows for guid 2591199 | **0** | **11**, from 54 hops across 43 clusters | **0**, named as a gap |
+| `spawntimesecsmin/max` | **86400 / 86400** (effectively "does not naturally respawn") | **25 / 25** | *not proposed*, named as a gap |
 
 Both wrong values carry the *same* provenance labels (`derived`,
 `convention`) this toolkit uses for its genuinely-validated Ralthas output —
@@ -62,8 +67,8 @@ does not patrol.
 | table | result |
 |---|---|
 | `creature_template` (UPDATE, 7 comparable fields) | **7/7** float32-close, same ~1e-6 relative broadcast drift as Ralthas (§1) |
-| `creature` (spawn fields) | **guid, position, orientation, map: exact.** `spawntimesecsmin/max` and `movement_type`: **wrong**, see above (§2) |
-| `creature_movement` | **0/0** — the PR authors none for this guid; this toolkit fabricated 11 (§2) |
+| `creature` (spawn fields) | **guid, position, orientation, map: exact.** `spawntimesecsmin/max` and `movement_type` were wrong before the fix below; now correctly withheld as gaps (§2) |
+| `creature_movement` | **0/0**, matching the PR — this toolkit fabricated 11 before the fix, now proposes none (§2) |
 | `creature_equip_template` | gap — no database configured this session, same mechanism as Ralthas §4, not a new limitation |
 | `broadcast_text` | **2/2** rows, text exact, `chat_type` correctly read as **YELL** (Ralthas's was SAY) — first real evidence the chat-type distinction generalises (§4) |
 | `creature_ai_events` + `creature_ai_scripts` | clean, same correlation logic as Ralthas (§4) |
@@ -115,6 +120,20 @@ this as lower-confidence than Ralthas's own real, independently-verified
 live database). A reviewer reading only the authored file has no way to
 tell the two apart.
 
+**Fixed.** `_Route` now records each hop's timestamp alongside its position,
+and independently tracks the same aggro→death "engagement" window
+`analyze/behaviour.py` already uses for spell timing (kept separate, not
+shared state — analyzers each see the raw stream and keep their own view of
+it). `combat_hop_fraction()` is the share of a route's hops whose timestamp
+falls inside one of those windows; a `patrol_route` finding now carries this
+fraction and a `confident` flag (`MAX_COMBAT_HOP_FRACTION = 0.5`). Checked
+against both real captures rather than picked blind: Ralthas's own validated
+route is **5%** combat hops, Rakameg's fabricated one is **100%** — a gap
+wide enough that 0.5 is nowhere near either edge. `author/spawn.py` now
+withholds `movement_type`/`wander_distance`/`creature_movement` entirely
+when `confident` is false, and reports why as a gap instead, the same
+refusal `delayRepeatMin/Max` already gets from too few samples.
+
 **`spawntimesecsmin/max`.** `analyze/behaviour.py`'s respawn finding
 (`respawn_timer`) is built on exactly one death→next-sighting gap: 24.6
 seconds. The PR's own value is 86400 (24 hours — the "does not really
@@ -124,6 +143,15 @@ sample cannot be told apart from a fixed timer's own noise (the same
 caveat Ralthas's single-sample case already carried, worded in
 `spawn.py`'s own notes) — and here that structural weakness produced a
 number over 3000x smaller than reality, not a close miss.
+
+**Fixed.** `respawn_timer` gained a `confident` flag (`samples >= 2`,
+`MIN_RESPAWNS_FOR_CONFIDENCE` in `behaviour.py` — a lower bar than
+`spell_repeat_delay`'s five, because a respawn timer is typically fixed
+rather than randomised, so two independent gaps already cross-validate each
+other). `spawn.py` now withholds `spawntimesecsmin/max` outright when not
+confident, protects the columns from `fill_schema_defaults` via `skip`, and
+reports the single observation as a gap instead of a number. Ralthas's own
+two-sample case (299–300s, still `confident=True`) is unaffected.
 
 **What this does not mean.** It does not mean the decoders are wrong, or
 that Ralthas's own validated 41/41 waypoint match was luck — that result is
@@ -190,19 +218,32 @@ The decoding layer generalises cleanly: every field read straight off the
 wire (stats, position, guid, map, text, chat type) matched a creature this
 toolkit had never seen, to the same precision Ralthas showed. The two
 analyzers that infer rather than decode — `patrol` and `behaviour`'s respawn
-timer — do not yet generalise to a creature whose real behaviour (stationary,
+timer — did not generalise to a creature whose real behaviour (stationary,
 effectively non-respawning) differs from the assumption their heuristics
 were built and tested against (patrols, dies and respawns naturally). Both
 produced a specific, wrong, *confidently-labelled* answer rather than a
-named gap, which is the actual defect: the honesty this toolkit's authoring
+named gap, which was the actual defect: the honesty this toolkit's authoring
 output otherwise insists on (§7's refusal to guess a repeat delay from one
 sample, §2's Ralthas-side ground-snap caveat) did not extend to these two
-values here, and it needs to.
+values here.
 
-What would close this gap, roughly in order of leverage: a confidence signal
-on `patrol_route` distinguishing hops seen only during combat from hops seen
-while not in combat (`AttackState`/`AiReaction` timing already decoded would
-support this without a new opcode); and a respawn finding that refuses to
-report `spawntimesecsmin/max` from a single sample the way `creature_spells`
-already refuses to report `delayRepeatMin/Max` from one — the same discipline
-already exists one layer over, it just was not applied here.
+Both are fixed now, in the same session this document's findings came from,
+each checked against both real captures rather than merely made to pass a
+unit test: `patrol_route` carries a `confident` flag from a combat-hop
+fraction (5% for Ralthas's genuine route, 100% for Rakameg's fabricated
+one — nowhere near the 0.5 cutoff on either side), and `respawn_timer`
+carries one from a sample-count threshold, mirroring `spell_repeat_delay`'s
+own. `author/spawn.py` withholds `movement_type`/`creature_movement` and
+`spawntimesecsmin/max` respectively when either flag is false, reporting a
+gap instead of a wrong number. Re-run after the fix: Rakameg's authored file
+proposes no `creature_movement` rows and no `spawntimesecsmin/max`, matching
+the PR's own silence on both; Ralthas's already-validated output is
+unchanged.
+
+The finding that matters going forward is not "patrol and respawn were
+buggy" — it is that **the discipline this toolkit already had in one place
+(`creature_spells` refusing an unbounded value) did not automatically apply
+everywhere it should have**, and a second, independently-chosen test
+creature is what surfaced the gap. Ralthas alone, being a genuinely
+patrolling, genuinely multiply-respawning creature, could not have shown
+either weakness existed.
