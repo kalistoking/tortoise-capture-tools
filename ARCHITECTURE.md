@@ -430,18 +430,39 @@ Order followed so far, highest content value first:
 
 1. `SMSG_MONSTER_MOVE` / `_TRANSPORT` — waypoints (validated in the prototype)
 2. `SMSG_UPDATE_OBJECT` — create/values blocks, combat stats
-3. `SMSG_COMPRESSED_MOVES`, `SMSG_COMPRESSED_UPDATE_OBJECT` — containers
-4. `SMSG_AI_REACTION`, `SMSG_PARTYKILLLOG`, `SMSG_SPELL_GO` — behaviour
-5. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE` — identity, script text
-6. `SMSG_LOGIN_VERIFY_WORLD`/`SMSG_NEW_WORLD`, `SMSG_PLAY_SOUND` — map, sound
-7. `SMSG_ATTACKERSTATEUPDATE` — melee swing outcomes, observational only (see
+3. `SMSG_DESTROY_OBJECT` — the other half of the respawn story `analyze/
+   behaviour.py` already documents: `Object.cpp:2685`'s `DestroyForNearby
+   Players` (called from `Creature::DisappearAndDie`) is corpse fade-out, so
+   a creature that leaves visibility this way needs a fresh CREATE to come
+   back, and one that never does (confirmed empirically: zero records for
+   Ralthas in the whole capture) explains why only VALUES-based health
+   resets were ever seen for it
+4. `SMSG_COMPRESSED_MOVES`, `SMSG_COMPRESSED_UPDATE_OBJECT` — containers
+5. `SMSG_AI_REACTION`, `SMSG_PARTYKILLLOG`, `SMSG_SPELL_GO`, `SMSG_SPELL_START`
+   — behaviour, the latter giving the cast's exact duration (`m_timer` read
+   once at cast start, `Spell.h:432`), not one measured from packet gaps
+6. `SMSG_CAST_RESULT` — the recording player's own cast success/failure;
+   player-only and guid-less on the wire (`Spell.cpp:4569`), so it never
+   carries an entry/guid key (same as `SMSG_PLAY_SOUND`) but is useful as a
+   diagnostic for why a spell sample run looks sparse (out of range, not
+   ready, interrupted, ...)
+7. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE` — identity, script text
+8. `SMSG_LOGIN_VERIFY_WORLD`/`SMSG_NEW_WORLD`, `SMSG_PLAY_SOUND` — map, sound
+9. `SMSG_ATTACKERSTATEUPDATE` — melee swing outcomes, observational only (see
    `modules/attacker_state.py`'s docstring: the damage on the wire is
    post-armor-mitigation *and* post-attack-power-bonus, empirically higher
    than `dmg_min/dmg_max` in the real capture, not lower as armor alone would
    predict — reversing it needs the target's armor, which needs a player
    field table this toolkit does not have yet, so it stays raw combat-log
    data rather than a stat-refinement source it cannot honestly be yet)
-8. everything else, as the content being authored demands it
+10. `SMSG_SPELLNONMELEEDAMAGELOG` — spell damage outcomes, same observational
+    caveat as above but sharper: `modules/spell_damage_log.py`'s docstring
+    traces `Unit::CalculateAbsorbResistBlock` (`Unit.cpp:2333`), which clamps
+    the wire's `damage` to *zero* (not melee's floor of 1) once block+absorb+
+    resist exceed it — so a fully-resisted hit and a barely-landing one are
+    wire-indistinguishable at the low end, on top of needing the target's
+    resistance at cast time to reverse at all
+11. everything else, as the content being authored demands it
 
 ---
 

@@ -314,3 +314,202 @@ def test_target_with_no_entry_bearing_guid_has_no_target_entry_key():
     named a creature_template row."""
     ev = decode_one(AttackerState(), make_packet(0x14A, _swing_body()), make_ctx())
     assert "target_entry" not in ev.data
+
+
+# --------------------------------------------------------------------------
+# spell_damage_log: SMSG_SPELLNONMELEEDAMAGELOG -- one spell hit's damage
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.spell_damage_log import SpellDamageLog  # noqa: E402
+
+CASTER = make_guid(62635, 42)
+SPELL_TARGET = make_guid(0, 7, 0x0000)   # a player: high word 0x0000
+
+
+def _spell_damage_body(spell_id=1449, damage=40, school=0, absorb=0, resist=0,
+                       periodic=0, blocked=0, hit_info=0):
+    return (pack_guid(SPELL_TARGET) + pack_guid(CASTER)
+            + struct.pack("<II", spell_id, damage) + bytes([school])
+            + struct.pack("<Ii", absorb, resist) + bytes([periodic, 0])
+            + struct.pack("<III", blocked, hit_info, 0))
+
+
+def test_a_direct_hit_reads_caster_target_spell_and_damage():
+    ev = decode_one(SpellDamageLog(), make_packet(0x150, _spell_damage_body(
+        spell_id=1449, damage=40, school=2, absorb=3, resist=5)), make_ctx())
+    assert ev.kind == "spell_damage_log"
+    assert ev.data["guid"] == CASTER and ev.data["entry"] == 62635
+    assert ev.data["target_guid"] == SPELL_TARGET
+    assert ev.data["spell_id"] == 1449 and ev.data["damage"] == 40
+    assert ev.data["school"] == 2 and ev.data["absorb"] == 3 and ev.data["resist"] == 5
+
+
+def test_crit_and_periodic_flags_are_exposed_not_just_the_raw_ints():
+    from tortoise_capture.modules.spell_damage_log import SPELL_HIT_TYPE_CRIT
+    ev = decode_one(SpellDamageLog(), make_packet(0x150, _spell_damage_body(
+        hit_info=SPELL_HIT_TYPE_CRIT, periodic=1)), make_ctx())
+    assert ev.data["is_critical"] is True
+    assert ev.data["is_periodic"] is True
+    assert ev.data["is_split"] is False
+
+
+def test_spell_damage_target_with_no_entry_bearing_guid_has_no_target_entry_key():
+    """Mirrors attacker_state.py's own regression: a player target's guid
+    carries no creature_template entry, so the key must not appear at all."""
+    ev = decode_one(SpellDamageLog(), make_packet(0x150, _spell_damage_body()), make_ctx())
+    assert "target_entry" not in ev.data
+
+
+def test_spell_damage_log_text_and_sql_rendering():
+    from tortoise_capture.modules.spell_damage_log import SPELL_HIT_TYPE_CRIT
+    ev = decode_one(SpellDamageLog(), make_packet(0x150, _spell_damage_body(
+        spell_id=1449, damage=40, absorb=3, resist=5, hit_info=SPELL_HIT_TYPE_CRIT)), make_ctx())
+
+    text = SpellDamageLog().text_fields(ev)
+    assert text["crit"] == " (crit)" and text["periodic"] == ""
+
+    row = next(iter(SpellDamageLog().sql_rows(ev, _sql_ctx())))
+    assert row.table == "capture_spell_damage_log"
+    assert row.values["spell_id"] == 1449 and row.values["damage"] == 40
+    assert row.values["absorb"] == 3 and row.values["resist"] == 5
+    assert row.values["is_critical"] == 1 and row.values["is_periodic"] == 0
+
+
+# --------------------------------------------------------------------------
+# spell_start: SMSG_SPELL_START -- a cast begins (cast bar, cast time)
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.spell_start import SpellStart  # noqa: E402
+
+
+def _spell_start_body(spell_id=1449, cast_flags=0, timer_ms=2000):
+    return (pack_guid(GUID) + pack_guid(GUID) + struct.pack("<IHI", spell_id, cast_flags, timer_ms))
+
+
+def test_spell_start_reads_caster_spell_and_cast_time():
+    ev = decode_one(SpellStart(), make_packet(0x131, _spell_start_body(
+        spell_id=1449, timer_ms=2000)), make_ctx())
+    assert ev.kind == "spell_start"
+    assert ev.data["guid"] == GUID and ev.data["entry"] == ENTRY
+    assert ev.data["spell_id"] == 1449
+    assert ev.data["cast_time_ms"] == 2000
+    assert ev.data["is_instant"] is False
+
+
+def test_spell_start_zero_timer_is_an_instant_cast():
+    """Spell.h:432 -- ReSetTimer() sets m_timer to m_casttime, which is 0 for
+    an instant-cast spell; the wire cannot distinguish that from a spell whose
+    cast time genuinely rounds to zero, so this is a fact about the cast bar,
+    not proof the spell has no server-side cast time under other conditions."""
+    ev = decode_one(SpellStart(), make_packet(0x131, _spell_start_body(timer_ms=0)), make_ctx())
+    assert ev.data["cast_time_ms"] == 0 and ev.data["is_instant"] is True
+
+
+def test_spell_start_text_and_sql_rendering():
+    ev = decode_one(SpellStart(), make_packet(0x131, _spell_start_body(
+        spell_id=1449, timer_ms=1500)), make_ctx())
+
+    text = SpellStart().text_fields(ev)
+    assert text["instant"] == ""
+
+    row = next(iter(SpellStart().sql_rows(ev, _sql_ctx())))
+    assert row.table == "capture_spell_start"
+    assert row.values["spell_id"] == 1449 and row.values["cast_time_ms"] == 1500
+    assert row.values["entry"] == ENTRY
+
+
+# --------------------------------------------------------------------------
+# cast_result: SMSG_CAST_RESULT -- why the recording player's own cast did
+# or did not go through. Player-only (Spell.cpp:4569 returns for non-players)
+# and carries no guid at all -- it is implicitly about the session's own
+# client, same as a tell rather than a broadcast.
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.cast_result import CastResult  # noqa: E402
+
+
+def _cast_result_body(spell_id=133, reason=None):
+    body = struct.pack("<I", spell_id)
+    if reason is None:
+        return body + bytes([0])
+    return body + bytes([2, reason])
+
+
+def test_a_successful_cast_has_no_reason():
+    ev = decode_one(CastResult(), make_packet(0x130, _cast_result_body(spell_id=133)), make_ctx())
+    assert ev.kind == "cast_result"
+    assert ev.data["spell_id"] == 133
+    assert ev.data["is_success"] is True
+    assert "reason" not in ev.data
+
+
+def test_a_failed_cast_carries_the_raw_reason_code():
+    ev = decode_one(CastResult(), make_packet(0x130, _cast_result_body(
+        spell_id=133, reason=89)), make_ctx())  # SPELL_FAILED_OUT_OF_RANGE
+    assert ev.data["is_success"] is False
+    assert ev.data["reason"] == 89
+
+
+def test_cast_result_carries_no_guid_or_entry_key():
+    """No caster/target guid is ever on this wire (Spell.cpp:4581-4610 sends
+    straight to the caster's own session) -- so, like play_sound, this event
+    must drop out of an --entry/--guid filtered run rather than fake a key."""
+    ev = decode_one(CastResult(), make_packet(0x130, _cast_result_body(spell_id=133)), make_ctx())
+    assert "guid" not in ev.data and "entry" not in ev.data
+
+
+def test_cast_result_text_and_sql_rendering():
+    ok = decode_one(CastResult(), make_packet(0x130, _cast_result_body(spell_id=133)), make_ctx())
+    assert CastResult().text_fields(ok)["outcome"] == "ok"
+    ok_row = next(iter(CastResult().sql_rows(ok, _sql_ctx())))
+    assert ok_row.values["is_success"] == 1 and ok_row.values["reason"] is None
+
+    failed = decode_one(CastResult(), make_packet(0x130, _cast_result_body(
+        spell_id=133, reason=89)), make_ctx())
+    assert CastResult().text_fields(failed)["outcome"] == "failed (out_of_range)"
+    failed_row = next(iter(CastResult().sql_rows(failed, _sql_ctx())))
+    assert failed_row.values["is_success"] == 0 and failed_row.values["reason"] == "out_of_range"
+
+    unnamed = decode_one(CastResult(), make_packet(0x130, _cast_result_body(
+        spell_id=133, reason=7)), make_ctx())  # SPELL_FAILED_AURA_BOUNCED, not curated
+    assert CastResult().text_fields(unnamed)["outcome"] == "failed (7)"
+
+
+# --------------------------------------------------------------------------
+# object_destroy: SMSG_DESTROY_OBJECT -- an object leaves the client's known
+# set. Object.cpp:406 -- a plain uint64 GetObjectGuid(), NOT a packGUID.
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.object_destroy import ObjectDestroy  # noqa: E402
+
+
+def test_object_destroy_reads_the_plain_guid():
+    ev = decode_one(ObjectDestroy(), make_packet(0xAA, struct.pack("<Q", GUID)), make_ctx())
+    assert ev.kind == "object_destroy"
+    assert ev.data["guid"] == GUID and ev.data["entry"] == ENTRY
+
+
+def test_object_destroy_of_a_player_has_no_entry_key():
+    """Object.cpp:2685's DestroyForNearbyPlayers destroys any nearby object,
+    not just creatures -- a player guid carries no creature_template entry."""
+    player_guid = make_guid(0, 9, 0x0000)
+    ev = decode_one(ObjectDestroy(), make_packet(0xAA, struct.pack("<Q", player_guid)), make_ctx())
+    assert "entry" not in ev.data
+
+
+def test_object_destroy_of_a_player_still_renders_as_text():
+    """Regression: the template references {entry}, which is absent for a
+    player guid -- text_fields() must fill a display default, or emit/text.py
+    silently drops the whole line as a KeyError instead of showing it."""
+    player_guid = make_guid(0, 9, 0x0000)
+    ev = decode_one(ObjectDestroy(), make_packet(0xAA, struct.pack("<Q", player_guid)), make_ctx())
+    text = ObjectDestroy().text_templates["object_destroy"].format_map(
+        ObjectDestroy().text_fields(ev))
+    assert "PLAYER" in text
+
+
+def test_object_destroy_sql_rendering():
+    ev = decode_one(ObjectDestroy(), make_packet(0xAA, struct.pack("<Q", GUID)), make_ctx())
+    row = next(iter(ObjectDestroy().sql_rows(ev, _sql_ctx())))
+    assert row.table == "capture_object_destroy"
+    assert row.values["guid"] == GUID and row.values["entry"] == ENTRY
