@@ -672,3 +672,41 @@ def test_spell_interrupted_of_a_player_has_no_entry_key_and_still_renders():
     assert "entry=-" in text
     row = next(iter(SpellInterrupted().sql_rows(ev, _sql_ctx())))
     assert row.values["entry"] is None
+
+
+# --------------------------------------------------------------------------
+# attack_state: SMSG_ATTACKSTART / SMSG_ATTACKSTOP -- melee engage/disengage.
+# Unit.cpp:2704 (START, raw uint64 guids) / :2714 (STOP, packGUID + uint32).
+# Called from Unit::Attack() -- any unit type can be attacker or victim.
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.attack_state import AttackState  # noqa: E402
+
+VICTIM = make_guid(50610, 3)
+
+
+def test_attack_start_reads_attacker_and_victim_from_raw_guids():
+    body = struct.pack("<QQ", GUID, VICTIM)
+    ev = decode_one(AttackState(), make_packet(0x142, body, "SMSG_ATTACKSTART"), make_ctx())
+    assert ev.kind == "attack_start"
+    assert ev.data["guid"] == GUID and ev.data["entry"] == ENTRY
+    assert ev.data["victim_guid"] == VICTIM and ev.data["victim_entry"] == 50610
+
+
+def test_attack_stop_reads_packed_guids_and_ignores_the_trailing_word():
+    body = pack_guid(GUID) + pack_guid(VICTIM) + struct.pack("<I", 0)
+    ev = decode_one(AttackState(), make_packet(0x143, body, "SMSG_ATTACKSTOP"), make_ctx())
+    assert ev.kind == "attack_stop"
+    assert ev.data["guid"] == GUID and ev.data["victim_guid"] == VICTIM
+
+
+def test_attack_state_of_a_player_has_no_entry_keys_and_still_renders():
+    player_attacker = make_guid(0, 9, 0x0000)
+    player_victim = make_guid(0, 10, 0x0000)
+    body = struct.pack("<QQ", player_attacker, player_victim)
+    ev = decode_one(AttackState(), make_packet(0x142, body, "SMSG_ATTACKSTART"), make_ctx())
+    assert "entry" not in ev.data and "victim_entry" not in ev.data
+    text = AttackState().text_templates["attack_start"].format_map(AttackState().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(AttackState().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None and row.values["victim_entry"] is None

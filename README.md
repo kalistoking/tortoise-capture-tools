@@ -39,14 +39,15 @@ limitation-of-liability terms (AGPL-3.0 §§15–16).
 
 ## Status
 
-The module system works end to end. Seventeen modules cover 19 opcodes:
+The module system works end to end. Eighteen modules cover 21 opcodes:
 creature query, monster chat, party kill log, spell go, spell start (cast
 time), own cast success/failure, a cast interrupted (the only wire signal for
-a *creature's* own interruption — `SMSG_CAST_RESULT` is player-only), AI
-reaction, update object, object destroy (leaves visibility), monster move
-(+ transport), the two compressed containers, map (login/teleport), sound,
-and melee and spell damage outcomes (`SMSG_ATTACKERSTATEUPDATE`,
-`SMSG_SPELLNONMELEEDAMAGELOG` — both observational only, see
+a *creature's* own interruption — `SMSG_CAST_RESULT` is player-only), melee
+engage/disengage, AI reaction, update object, object destroy (leaves
+visibility), monster move (+ transport), the two compressed containers, map
+(login/teleport), sound, and melee and spell damage outcomes
+(`SMSG_ATTACKERSTATEUPDATE`, `SMSG_SPELLNONMELEEDAMAGELOG` — both
+observational only, see
 [ARCHITECTURE.md §12](ARCHITECTURE.md): the wire's damage figure is
 post-mitigation, not the raw `creature_template` roll).
 

@@ -457,21 +457,27 @@ Order followed so far, highest content value first:
    real data, same honesty as `SMSG_PLAY_SOUND`'s own gap
 8. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE` — identity, script text
 9. `SMSG_LOGIN_VERIFY_WORLD`/`SMSG_NEW_WORLD`, `SMSG_PLAY_SOUND` — map, sound
-10. `SMSG_ATTACKERSTATEUPDATE` — melee swing outcomes, observational only (see
+10. `SMSG_ATTACKSTART`/`SMSG_ATTACKSTOP` — melee engage/disengage, from
+    `Unit::Attack()` for any unit type. The two opcodes encode their guids
+    differently -- START is two plain `uint64`s (`Unit.cpp:2704`), STOP is
+    two packGUIDs plus a trailing always-zero word (`Unit.cpp:2714`) -- an
+    asymmetry confirmed against source before writing either test, not
+    assumed from the pair's shared naming
+11. `SMSG_ATTACKERSTATEUPDATE` — melee swing outcomes, observational only (see
     `modules/attacker_state.py`'s docstring: the damage on the wire is
     post-armor-mitigation *and* post-attack-power-bonus, empirically higher
     than `dmg_min/dmg_max` in the real capture, not lower as armor alone would
     predict — reversing it needs the target's armor, which needs a player
     field table this toolkit does not have yet, so it stays raw combat-log
     data rather than a stat-refinement source it cannot honestly be yet)
-11. `SMSG_SPELLNONMELEEDAMAGELOG` — spell damage outcomes, same observational
+12. `SMSG_SPELLNONMELEEDAMAGELOG` — spell damage outcomes, same observational
     caveat as above but sharper: `modules/spell_damage_log.py`'s docstring
     traces `Unit::CalculateAbsorbResistBlock` (`Unit.cpp:2333`), which clamps
     the wire's `damage` to *zero* (not melee's floor of 1) once block+absorb+
     resist exceed it — so a fully-resisted hit and a barely-landing one are
     wire-indistinguishable at the low end, on top of needing the target's
     resistance at cast time to reverse at all
-12. everything else, as the content being authored demands it
+13. everything else, as the content being authored demands it
 
 ---
 
