@@ -642,3 +642,33 @@ def test_object_destroy_sql_rendering():
     row = next(iter(ObjectDestroy().sql_rows(ev, _sql_ctx())))
     assert row.table == "capture_object_destroy"
     assert row.values["guid"] == GUID and row.values["entry"] == ENTRY
+
+
+# --------------------------------------------------------------------------
+# spell_interrupted: SMSG_SPELL_FAILED_OTHER -- a cast in progress was
+# cancelled. Spell.cpp:4926 -- a plain uint64 guid (not packGUID) + spellId.
+# The only wire signal a NON-player caster's cast was interrupted: the paired
+# SMSG_CAST_RESULT(SPELL_FAILED_INTERRUPTED) only ever goes to a player.
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.spell_interrupted import SpellInterrupted  # noqa: E402
+
+
+def test_spell_interrupted_reads_caster_and_spell():
+    body = struct.pack("<QI", GUID, 1449)
+    ev = decode_one(SpellInterrupted(), make_packet(0x2A6, body), make_ctx())
+    assert ev.kind == "spell_interrupted"
+    assert ev.data["guid"] == GUID and ev.data["entry"] == ENTRY
+    assert ev.data["spell_id"] == 1449
+
+
+def test_spell_interrupted_of_a_player_has_no_entry_key_and_still_renders():
+    player = make_guid(0, 9, 0x0000)
+    body = struct.pack("<QI", player, 133)
+    ev = decode_one(SpellInterrupted(), make_packet(0x2A6, body), make_ctx())
+    assert "entry" not in ev.data
+    text = SpellInterrupted().text_templates["spell_interrupted"].format_map(
+        SpellInterrupted().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(SpellInterrupted().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None

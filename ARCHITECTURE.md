@@ -446,23 +446,31 @@ Order followed so far, highest content value first:
    carries an entry/guid key (same as `SMSG_PLAY_SOUND`) but is useful as a
    diagnostic for why a spell sample run looks sparse (out of range, not
    ready, interrupted, ...)
-7. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE` — identity, script text
-8. `SMSG_LOGIN_VERIFY_WORLD`/`SMSG_NEW_WORLD`, `SMSG_PLAY_SOUND` — map, sound
-9. `SMSG_ATTACKERSTATEUPDATE` — melee swing outcomes, observational only (see
-   `modules/attacker_state.py`'s docstring: the damage on the wire is
-   post-armor-mitigation *and* post-attack-power-bonus, empirically higher
-   than `dmg_min/dmg_max` in the real capture, not lower as armor alone would
-   predict — reversing it needs the target's armor, which needs a player
-   field table this toolkit does not have yet, so it stays raw combat-log
-   data rather than a stat-refinement source it cannot honestly be yet)
-10. `SMSG_SPELLNONMELEEDAMAGELOG` — spell damage outcomes, same observational
+7. `SMSG_SPELL_FAILED_OTHER` — a cast in progress was cancelled, no reason
+   given; unlike `SMSG_CAST_RESULT` this fires for *any* caster type
+   (`Spell::cancel()`, `Spell.cpp:4926`), so it is the only wire signal a
+   creature's own interrupted cast ever produces. In the Ralthas capture
+   both observed occurrences are the player's own Fireball, paired exactly
+   with `SMSG_CAST_RESULT(SPELL_FAILED_INTERRUPTED)` as the source predicts
+   (`Spell.cpp:3706`) — the creature-caster case ships unexercised against
+   real data, same honesty as `SMSG_PLAY_SOUND`'s own gap
+8. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE` — identity, script text
+9. `SMSG_LOGIN_VERIFY_WORLD`/`SMSG_NEW_WORLD`, `SMSG_PLAY_SOUND` — map, sound
+10. `SMSG_ATTACKERSTATEUPDATE` — melee swing outcomes, observational only (see
+    `modules/attacker_state.py`'s docstring: the damage on the wire is
+    post-armor-mitigation *and* post-attack-power-bonus, empirically higher
+    than `dmg_min/dmg_max` in the real capture, not lower as armor alone would
+    predict — reversing it needs the target's armor, which needs a player
+    field table this toolkit does not have yet, so it stays raw combat-log
+    data rather than a stat-refinement source it cannot honestly be yet)
+11. `SMSG_SPELLNONMELEEDAMAGELOG` — spell damage outcomes, same observational
     caveat as above but sharper: `modules/spell_damage_log.py`'s docstring
     traces `Unit::CalculateAbsorbResistBlock` (`Unit.cpp:2333`), which clamps
     the wire's `damage` to *zero* (not melee's floor of 1) once block+absorb+
     resist exceed it — so a fully-resisted hit and a barely-landing one are
     wire-indistinguishable at the low end, on top of needing the target's
     resistance at cast time to reverse at all
-11. everything else, as the content being authored demands it
+12. everything else, as the content being authored demands it
 
 ---
 
