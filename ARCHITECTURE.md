@@ -455,7 +455,15 @@ Order followed so far, highest content value first:
    with `SMSG_CAST_RESULT(SPELL_FAILED_INTERRUPTED)` as the source predicts
    (`Spell.cpp:3706`) — the creature-caster case ships unexercised against
    real data, same honesty as `SMSG_PLAY_SOUND`'s own gap
-8. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE` — identity, script text
+8. `SMSG_MESSAGECHAT`, `SMSG_CREATURE_QUERY_RESPONSE`, `SMSG_EMOTE` — identity,
+   script text and its non-text counterpart: `Unit.cpp:1987`'s
+   `HandleEmoteCommand` is called overwhelmingly from `scripts/` as
+   `m_creature->HandleEmoteCommand(...)`, the direct wire signal for
+   `creature_ai_scripts` command 1 (EMOTE) the way `monster_say`/`monster_yell`
+   already are for command 0 (TALK) -- confirmed against the real capture:
+   Ralthas himself emits `emote_id=34` (`EMOTE_ONESHOT_WOUNDCRITICAL`,
+   `Unit.cpp:1841`) once, alongside the player's own emotes correctly showing
+   no entry
 9. `SMSG_LOGIN_VERIFY_WORLD`/`SMSG_NEW_WORLD`, `SMSG_PLAY_SOUND` — map, sound
 10. `SMSG_ATTACKSTART`/`SMSG_ATTACKSTOP` — melee engage/disengage, from
     `Unit::Attack()` for any unit type. The two opcodes encode their guids

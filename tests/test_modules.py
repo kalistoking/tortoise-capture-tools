@@ -798,3 +798,31 @@ def test_periodic_aura_of_a_player_caster_has_no_entry_key_and_still_renders():
     assert "entry=-" in text
     row = next(iter(PeriodicAura().sql_rows(ev, _sql_ctx())))
     assert row.values["entry"] is None
+
+
+# --------------------------------------------------------------------------
+# emote: SMSG_EMOTE -- a visual (non-text) emote. Unit.cpp:1987-1993:
+# uint32 emote_id, uint64 guid (raw). Fired overwhelmingly from creature
+# scripts (m_creature->HandleEmoteCommand), occasionally from players/auras.
+# --------------------------------------------------------------------------
+
+from tortoise_capture.modules.emote import Emote  # noqa: E402
+
+
+def test_emote_reads_the_emote_id_and_actor():
+    body = struct.pack("<IQ", 5, GUID)      # EMOTE_ONESHOT_TALK == 5
+    ev = decode_one(Emote(), make_packet(0x67, body, "SMSG_EMOTE"), make_ctx())
+    assert ev.kind == "emote"
+    assert ev.data["guid"] == GUID and ev.data["entry"] == ENTRY
+    assert ev.data["emote_id"] == 5
+
+
+def test_emote_of_a_player_has_no_entry_key_and_still_renders():
+    player = make_guid(0, 9, 0x0000)
+    body = struct.pack("<IQ", 66, player)   # EMOTE_ONESHOT_DANCE
+    ev = decode_one(Emote(), make_packet(0x67, body, "SMSG_EMOTE"), make_ctx())
+    assert "entry" not in ev.data
+    text = Emote().text_templates["emote"].format_map(Emote().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(Emote().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None
