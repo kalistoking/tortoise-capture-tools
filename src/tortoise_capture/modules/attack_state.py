@@ -16,7 +16,11 @@
 
 The asymmetry between the two opcodes' guid encoding is the trap worth a
 test: assuming STOP mirrors START's plain guids (or vice versa) decodes a
-plausible but wrong 64-bit value instead of failing loudly.
+plausible but wrong 64-bit value instead of failing loudly. The two are told
+apart by opcode NUMBER, never by `pkt.name`: a dump made without a checkout
+replays with an empty name (`wire/opcodes.py` resolves unknown to "",
+`emit/jsonl.py` carries it verbatim), and a name-based branch would then read
+every STOP as a START -- silently, for exactly the reason above.
 
 Both opcodes fire from `Unit::Attack()`/`Unit::AttackStop()` -- any unit type
 can be attacker or victim, players included, so both guids need the same
@@ -31,6 +35,10 @@ from ..core.base import BaseModule
 from ..core.contracts import Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec
 from ..core.reader import ByteReader, guid_entry, guid_type, has_entry
 from ..core.registry import module
+
+# Fallback for a checkout that does not define the symbol (same convention as
+# monster_move.py's SMSG_MONSTER_MOVE_TRANSPORT); the table's number wins.
+SMSG_ATTACKSTOP = 0x144
 
 _TABLE = TableSpec(
     name="capture_attack_state",
@@ -71,14 +79,16 @@ class AttackState(BaseModule):
 
     def decode(self, pkt: Packet, ctx: DecodeContext) -> Iterator[Event]:
         r = ByteReader(pkt.body, pkt.name or "attack_state")
-        if pkt.name == "SMSG_ATTACKSTOP":
+        # By number, not name -- see the module docstring for why the name
+        # can be "" and what a name-based branch would then misdecode.
+        stop = pkt.opcode == ctx.tables.opcodes.by_name.get("SMSG_ATTACKSTOP", SMSG_ATTACKSTOP)
+        if stop:
             attacker, victim = r.packguid("attacker"), r.packguid("victim")
             r.u32("unused")
-            kind = "attack_stop"
         else:
             attacker, victim = r.u64("attacker"), r.u64("victim")
-            kind = "attack_start"
-        yield self.event(pkt, kind, **_guid_pair(attacker, victim))
+        yield self.event(pkt, "attack_stop" if stop else "attack_start",
+                         **_guid_pair(attacker, victim))
 
     def text_fields(self, ev: Event):
         data = dict(ev.data)

@@ -199,6 +199,11 @@ fighting creature that is `health`.
 | `SMSG_SPELL_GO` | packGUID (cast item or caster) + packGUID (caster) + `uint32 spellId` + `uint16 castFlags` + targets (`Spell.cpp:4662`). |
 | `SMSG_ITEM_QUERY_SINGLE_RESPONSE` | `uint32 entry, class, subclass` + CString name + more (`ItemHandler.cpp:370`). Has no creature linkage — cannot be filtered by creature entry. |
 | `SMSG_AI_REACTION` | raw guid + `uint32 reactionType` (`Creature.cpp:2246`). |
+| `SMSG_ATTACKSTART` (0x143) | raw attacker guid + raw victim guid (`Unit.cpp:2704`). From `Unit::Attack()` -- any unit type on either side. |
+| `SMSG_ATTACKSTOP` (0x144) | packGUID attacker + packGUID victim + `uint32 0` (`Unit.cpp:2714`). **Not the same guid encoding as START** despite the pair -- tell the two apart by opcode number, never by assuming the layout matches. |
+| `SMSG_PERIODICAURALOG` (0x24E) | packGUID target + packGUID caster + `uint32 spellId` + `uint32 count` (always 1) + `uint32 auraType`, then by auraType: PERIODIC_DAMAGE(3)/DAMAGE_PERCENT(89) `uint32 dmg, school, absorb` + `int32 resist`; PERIODIC_HEAL(8)/OBS_MOD_HEALTH(20) `uint32 amount`; OBS_MOD_MANA(21)/PERIODIC_ENERGIZE(24) `uint32 power, amount`; PERIODIC_MANA_LEECH(64) `uint32 power, amount` + `float multiplier`. Any other type is never sent -- `Unit.cpp:4750` errors and returns before building the packet (`Unit.cpp:4715-4755`, enum in `SpellAuraDefines.h`). |
+| `SMSG_EMOTE` (0x103) | `uint32 emoteId` + raw guid (`Unit.cpp:1987`). Emote ids index the client's `Emotes.dbc`; e.g. 34 is `EMOTE_ONESHOT_WOUNDCRITICAL`, the flinch on *taking a critical hit* (`Unit.cpp:1837`), not a health threshold. |
+| `SMSG_SPELL_DELAYED` (0x1E2) | raw caster guid + `uint32 delayMs` (`Spell.cpp:7673`). Player-only by construction (`Spell.cpp:7641` returns for any non-player caster) and carries no spellId. |
 
 ## Behavioural findings (semantics, not just bytes)
 

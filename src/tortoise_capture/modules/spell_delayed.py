@@ -28,8 +28,8 @@ from typing import Iterator
 
 from ..core.base import BaseModule
 from ..core.contracts import Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec
-from ..core.registry import module
 from ..core.reader import ByteReader
+from ..core.registry import module
 
 _TABLE = TableSpec(
     name="capture_spell_delayed",

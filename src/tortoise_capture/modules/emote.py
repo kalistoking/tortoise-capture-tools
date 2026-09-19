@@ -11,9 +11,10 @@ wire signal for a scripted creature emote, the counterpart to `monster_say`/
 `monster_yell` for the non-text half of `creature_ai_scripts` (command 1,
 EMOTE, vs. command 0, TALK, which `author/dialogue.py` already covers).
 Also fired for players and aura-driven emotes (a `/dance` command, a food
-buff's `EMOTE_ONESHOT_EAT`, a low-health grunt) -- same has_entry() gate as
-every other module here, not assumed to be creature-only just because most
-call sites are.
+buff's `EMOTE_ONESHOT_EAT`, the `EMOTE_ONESHOT_WOUNDCRITICAL` flinch on
+taking a critical hit -- `Unit.cpp:1837` gates it on `HITINFO_CRITICALHIT`,
+not on health) -- same has_entry() gate as every other module here, not
+assumed to be creature-only just because most call sites are.
 
 `emote_id` is left as a raw int: it indexes the client's `Emotes.dbc`, which
 this toolkit has no access to and does not attempt to name.

@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import datetime as _dt
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from .. import log as _log
 from ..core.contracts import CONFIRMED, CONVENTION, DERIVED, LOOKUP, WIRE, AuthoredRow
+from .authored import AuthoredCollector
 from .sql import literal
 
 _logger = _log.get_logger("emit.migration")
@@ -78,45 +79,15 @@ def _update(table: str, row: AuthoredRow, dialect: str) -> list[str]:
     return [f"UPDATE `{table}`", f"SET {sets.lstrip()}", f"WHERE {where};"]
 
 
-class MigrationWriter:
-    """Collects rows from every authoring rule and writes one migration file."""
+class MigrationWriter(AuthoredCollector):
+    """Renders the collected rows as one commented SQL migration file."""
 
     def __init__(self, path: Path, capture_id: str, entry: int, dialect: str = "mysql") -> None:
-        self._path = path
-        self._capture_id = capture_id
-        self._entry = entry
+        super().__init__(path, capture_id, entry, _logger)
         self._dialect = dialect
-        self._sections: list[tuple[str, list[AuthoredRow]]] = []
-        self._gaps: list[str] = []
-
-    def add(self, rows: Iterable[AuthoredRow]) -> int:
-        """Groups by the row's own table: one rule may fill several of them.
-
-        Section order follows first appearance, so a rule that emits a script
-        before the event referencing it produces a migration that applies in
-        that order too.
-        """
-        added = 0
-        for row in rows:
-            section = next((s for s in self._sections if s[0] == row.table), None)
-            if section is None:
-                section = (row.table, [])
-                self._sections.append(section)
-            section[1].append(row)
-            added += 1
-        return added
-
-    def add_gaps(self, gaps: Iterable[str]) -> None:
-        self._gaps.extend(gaps)
-
-    @property
-    def row_count(self) -> int:
-        return sum(len(rows) for _, rows in self._sections)
 
     def write(self) -> Path | None:
-        if not self._sections and not self._gaps:
-            _logger.warning("nothing to author for entry %d; %s not written",
-                            self._entry, self._path)
+        if self._nothing_to_write():
             return None
 
         stamp = _dt.datetime.now()
@@ -149,11 +120,7 @@ class MigrationWriter:
             lines.extend(f"--   {gap}" for gap in self._gaps)
             lines.append("")
 
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
-        _logger.info("wrote %d row(s) across %d table(s) and %d gap(s) to %s",
-                     self.row_count, len(self._sections), len(self._gaps), self._path)
-        return self._path
+        return self._emit("\n".join(lines))
 
 
 def migration_name(when: _dt.datetime | None = None) -> str:

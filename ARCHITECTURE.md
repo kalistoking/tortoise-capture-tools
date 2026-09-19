@@ -498,8 +498,9 @@ Order followed so far, highest content value first:
     entries above, this one needs no mitigation caveat: `Unit.cpp:4715`
     writes the already-final per-tick amount, no further processing happens
     to it. The payload's shape depends on `AuraType`
-    (`SpellAuraDefines.h`) -- five branches decoded, a sixth ("any other
-    value") is provably unreachable on the wire (`Unit.cpp:4750` logs a
+    (`SpellAuraDefines.h`) -- four branches decoded (seven aura types
+    between them), a fifth ("any other value") is provably unreachable on
+    the wire (`Unit.cpp:4750` logs a
     server-side error and returns before ever building the packet), so
     `modules/periodic_aura.py` raises `WireError` there instead of guessing
     a layout that cannot occur

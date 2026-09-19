@@ -243,11 +243,12 @@ def cmd_author(args, cfg: RunConfig) -> int:
     runner = Runner(registry, ctx, rules, Filters(entry=args.entry), analyzers=analyzers)
     stats = runner.run(packets)
 
-    if args.format == "json":
-        out_path = Path(args.out) if args.out else cfg.out_dir / author_json_name()
+    as_json = args.format == "json"
+    out_path = Path(args.out) if args.out else cfg.out_dir / (
+        author_json_name() if as_json else migration_name())
+    if as_json:
         writer = AuthorJsonWriter(out_path, capture_id=stem, entry=args.entry)
     else:
-        out_path = Path(args.out) if args.out else cfg.out_dir / migration_name()
         writer = MigrationWriter(out_path, capture_id=stem, entry=args.entry,
                                  dialect=cfg.sql_dialect)
     author_ctx = AuthorContext(capture_id=stem, entry=args.entry,

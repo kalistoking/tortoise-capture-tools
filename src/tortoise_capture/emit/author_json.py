@@ -11,10 +11,11 @@ from __future__ import annotations
 import datetime as _dt
 import json
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .. import log as _log
 from ..core.contracts import AuthoredRow
+from .authored import AuthoredCollector
 
 _logger = _log.get_logger("emit.author_json")
 
@@ -38,44 +39,14 @@ def _row_dict(row: AuthoredRow) -> dict[str, Any]:
     }
 
 
-class AuthorJsonWriter:
-    """Collects rows from every authoring rule and writes one JSON file.
-
-    Mirrors `MigrationWriter`'s grouping so the two outputs stay structurally
-    identical -- sections in order of first appearance, gaps listed at the
-    end -- just rendered as data instead of SQL comments.
-    """
+class AuthorJsonWriter(AuthoredCollector):
+    """Renders the collected rows as one JSON document (shape: module docstring)."""
 
     def __init__(self, path: Path, capture_id: str, entry: int) -> None:
-        self._path = path
-        self._capture_id = capture_id
-        self._entry = entry
-        self._sections: list[tuple[str, list[AuthoredRow]]] = []
-        self._gaps: list[str] = []
-
-    def add(self, rows: Iterable[AuthoredRow]) -> int:
-        """Groups by the row's own table: one rule may fill several of them."""
-        added = 0
-        for row in rows:
-            section = next((s for s in self._sections if s[0] == row.table), None)
-            if section is None:
-                section = (row.table, [])
-                self._sections.append(section)
-            section[1].append(row)
-            added += 1
-        return added
-
-    def add_gaps(self, gaps: Iterable[str]) -> None:
-        self._gaps.extend(gaps)
-
-    @property
-    def row_count(self) -> int:
-        return sum(len(rows) for _, rows in self._sections)
+        super().__init__(path, capture_id, entry, _logger)
 
     def write(self) -> Path | None:
-        if not self._sections and not self._gaps:
-            _logger.warning("nothing to author for entry %d; %s not written",
-                            self._entry, self._path)
+        if self._nothing_to_write():
             return None
 
         document = {
@@ -89,11 +60,7 @@ class AuthorJsonWriter:
             "gaps": list(self._gaps),
         }
 
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
-        _logger.info("wrote %d row(s) across %d table(s) and %d gap(s) to %s",
-                     self.row_count, len(self._sections), len(self._gaps), self._path)
-        return self._path
+        return self._emit(json.dumps(document, indent=2) + "\n")
 
 
 def author_json_name(when: _dt.datetime | None = None) -> str:

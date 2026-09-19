@@ -687,7 +687,7 @@ VICTIM = make_guid(50610, 3)
 
 def test_attack_start_reads_attacker_and_victim_from_raw_guids():
     body = struct.pack("<QQ", GUID, VICTIM)
-    ev = decode_one(AttackState(), make_packet(0x142, body, "SMSG_ATTACKSTART"), make_ctx())
+    ev = decode_one(AttackState(), make_packet(0x143, body, "SMSG_ATTACKSTART"), make_ctx())
     assert ev.kind == "attack_start"
     assert ev.data["guid"] == GUID and ev.data["entry"] == ENTRY
     assert ev.data["victim_guid"] == VICTIM and ev.data["victim_entry"] == 50610
@@ -695,7 +695,7 @@ def test_attack_start_reads_attacker_and_victim_from_raw_guids():
 
 def test_attack_stop_reads_packed_guids_and_ignores_the_trailing_word():
     body = pack_guid(GUID) + pack_guid(VICTIM) + struct.pack("<I", 0)
-    ev = decode_one(AttackState(), make_packet(0x143, body, "SMSG_ATTACKSTOP"), make_ctx())
+    ev = decode_one(AttackState(), make_packet(0x144, body, "SMSG_ATTACKSTOP"), make_ctx())
     assert ev.kind == "attack_stop"
     assert ev.data["guid"] == GUID and ev.data["victim_guid"] == VICTIM
 
@@ -704,12 +704,27 @@ def test_attack_state_of_a_player_has_no_entry_keys_and_still_renders():
     player_attacker = make_guid(0, 9, 0x0000)
     player_victim = make_guid(0, 10, 0x0000)
     body = struct.pack("<QQ", player_attacker, player_victim)
-    ev = decode_one(AttackState(), make_packet(0x142, body, "SMSG_ATTACKSTART"), make_ctx())
+    ev = decode_one(AttackState(), make_packet(0x143, body, "SMSG_ATTACKSTART"), make_ctx())
     assert "entry" not in ev.data and "victim_entry" not in ev.data
     text = AttackState().text_templates["attack_start"].format_map(AttackState().text_fields(ev))
     assert "entry=-" in text
     row = next(iter(AttackState().sql_rows(ev, _sql_ctx())))
     assert row.values["entry"] is None and row.values["victim_entry"] is None
+
+
+def test_attack_stop_is_told_apart_by_opcode_number_not_by_name():
+    """Regression: a dump made without a checkout carries name="" (wire/
+    opcodes.py returns "" for an unresolved opcode and emit/jsonl.py replays
+    it verbatim). Replayed later WITH a checkout, the registry dispatches by
+    number, so the module still gets the packet -- and branching on the
+    empty name would read STOP's packGUIDs as two plain uint64s: no overrun
+    (19 B >= 16), two plausible guids, silently wrong. The number is the
+    packet's identity (ARCHITECTURE.md 3.1); the name is only a label."""
+    tables = make_tables(opcode_names={0x143: "SMSG_ATTACKSTART", 0x144: "SMSG_ATTACKSTOP"})
+    body = pack_guid(GUID) + pack_guid(VICTIM) + struct.pack("<I", 0)
+    ev = decode_one(AttackState(), make_packet(0x144, body, ""), make_ctx(tables))
+    assert ev.kind == "attack_stop"
+    assert ev.data["guid"] == GUID and ev.data["victim_guid"] == VICTIM
 
 
 # --------------------------------------------------------------------------
@@ -810,8 +825,8 @@ from tortoise_capture.modules.emote import Emote  # noqa: E402
 
 
 def test_emote_reads_the_emote_id_and_actor():
-    body = struct.pack("<IQ", 5, GUID)      # EMOTE_ONESHOT_TALK == 5
-    ev = decode_one(Emote(), make_packet(0x67, body, "SMSG_EMOTE"), make_ctx())
+    body = struct.pack("<IQ", 5, GUID)      # EMOTE_ONESHOT_EXCLAMATION == 5 (SharedDefines.h:577)
+    ev = decode_one(Emote(), make_packet(0x103, body, "SMSG_EMOTE"), make_ctx())
     assert ev.kind == "emote"
     assert ev.data["guid"] == GUID and ev.data["entry"] == ENTRY
     assert ev.data["emote_id"] == 5
@@ -819,8 +834,8 @@ def test_emote_reads_the_emote_id_and_actor():
 
 def test_emote_of_a_player_has_no_entry_key_and_still_renders():
     player = make_guid(0, 9, 0x0000)
-    body = struct.pack("<IQ", 66, player)   # EMOTE_ONESHOT_DANCE
-    ev = decode_one(Emote(), make_packet(0x67, body, "SMSG_EMOTE"), make_ctx())
+    body = struct.pack("<IQ", 94, player)   # EMOTE_ONESHOT_DANCE == 94 (SharedDefines.h:627)
+    ev = decode_one(Emote(), make_packet(0x103, body, "SMSG_EMOTE"), make_ctx())
     assert "entry" not in ev.data
     text = Emote().text_templates["emote"].format_map(Emote().text_fields(ev))
     assert "entry=-" in text
@@ -848,9 +863,8 @@ def test_spell_delayed_reads_the_guid_and_delay():
 
 
 def test_spell_delayed_never_has_an_entry_key():
-    """Not gated by has_entry() like everywhere else -- there is no case to
-    gate, the caster is a player in 100% of instances, so no entry is even
-    computed (same discipline as party_kill.py's killer_entry removal)."""
+    """No has_entry() case to gate: the caster is a player in 100% of
+    instances (Spell.cpp:7641), so no entry is computed at all."""
     body = struct.pack("<QI", PLAYER_CASTER, 350)
     ev = decode_one(SpellDelayed(), make_packet(0x1E2, body, "SMSG_SPELL_DELAYED"), make_ctx())
     assert "entry" not in ev.data

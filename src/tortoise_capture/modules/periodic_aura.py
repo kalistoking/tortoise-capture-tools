@@ -126,7 +126,7 @@ class PeriodicAura(BaseModule):
 
     def text_fields(self, ev: Event):
         data = dict(ev.data)
-        data["aura_type_name"] = _AURA_TYPE_NAMES.get(data["aura_type"], data["aura_type"])
+        data["aura_type_name"] = _AURA_TYPE_NAMES[data["aura_type"]]   # decode() rejected any other
         data.setdefault("entry", "-")
         data.setdefault("target_entry", "-")
         return data
@@ -138,7 +138,7 @@ class PeriodicAura(BaseModule):
             "guid": d["guid"], "entry": d.get("entry"),
             "target_guid": d["target_guid"], "target_entry": d.get("target_entry"),
             "spell_id": d["spell_id"],
-            "aura_type": _AURA_TYPE_NAMES.get(d["aura_type"], str(d["aura_type"])),
+            "aura_type": _AURA_TYPE_NAMES[d["aura_type"]],
             "amount": d.get("amount"), "school": d.get("school"),
             "absorb": d.get("absorb"), "resist": d.get("resist"),
             "power_type": d.get("power_type"), "multiplier": d.get("multiplier"),
