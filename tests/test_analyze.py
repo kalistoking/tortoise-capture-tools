@@ -122,7 +122,9 @@ def _session():
 
 def test_respawn_timer_is_the_death_to_create_gap():
     found = findings_by_kind(run_analyzer(Behaviour(), _session()))
-    assert math.isclose(found["respawn_timer"].data["value_min"], 299.534, abs_tol=0.01)
+    respawn = found["respawn_timer"].data
+    assert math.isclose(respawn["value_min"], 299.534, abs_tol=0.01)
+    assert respawn["samples"] == 1 and respawn["confident"] is False
 
 
 def _fields(**named):
@@ -152,6 +154,7 @@ def test_respawn_is_also_detected_from_a_health_reset_with_no_fresh_create():
     assert respawn["samples"] == 2
     assert math.isclose(respawn["value_min"], 299.217, abs_tol=0.01)
     assert math.isclose(respawn["value_max"], 300.022, abs_tol=0.01)
+    assert respawn["confident"] is True
 
 
 def test_a_health_update_while_already_alive_is_not_mistaken_for_a_respawn():

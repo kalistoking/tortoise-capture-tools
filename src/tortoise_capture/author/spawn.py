@@ -102,22 +102,24 @@ class Spawn(BaseAuthorRule):
                           "health_percent": CONVENTION, "mana_percent": CONVENTION}
             notes = []
 
-            if self._respawn is not None:
+            skip: set[str] = {"map"}
+            if self._respawn is not None and self._respawn.get("confident"):
                 r = self._respawn
-                samples = r.get("samples", 1)
-                min_s, max_s = int(round(r["value_min"])), int(round(r.get("value_max", r["value_min"])))
+                min_s, max_s = int(round(r["value_min"])), int(round(r["value_max"]))
                 values["spawntimesecsmin"], values["spawntimesecsmax"] = min_s, max_s
                 provenance["spawntimesecsmin"] = provenance["spawntimesecsmax"] = DERIVED
-                if samples <= 1:
-                    notes.append(f"respawn {min_s}s from the death-to-next-sighting gap "
-                                 f"({r['value_min']:.3f}s observed once; min and max are "
-                                 "indistinguishable from a single observation)")
-                else:
-                    notes.append(f"respawn {min_s}-{max_s}s from {samples} observation(s) of the "
-                                 f"death-to-next-sighting gap ({r['value_min']:.3f}"
-                                 f"-{r['value_max']:.3f}s) -- a spread this tight against an "
-                                 "authored single value is plausibly measurement noise around a "
-                                 "fixed timer, not genuine randomisation; worth a human's judgement")
+                notes.append(f"respawn {min_s}-{max_s}s from {r['samples']} observation(s) of the "
+                             f"death-to-next-sighting gap ({r['value_min']:.3f}"
+                             f"-{r['value_max']:.3f}s) -- a spread this tight against an "
+                             "authored single value is plausibly measurement noise around a "
+                             "fixed timer, not genuine randomisation; worth a human's judgement")
+            else:
+                # None seen at all, or only one sample -- a single gap cannot
+                # even split a min from a max, the same refusal creature_spells
+                # already applies to delayRepeatMin/Max from one interval.
+                # Left out of `values` entirely; see gaps().
+                skip.add("spawntimesecsmin")
+                skip.add("spawntimesecsmax")
             if self._waypoints:
                 values["movement_type"] = MOVEMENT_TYPE_WAYPOINT
                 provenance["movement_type"] = DERIVED
@@ -146,7 +148,7 @@ class Spawn(BaseAuthorRule):
             # map is never schema-filled when it is still unknown: its
             # default (0) is a real place (Eastern Kingdoms), not neutral
             # boilerplate, and guessing it would be worse than a named gap.
-            self.fill_schema_defaults(ctx, "creature", values, provenance, notes, skip={"map"})
+            self.fill_schema_defaults(ctx, "creature", values, provenance, notes, skip=skip)
 
             yield self.row(values, provenance, notes=tuple(notes))
 
@@ -189,6 +191,11 @@ class Spawn(BaseAuthorRule):
         if not self._deaths:
             yield ("creature.spawntimesecsmin/max -- the creature never died in this capture, "
                    "so the respawn timer could not be measured")
+        elif self._respawn is not None and not self._respawn.get("confident"):
+            r = self._respawn
+            yield (f"creature.spawntimesecsmin/max -- only {r.get('samples', 1)} respawn "
+                   f"observation(s) ({r['value_min']:.3f}s); one sample cannot even split "
+                   "a min from a max, let alone bound a spread")
         if not self._waypoints:
             yield ("creature_movement -- no closed route was reconstructed; the creature may "
                    "be stationary, or the capture may be too short to see a full lap")

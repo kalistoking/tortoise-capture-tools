@@ -58,6 +58,11 @@ COINCIDENCE_WINDOW = 1.0
 # Below this many observed repeat intervals, the spread is not a measurement.
 MIN_INTERVALS_FOR_CONFIDENCE = 5
 
+# A respawn timer is typically fixed, not randomised, so two independent
+# gaps already cross-validate each other -- one gap cannot even split a
+# single value into a min and a max, let alone measure a spread.
+MIN_RESPAWNS_FOR_CONFIDENCE = 2
+
 _TRIGGERS = {"ai_reaction": "aggro", "party_kill": "death"}
 
 _TABLE = TableSpec(
@@ -105,7 +110,7 @@ class Behaviour(BaseAnalyzer):
     text_section = "Behaviour (correlated across opcodes)"
     text_templates = {
         "respawn_timer": "entry={entry:<7} respawn {value_min:.1f}-{value_max:.1f}s "
-                         "(death -> next sighting, {samples} observation(s))",
+                         "(death -> next sighting, {samples} observation(s)){caveat}",
         "text_trigger": "entry={entry:<7} {trigger} text: {subject!r} "
                         "({samples}x, offset {offset:+.3f}s)",
         "text_untriggered": "entry={entry:<7} text with no matching trigger: {subject!r} "
@@ -201,8 +206,12 @@ class Behaviour(BaseAnalyzer):
             if after:
                 gaps.append(min(after) - death)
         if gaps:
+            confident = len(gaps) >= MIN_RESPAWNS_FOR_CONFIDENCE
             yield self.event(c.last_packet, "respawn_timer", entry=c.entry,
-                             value_min=min(gaps), value_max=max(gaps), samples=len(gaps))
+                             value_min=min(gaps), value_max=max(gaps), samples=len(gaps),
+                             confident=confident,
+                             caveat="" if confident else
+                                    f" -- too few to bound (want {MIN_RESPAWNS_FOR_CONFIDENCE}+)")
 
     def _text_triggers(self, c: _Creature,
                        sound_for: dict[tuple[int, str], int]) -> Iterator[Event]:

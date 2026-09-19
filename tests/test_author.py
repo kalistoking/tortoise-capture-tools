@@ -180,7 +180,8 @@ def _spawn_events():
         _create(12.9, -9177.9, -1026.8, o=0.59),          # mid-patrol first sighting
         make_event("party_kill", 90.3, guid=GUID, entry=ENTRY),
         _create(389.8, -9129.66, -1098.79, 73.66, -2.3216900825500488),   # the respawn
-        make_event("respawn_timer", 999.0, entry=ENTRY, value_min=299.534, samples=1),
+        make_event("respawn_timer", 999.0, entry=ENTRY, value_min=299.534, value_max=299.534,
+                   samples=1, confident=False),
         make_event("patrol_route", 999.0, guid=GUID, entry=ENTRY, count=2, closes_loop=True),
         make_event("patrol_waypoint", 999.0, guid=GUID, entry=ENTRY, point=1,
                    position_x=-9129.66, position_y=-1098.79, position_z=73.66),
@@ -202,8 +203,18 @@ def test_the_spawn_position_is_taken_from_the_respawn_not_first_sighting():
     creature = next(r for r in rows if r.table == "creature")
     assert abs(creature.values["position_x"] - (-9129.66)) < 0.01
     assert abs(creature.values["orientation"] - (-2.32169008)) < 1e-6
-    assert creature.values["spawntimesecsmin"] == 300      # 299.534 rounded
     assert creature.values["movement_type"] == 2
+
+
+def test_a_single_respawn_sample_does_not_bound_spawntimesecs():
+    """One sample cannot split a min from a max -- the same refusal
+    creature_spells already applies to delayRepeatMin/Max from one interval
+    (author/spells.py), now applied here too."""
+    rows, gaps = author_rows(Spawn(), _spawn_events(), ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert "spawntimesecsmin" not in creature.values
+    assert "spawntimesecsmax" not in creature.values
+    assert any("spawntimesecsmin/max" in gap and "one sample" in gap for gap in gaps)
 
 
 def test_multiple_respawn_samples_give_a_genuine_min_max_range():
@@ -214,7 +225,7 @@ def test_multiple_respawn_samples_give_a_genuine_min_max_range():
     was not. Real capture numbers: 299.217s and 300.022s."""
     events = _spawn_events() + [
         make_event("respawn_timer", 999.0, entry=ENTRY,
-                   value_min=299.217, value_max=300.022, samples=2),
+                   value_min=299.217, value_max=300.022, samples=2, confident=True),
     ]
     rows, _ = author_rows(Spawn(), events, ENTRY)
     creature = next(r for r in rows if r.table == "creature")
