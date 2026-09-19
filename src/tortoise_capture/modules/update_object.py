@@ -27,7 +27,7 @@ from typing import Any, Iterator, Mapping
 
 from ..core.base import BaseModule
 from ..core.contracts import Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec
-from ..core.reader import ByteReader, WireError, guid_entry, guid_type, is_unit
+from ..core.reader import ByteReader, WireError, guid_entry, guid_type, has_entry, is_unit
 from ..core.registry import module
 from ..fields import values as fv
 
@@ -197,9 +197,15 @@ class UpdateObject(BaseModule):
             elif update_type == UPDATETYPE_MOVEMENT:
                 guid = r.u64("guid")             # raw, not packed, in this block only
                 movement = read_movement_update(r)
-                yield self.event(pkt, "object_movement", guid=guid, entry=guid_entry(guid),
-                                 guid_type=guid_type(guid), update_flags=movement["update_flags"],
-                                 movement=movement)
+                # MOVEMENT blocks fire for every moving object, players
+                # included -- entry only means something for the types
+                # has_entry() names (see the module docstring's own trap for
+                # field names; this is the same trap for the entry field).
+                data = {"guid": guid, "guid_type": guid_type(guid),
+                        "update_flags": movement["update_flags"], "movement": movement}
+                if has_entry(guid):
+                    data["entry"] = guid_entry(guid)
+                yield self.event(pkt, "object_movement", **data)
             elif update_type in (UPDATETYPE_CREATE_OBJECT, UPDATETYPE_CREATE_OBJECT2):
                 guid = r.packguid("guid")
                 object_type = r.u8("objectTypeId")
@@ -227,8 +233,17 @@ class UpdateObject(BaseModule):
         """
         decoded = [{"index": index, "name": ctx.tables.fields.name_for(index, guid), "raw": raw}
                    for index, raw in sorted(fields.items())]
-        return self.event(pkt, kind, guid=guid, entry=guid_entry(guid), guid_type=guid_type(guid),
-                          fields=decoded, named_ok=is_unit(guid), **extra)
+        # CREATE/VALUES fire for every object in the world -- a player's own
+        # character, a corpse, a totem/dynamicobject -- and unlike `is_unit()`
+        # gating field NAMES, `has_entry()` gates whether the entry FIELD
+        # means anything at all (is_unit() implies has_entry(), but not the
+        # reverse: a gameobject gets named_ok=False yet still has a real
+        # entry, which is why these two gates stay separate).
+        data: dict[str, Any] = {"guid": guid, "guid_type": guid_type(guid),
+                                "fields": decoded, "named_ok": is_unit(guid), **extra}
+        if has_entry(guid):
+            data["entry"] = guid_entry(guid)
+        return self.event(pkt, kind, **data)
 
     # -- text ---------------------------------------------------------------
 
@@ -243,6 +258,7 @@ class UpdateObject(BaseModule):
         if not data.get("named_ok", True):
             lines.insert(0, "    (field names unavailable: not a unit or pet)")
         data["fields_text"] = "\n".join(lines)
+        data.setdefault("entry", "-")
         return data
 
     # -- sql ----------------------------------------------------------------
@@ -253,7 +269,7 @@ class UpdateObject(BaseModule):
         for field in ev.data.get("fields", ()):
             yield Row(_TABLE.name, {
                 "capture": ctx.capture_id, "t": ev.packet.t, "seq": ev.packet.seq,
-                "guid": ev.data["guid"], "entry": ev.data["entry"], "block": ev.data.get("block"),
+                "guid": ev.data["guid"], "entry": ev.data.get("entry"), "block": ev.data.get("block"),
                 "field_index": field["index"], "field_name": field["name"],
                 "raw": field["raw"], "value": float(fv.decode(field["name"], field["raw"])),
             })

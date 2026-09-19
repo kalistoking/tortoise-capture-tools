@@ -15,7 +15,7 @@ from typing import Iterator
 
 from ..core.base import BaseModule
 from ..core.contracts import Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec
-from ..core.reader import ByteReader, guid_entry, guid_type
+from ..core.reader import ByteReader, guid_entry, guid_type, has_entry
 from ..core.registry import module
 
 _TABLE = TableSpec(
@@ -44,11 +44,20 @@ class SpellGo(BaseModule):
         r = ByteReader(pkt.body, pkt.name or "SMSG_SPELL_GO")
         r.packguid("cast_item_or_caster")
         caster = r.packguid("caster")
-        yield self.event(pkt, "spell_go", guid=caster, entry=guid_entry(caster),
-                         guid_type=guid_type(caster), spell_id=r.u32("spellId"),
-                         cast_flags=r.u16("castFlags"))
+        data = {"guid": caster, "guid_type": guid_type(caster), "spell_id": r.u32("spellId"),
+                "cast_flags": r.u16("castFlags")}
+        # Players cast spells too -- a non-entry-bearing caster guid carries
+        # no creature_template entry.
+        if has_entry(caster):
+            data["entry"] = guid_entry(caster)
+        yield self.event(pkt, "spell_go", **data)
+
+    def text_fields(self, ev: Event):
+        data = dict(ev.data)
+        data.setdefault("entry", "-")
+        return data
 
     def sql_rows(self, ev: Event, ctx: SqlContext) -> Iterator[Row]:
         yield Row(_TABLE.name, {"capture": ctx.capture_id, "t": ev.packet.t,
                                 "seq": ev.packet.seq, "caster_guid": ev.data["guid"],
-                                "entry": ev.data["entry"], "spell_id": ev.data["spell_id"]})
+                                "entry": ev.data.get("entry"), "spell_id": ev.data["spell_id"]})

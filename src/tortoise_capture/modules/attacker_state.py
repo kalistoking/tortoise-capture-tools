@@ -129,7 +129,7 @@ class AttackerState(BaseModule):
         blocked = r.u32("blockedAmount")
 
         data = {
-            "guid": attacker, "entry": guid_entry(attacker), "guid_type": guid_type(attacker),
+            "guid": attacker, "guid_type": guid_type(attacker),
             "target_guid": target, "target_guid_type": guid_type(target),
             "total_damage": total_damage, "sub_damage": sub_damage,
             "target_state": target_state,      # raw VictimState int; name it at render time
@@ -138,9 +138,12 @@ class AttackerState(BaseModule):
             "is_normal_hit": target_state == VICTIMSTATE_NORMAL and not hit_info & HITINFO_MISS,
             "spell_id": spell_id, "blocked_amount": blocked,
         }
-        # Only named when the target's GUID type actually carries a
-        # creature_template/gameobject_template entry -- a player's does not,
-        # and guid_entry() on one would return a number that names nothing.
+        # Players swing melee too -- guid_entry() on one, or on the target,
+        # would return a number that names nothing (or, for guid types whose
+        # low bits are a large server-wide counter, one that coincidentally
+        # names the WRONG creature). Only entry-bearing types get the key.
+        if has_entry(attacker):
+            data["entry"] = guid_entry(attacker)
         if has_entry(target):
             data["target_entry"] = guid_entry(target)
 
@@ -150,13 +153,14 @@ class AttackerState(BaseModule):
         data = dict(ev.data)
         data["crit"] = " (crit)" if data.get("is_critical") else ""
         data["target_state"] = _TARGET_STATE_NAMES.get(data["target_state"], data["target_state"])
+        data.setdefault("entry", "-")
         return data
 
     def sql_rows(self, ev: Event, ctx: SqlContext) -> Iterator[Row]:
         d = ev.data
         yield Row(_TABLE.name, {
             "capture": ctx.capture_id, "t": ev.packet.t, "seq": ev.packet.seq,
-            "guid": d["guid"], "entry": d["entry"], "target_guid": d["target_guid"],
+            "guid": d["guid"], "entry": d.get("entry"), "target_guid": d["target_guid"],
             "total_damage": d["total_damage"],
             "target_state": _TARGET_STATE_NAMES.get(d["target_state"], str(d["target_state"])),
             "is_miss": int(d["is_miss"]), "is_critical": int(d["is_critical"]),

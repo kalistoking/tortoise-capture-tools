@@ -27,7 +27,7 @@ from typing import Iterator
 
 from ..core.base import BaseModule
 from ..core.contracts import Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec
-from ..core.reader import ByteReader, guid_entry, guid_type
+from ..core.reader import ByteReader, guid_entry, guid_type, has_entry
 from ..core.registry import module
 
 _TABLE = TableSpec(
@@ -61,17 +61,22 @@ class SpellStart(BaseModule):
         spell_id = r.u32("spellId")
         r.u16("castFlags")
         timer_ms = r.u32("timer")
-        yield self.event(pkt, "spell_start", guid=caster, entry=guid_entry(caster),
-                         guid_type=guid_type(caster), spell_id=spell_id,
-                         cast_time_ms=timer_ms, is_instant=timer_ms == 0)
+        data = {"guid": caster, "guid_type": guid_type(caster), "spell_id": spell_id,
+                "cast_time_ms": timer_ms, "is_instant": timer_ms == 0}
+        # Players cast spells too -- a non-entry-bearing caster guid (a
+        # player, most commonly) carries no creature_template entry.
+        if has_entry(caster):
+            data["entry"] = guid_entry(caster)
+        yield self.event(pkt, "spell_start", **data)
 
     def text_fields(self, ev: Event):
         data = dict(ev.data)
         data["instant"] = " (instant)" if data.get("is_instant") else ""
+        data.setdefault("entry", "-")
         return data
 
     def sql_rows(self, ev: Event, ctx: SqlContext) -> Iterator[Row]:
         d = ev.data
         yield Row(_TABLE.name, {"capture": ctx.capture_id, "t": ev.packet.t,
-                                "seq": ev.packet.seq, "guid": d["guid"], "entry": d["entry"],
+                                "seq": ev.packet.seq, "guid": d["guid"], "entry": d.get("entry"),
                                 "spell_id": d["spell_id"], "cast_time_ms": d["cast_time_ms"]})

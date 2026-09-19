@@ -25,7 +25,7 @@ from typing import Any, Iterator, Mapping
 
 from ..core.base import BaseModule
 from ..core.contracts import Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec
-from ..core.reader import ByteReader, guid_entry, guid_type
+from ..core.reader import ByteReader, guid_entry, guid_type, has_entry
 from ..core.registry import module
 
 SMSG_MONSTER_MOVE_TRANSPORT = 0x2AE
@@ -89,10 +89,14 @@ class MonsterMove(BaseModule):
         spline_id = r.u32("splineId")
         move_type = r.u8("moveType")
 
-        common = {"guid": guid, "entry": guid_entry(guid), "guid_type": guid_type(guid),
+        common = {"guid": guid, "guid_type": guid_type(guid),
                   "transport": transport, "spline_id": spline_id, "start": start}
-        ctx.log.debug("%s: entry=%d moveType=%d spline=%d", pkt.describe(),
-                      common["entry"], move_type, spline_id)
+        # Vanilla reuses this opcode for forced player movement too (e.g.
+        # knockback) -- a player guid carries no creature_template entry.
+        if has_entry(guid):
+            common["entry"] = guid_entry(guid)
+        ctx.log.debug("%s: entry=%s moveType=%d spline=%d", pkt.describe(),
+                      common.get("entry"), move_type, spline_id)
 
         if move_type == MOVE_STOP:
             yield self.event(pkt, "move_stop", **common, points=[start])
@@ -133,6 +137,7 @@ class MonsterMove(BaseModule):
         data.update(x=target[0], y=target[1], z=target[2],
                     sx=data["start"][0], sy=data["start"][1], sz=data["start"][2],
                     n_points=len(data.get("points", [])))
+        data.setdefault("entry", "-")
         return data
 
     # -- sql ----------------------------------------------------------------
@@ -142,7 +147,7 @@ class MonsterMove(BaseModule):
         for index, (x, y, z) in enumerate(ev.data.get("points", []), start=1):
             yield Row(_TABLE.name, {
                 "capture": ctx.capture_id, "t": ev.packet.t, "seq": ev.packet.seq,
-                "guid": ev.data["guid"], "entry": ev.data["entry"], "move_type": kind,
+                "guid": ev.data["guid"], "entry": ev.data.get("entry"), "move_type": kind,
                 "spline_id": ev.data["spline_id"], "duration_ms": ev.data.get("duration_ms"),
                 "point": index, "x": x, "y": y, "z": z,
             })

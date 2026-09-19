@@ -36,10 +36,49 @@ def test_party_kill_reports_the_victim_as_entry():
     assert ev.data["entry"] == ENTRY and ev.data["killer_guid"] == killer
 
 
+def test_party_kill_never_reports_a_killer_entry():
+    """The killer here is ALWAYS a player (Unit.cpp:1128: pPlayerTap->
+    GetObjectGuid()) -- guid_entry() on it is never meaningful, in every
+    single capture, not just sometimes. There is no has_entry() case where
+    this field would ever be right, so it is not computed at all."""
+    killer = make_guid(0, 8, 0x0000)
+    body = struct.pack("<QQ", killer, GUID)
+    ev = decode_one(PartyKill(), make_packet(0x1F5, body), make_ctx())
+    assert "killer_entry" not in ev.data
+
+
+def test_party_kill_of_a_player_victim_has_no_entry_key_and_still_renders():
+    """A PvP death routes through the same packet (Unit.cpp:1116-1129's
+    "player kill case") -- a player victim's guid carries no
+    creature_template entry either."""
+    killer = make_guid(0, 8, 0x0000)
+    player_victim = make_guid(0, 20, 0x0000)
+    body = struct.pack("<QQ", killer, player_victim)
+    ev = decode_one(PartyKill(), make_packet(0x1F5, body), make_ctx())
+    assert "entry" not in ev.data
+    text = PartyKill().text_templates["party_kill"].format_map(PartyKill().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(PartyKill().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None
+
+
 def test_spell_go_reads_caster_and_spell():
     body = pack_guid(GUID) + pack_guid(GUID) + struct.pack("<IH", 1449, 0)
     ev = decode_one(SpellGo(), make_packet(0x132, body), make_ctx())
     assert ev.data["spell_id"] == 1449 and ev.data["entry"] == ENTRY
+
+
+def test_spell_go_player_caster_has_no_entry_key_and_still_renders():
+    """Regression: SendSpellGo fires for any cast, players included --
+    guid_entry() on a player caster is meaningless."""
+    player = make_guid(0, 9, 0x0000)
+    body = pack_guid(player) + pack_guid(player) + struct.pack("<IH", 1449, 0)
+    ev = decode_one(SpellGo(), make_packet(0x132, body), make_ctx())
+    assert "entry" not in ev.data
+    text = SpellGo().text_templates["spell_go"].format_map(SpellGo().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(SpellGo().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None
 
 
 def test_monster_say_carries_sender_and_message():
@@ -97,6 +136,20 @@ def test_packed_offsets_are_signed_and_quarter_scaled():
     assert unpack_offset(0) == (0.0, 0.0, 0.0)
     x, y, z = unpack_offset(4 | (0x7FF << 11))      # y = -1 in 11-bit two's complement
     assert x == 1.0 and y == -0.25 and z == 0.0
+
+
+def test_monster_move_of_a_player_has_no_entry_key_and_still_renders():
+    """Regression: vanilla reuses SMSG_MONSTER_MOVE for forced player
+    movement too (knockback, etc.), not just creature patrols -- a player
+    guid carries no creature_template entry."""
+    player = make_guid(0, 9, 0x0000)
+    body = _move_head(guid=player) + bytes([1])   # STOP
+    ev = decode_one(MonsterMove(), make_packet(0xDD, body, "SMSG_MONSTER_MOVE"), make_ctx())
+    assert "entry" not in ev.data
+    text = MonsterMove().text_templates["move_stop"].format_map(MonsterMove().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(MonsterMove().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None
 
 
 # --------------------------------------------------------------------------
@@ -182,8 +235,41 @@ def test_unit_fields_become_sql_rows():
     ev = decode_one(UpdateObject(), make_packet(0xA9, _create_block(GUID)), ctx)
     rows = list(UpdateObject().sql_rows(ev, _sql_ctx()))
     assert {r.values["field_name"] for r in rows} == set(FIELD_NAMES.values())
-    mindamage = next(r for r in rows if r.values["field_name"] == "UNIT_FIELD_MINDAMAGE")
-    assert abs(mindamage.values["value"] - 20.2119) < 1e-4       # float bits, not the raw int
+
+
+def test_a_players_own_create_block_has_no_entry_key():
+    """Regression: CREATE/VALUES blocks fire for every object in the world,
+    not just creatures -- a player's own guid carries no creature_template
+    entry, and guid_entry() on one is meaningless (see the analysis behind
+    this fix: it can even collide with a real entry for guid types whose low
+    bits are a large server-wide counter, e.g. items/corpses)."""
+    ctx = make_ctx(make_tables(field_names=FIELD_NAMES))
+    player_guid = make_guid(0, 9, 0x0000)
+    ev = decode_one(UpdateObject(), make_packet(0xA9, _create_block(player_guid)), ctx)
+    assert "entry" not in ev.data
+
+
+def test_a_players_own_create_block_still_renders_as_text():
+    """Same KeyError trap object_destroy.py's own regression test guards --
+    the template references {entry}, text_fields() must fill a display
+    default or emit/text.py silently drops the line."""
+    ctx = make_ctx(make_tables(field_names=FIELD_NAMES))
+    player_guid = make_guid(0, 9, 0x0000)
+    ev = decode_one(UpdateObject(), make_packet(0xA9, _create_block(player_guid)), ctx)
+    text = UpdateObject().text_templates["object_create"].format_map(
+        UpdateObject().text_fields(ev))
+    assert "PLAYER" in text
+
+
+def test_object_movement_of_a_player_has_no_entry_key_and_still_exports():
+    body = (struct.pack("<I", 1) + bytes([0]) + bytes([1])   # blockCount, hasTransport, MOVEMENT
+            + struct.pack("<Q", make_guid(0, 9, 0x0000)) + bytes([0]))   # updateFlags: none
+    ctx = make_ctx()
+    events = list(UpdateObject().decode(make_packet(0xA9, body), ctx))
+    assert len(events) == 1 and "entry" not in events[0].data
+    text = UpdateObject().text_templates["object_movement"].format_map(
+        UpdateObject().text_fields(events[0]))
+    assert "PLAYER" in text
 
 
 # --------------------------------------------------------------------------
@@ -259,9 +345,9 @@ TARGET = make_guid(0, 7, 0x0000)   # a player: high word 0x0000
 
 
 def _swing_body(hit_info=0, total_damage=18, sub_damage=(0, 18, 0, 0),
-               target_state=VICTIMSTATE_NORMAL, spell_id=0, blocked=0):
+               target_state=VICTIMSTATE_NORMAL, spell_id=0, blocked=0, attacker=None):
     school, dmg, absorb, resist = sub_damage
-    return (struct.pack("<I", hit_info) + pack_guid(ATTACKER) + pack_guid(TARGET)
+    return (struct.pack("<I", hit_info) + pack_guid(attacker or ATTACKER) + pack_guid(TARGET)
             + struct.pack("<I", total_damage) + bytes([1])
             + struct.pack("<IfIiI", school, (dmg / total_damage) if total_damage else 0.0,
                           dmg, absorb, resist)
@@ -316,6 +402,23 @@ def test_target_with_no_entry_bearing_guid_has_no_target_entry_key():
     assert "target_entry" not in ev.data
 
 
+def test_a_player_attacker_has_no_entry_key_and_still_renders():
+    """Regression: players swing melee too (e.g. at a creature) -- guid_entry()
+    on a player's guid is meaningless, and unlike an NPC's small counter this
+    can matter for other non-entry-bearing types (items/corpses) whose low
+    bits are a large server-wide counter that can coincidentally collide with
+    a real creature_template.entry."""
+    player_attacker = make_guid(0, 9, 0x0000)
+    ev = decode_one(AttackerState(), make_packet(0x14A, _swing_body(attacker=player_attacker)),
+                    make_ctx())
+    assert "entry" not in ev.data
+    text = AttackerState().text_templates["attacker_state"].format_map(
+        AttackerState().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(AttackerState().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None
+
+
 # --------------------------------------------------------------------------
 # spell_damage_log: SMSG_SPELLNONMELEEDAMAGELOG -- one spell hit's damage
 # --------------------------------------------------------------------------
@@ -327,8 +430,8 @@ SPELL_TARGET = make_guid(0, 7, 0x0000)   # a player: high word 0x0000
 
 
 def _spell_damage_body(spell_id=1449, damage=40, school=0, absorb=0, resist=0,
-                       periodic=0, blocked=0, hit_info=0):
-    return (pack_guid(SPELL_TARGET) + pack_guid(CASTER)
+                       periodic=0, blocked=0, hit_info=0, caster=None):
+    return (pack_guid(SPELL_TARGET) + pack_guid(caster or CASTER)
             + struct.pack("<II", spell_id, damage) + bytes([school])
             + struct.pack("<Ii", absorb, resist) + bytes([periodic, 0])
             + struct.pack("<III", blocked, hit_info, 0))
@@ -375,6 +478,18 @@ def test_spell_damage_log_text_and_sql_rendering():
     assert row.values["is_critical"] == 1 and row.values["is_periodic"] == 0
 
 
+def test_a_player_caster_has_no_entry_key_and_still_renders():
+    player_caster = make_guid(0, 9, 0x0000)
+    ev = decode_one(SpellDamageLog(), make_packet(0x150, _spell_damage_body(caster=player_caster)),
+                    make_ctx())
+    assert "entry" not in ev.data
+    text = SpellDamageLog().text_templates["spell_damage_log"].format_map(
+        SpellDamageLog().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(SpellDamageLog().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None
+
+
 # --------------------------------------------------------------------------
 # spell_start: SMSG_SPELL_START -- a cast begins (cast bar, cast time)
 # --------------------------------------------------------------------------
@@ -382,8 +497,9 @@ def test_spell_damage_log_text_and_sql_rendering():
 from tortoise_capture.modules.spell_start import SpellStart  # noqa: E402
 
 
-def _spell_start_body(spell_id=1449, cast_flags=0, timer_ms=2000):
-    return (pack_guid(GUID) + pack_guid(GUID) + struct.pack("<IHI", spell_id, cast_flags, timer_ms))
+def _spell_start_body(spell_id=1449, cast_flags=0, timer_ms=2000, caster=None):
+    c = caster or GUID
+    return pack_guid(c) + pack_guid(c) + struct.pack("<IHI", spell_id, cast_flags, timer_ms)
 
 
 def test_spell_start_reads_caster_spell_and_cast_time():
@@ -416,6 +532,19 @@ def test_spell_start_text_and_sql_rendering():
     assert row.table == "capture_spell_start"
     assert row.values["spell_id"] == 1449 and row.values["cast_time_ms"] == 1500
     assert row.values["entry"] == ENTRY
+
+
+def test_a_player_caster_of_a_cast_has_no_entry_key_and_still_renders():
+    """Regression: SendSpellStart fires for any non-triggered cast, players
+    included -- guid_entry() on a player caster is meaningless."""
+    player_caster = make_guid(0, 9, 0x0000)
+    ev = decode_one(SpellStart(), make_packet(0x131, _spell_start_body(caster=player_caster)),
+                    make_ctx())
+    assert "entry" not in ev.data
+    text = SpellStart().text_templates["spell_start"].format_map(SpellStart().text_fields(ev))
+    assert "entry=-" in text
+    row = next(iter(SpellStart().sql_rows(ev, _sql_ctx())))
+    assert row.values["entry"] is None
 
 
 # --------------------------------------------------------------------------

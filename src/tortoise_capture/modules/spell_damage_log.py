@@ -97,7 +97,7 @@ class SpellDamageLog(BaseModule):
         r.u8("unused2")
 
         data = {
-            "guid": attacker, "entry": guid_entry(attacker), "guid_type": guid_type(attacker),
+            "guid": attacker, "guid_type": guid_type(attacker),
             "target_guid": target, "target_guid_type": guid_type(target),
             "spell_id": spell_id, "damage": damage, "school": school,
             "absorb": absorb, "resist": resist, "blocked_amount": blocked,
@@ -105,8 +105,12 @@ class SpellDamageLog(BaseModule):
             "is_critical": bool(hit_info & SPELL_HIT_TYPE_CRIT),
             "is_split": bool(hit_info & SPELL_HIT_TYPE_SPLIT),
         }
-        # Same object-type trap as attacker_state.py: a player target's GUID
-        # carries no creature_template/gameobject_template entry.
+        # Players cast spells too -- same object-type trap as attacker_state.py:
+        # a non-entry-bearing GUID carries no creature_template/gameobject_
+        # template entry, and guid_entry() on one is meaningless (or, for a
+        # type whose low bits are a large server-wide counter, misleading).
+        if has_entry(attacker):
+            data["entry"] = guid_entry(attacker)
         if has_entry(target):
             data["target_entry"] = guid_entry(target)
 
@@ -116,13 +120,14 @@ class SpellDamageLog(BaseModule):
         data = dict(ev.data)
         data["crit"] = " (crit)" if data.get("is_critical") else ""
         data["periodic"] = " (periodic)" if data.get("is_periodic") else ""
+        data.setdefault("entry", "-")
         return data
 
     def sql_rows(self, ev: Event, ctx: SqlContext) -> Iterator[Row]:
         d = ev.data
         yield Row(_TABLE.name, {
             "capture": ctx.capture_id, "t": ev.packet.t, "seq": ev.packet.seq,
-            "guid": d["guid"], "entry": d["entry"], "target_guid": d["target_guid"],
+            "guid": d["guid"], "entry": d.get("entry"), "target_guid": d["target_guid"],
             "spell_id": d["spell_id"], "damage": d["damage"], "school": d["school"],
             "absorb": d["absorb"], "resist": d["resist"], "blocked_amount": d["blocked_amount"],
             "is_periodic": int(d["is_periodic"]), "is_critical": int(d["is_critical"]),
