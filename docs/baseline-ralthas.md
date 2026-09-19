@@ -43,10 +43,10 @@ matched, including `unit_class = 2`.
 ## Independent DB verification (this toolkit, against live `tw_world`)
 
 Re-run once a local database became reachable (`127.0.0.1:3306`, via the
-`mariadb-10.3.39-winx64` client bundled in the `tortoise-wow_AIBot` server
-install — not on `PATH`, invoked by full path). This is this toolkit's own
-decode output compared field-by-field and point-by-point against the live
-tables, not a re-statement of the prototype's earlier claim.
+MariaDB client bundled with the local server install — not on `PATH`, invoked
+by full path; see `[database] client` in `tct.example.toml`). This is this
+toolkit's own decode output compared field-by-field and point-by-point
+against the live tables, not a re-statement of the prototype's earlier claim.
 
 **`creature_template` (entry 62635) — every field matches exactly**: `name`
 Ralthas, `level_min/max` 13, `health_min/max` 342, `mana_min/max` 488,
@@ -72,25 +72,26 @@ own decoder and a live database instead of a manual cross-check.
 
 ## Environment facts
 
-- Test client: Turtle WoW distribution **1.18.1-7272-Hotfix-2026-04-12**,
-  installed at `C:\WOW\1.18.1-7272-Hotfix-2026-04-12`. Its `WoW.exe` reports
-  `FileVersion 1,12,1,5875` — the wire protocol is unmodified vanilla
-  1.12.1 build 5875; Turtle WoW's own version number is only a content-patch
-  label on top of it.
+- Test client: Turtle WoW distribution **1.18.1-7272-Hotfix-2026-04-12**.
+  Its `WoW.exe` reports `FileVersion 1,12,1,5875` — the wire protocol is
+  unmodified vanilla 1.12.1 build 5875; Turtle WoW's own version number is
+  only a content-patch label on top of it.
 - Target server port **8090** (this fork's `WorldServerPort`). The unrelated
   `wow_decrypt2` test used 8085; `wow_session_key.py` still defaults to 8085.
-- Source repo for all live-parsed tables:
-  `C:\WOW\source\tortoise-wow_AIBot\tortoise-wow`.
-- Python 3.14, `scapy` is the only third-party dependency.
-- **Windows encoding**: the console/locale is cp1250. Always pass
+- Source repo for all live-parsed tables: a local `tortoise-wow` checkout,
+  pointed to via `--repo` / `TCT_REPO` / `tct.toml`'s `[capture] repo`.
+- Python 3.14, `scapy` is the only third-party dependency; the toolkit itself
+  is pure Python and not tied to any one OS.
+- **Console encoding**: on a Windows console, the default locale can be a
+  narrow codepage (e.g. cp1250) rather than UTF-8. Always pass
   `encoding="utf-8"` to `open()`/`read_text()`, and avoid non-ASCII
   characters in printed output (an unescaped `→` is exactly what crashed the
   third-party `wow_decrypt2.py` on its final summary line).
 - A local `tw_world` is reachable at `127.0.0.1:3306` (user `mangos`,
   database `tw_world`, matching `mangosd.conf`'s `WorldDatabase.Info`). No
-  `mysql`/`mariadb` client is on `PATH`, but one is bundled at
-  `tortoise-wow_AIBot/server/mariadb-10.3.39-winx64/bin/mysql.exe` and works
-  invoked by full path. DB cross-checks are no longer blocked (see
+  `mysql`/`mariadb` client is on `PATH`, but one is bundled with the server
+  install and works invoked by full path (`[database] client` in
+  `tct.example.toml`). DB cross-checks are no longer blocked (see
   [Independent DB verification](#independent-db-verification-this-toolkit-against-live-tw_world)
   above); consider wiring a DB connection into the toolkit's own config
   rather than always shelling out.

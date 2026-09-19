@@ -1,9 +1,9 @@
 # Wire format reference
 
-Every layout below was read out of the server checkout's own C++
-(`C:\WOW\source\tortoise-wow_AIBot\tortoise-wow`), with the file reference
-given inline. Nothing here comes from third-party documentation, and nothing
-may be copied in from a GPLv3 project -- re-derive instead (see README).
+Every layout below was read out of the `tortoise-wow` server checkout's own
+C++, with the file reference given inline. Nothing here comes from
+third-party documentation, and nothing may be copied in from a GPLv3 project
+-- re-derive instead (see README).
 
 This is the living reference a module cites in its docstring when it
 implements an opcode. Verified content carried over from the prototype's

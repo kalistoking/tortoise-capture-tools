@@ -1,15 +1,15 @@
 # Prototype notes (frozen)
 
-The working prototype this toolkit supersedes lives outside the repository
-at `C:\WOW\source\extract_wow_data` and is not imported here. These notes
-record what it was and what was already ruled out, so neither is
-rediscovered later.
+The working prototype this toolkit supersedes lives outside the repository,
+on the author's own machine, and is not imported here. These notes record
+what it was and what was already ruled out, so neither is rediscovered
+later.
 
 Its verified protocol knowledge lives on in [wire-format.md](wire-format.md),
 its measured results in [baseline-ralthas.md](baseline-ralthas.md), and the
 open design questions it left are answered in [../ARCHITECTURE.md](../ARCHITECTURE.md).
 
-## What the prototype was (`C:\WOW\source\extract_wow_data`)
+## What the prototype was
 
 Not under version control. Plain files, no packaging, no tests. Works.
 
@@ -46,7 +46,7 @@ Known prototype shortcomings to fix in the real architecture:
 |---|---|
 | [TrinityCore/WowPacketParser](https://github.com/TrinityCore/WowPacketParser) (GPLv3, C#) | **Not usable.** Current `master` models modern retail dynamic update fields (`ITEM_FIELD_ARTIFACT_XP` etc). `ClientVersionBuild.V1_12_1_5875` exists as an enum value only — there is no wired-up vanilla field decoder. |
 | [Xian55/HermesProxy](https://github.com/Xian55/HermesProxy) (GPLv3, C#) | **Useful as cross-reference only.** Has a real `World/Enums/V1_12_1_5875/UpdateFields.cs` offset table (cross-validated against WPP in its own test suite) and legacy vanilla crypt/update handlers. Our source-derived offsets matched it exactly. |
-| `C:\WOW\source\wow_decrypt2_py_test\wow_decrypt2.py` (local, independent) | Different goal: decrypts a pcap and **rewrites a new pcapng** with cleartext headers spliced back into the original TCP segments, for viewing in Wireshark. Worth keeping as a capability. Contributed the opcode-ceiling desync check. Its "large header" (3-byte size) support is **inapplicable** to this fork. It crashes on its final summary print under cp1250. |
+| `wow_decrypt2.py` (local, independent) | Different goal: decrypts a pcap and **rewrites a new pcapng** with cleartext headers spliced back into the original TCP segments, for viewing in Wireshark. Worth keeping as a capability. Contributed the opcode-ceiling desync check. Its "large header" (3-byte size) support is **inapplicable** to this fork. It crashes on its final summary print under a narrow console encoding (see baseline-ralthas.md's encoding note). |
 
 **Licensing**: both C# projects are GPLv3. Everything in the prototype was
 deliberately derived from the user's own tortoise-wow source instead, so

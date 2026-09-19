@@ -9,8 +9,9 @@
 
 [capture]
 # The tortoise-wow checkout: opcode numbers and UpdateField indices are parsed
-# from it at runtime, never hardcoded. Forward slashes work on Windows too.
-repo = "C:/WOW/source/tortoise-wow_AIBot/tortoise-wow"
+# from it at runtime, never hardcoded. Use forward slashes on any OS,
+# including Windows (e.g. "C:/path/to/tortoise-wow").
+repo = "/path/to/tortoise-wow"
 port = 8090                     # this fork's WorldServerPort
 server_ip = "127.0.0.1"
 
@@ -49,7 +50,7 @@ text_layout = "grouped"         # grouped | stream
 # The password is deliberately NOT a key here. Set TCT_DB_PASSWORD in the
 # environment instead, so this file stays safe to share.
 # [database]
-# client = "C:/path/to/mariadb/bin/mysql.exe"   # or just "mysql" if on PATH
+# client = "/path/to/mariadb/bin/mysql"   # "mysql.exe" on Windows; or just "mysql" if on PATH
 # host = "127.0.0.1"
 # port = 3306
 # user = "mangos"
