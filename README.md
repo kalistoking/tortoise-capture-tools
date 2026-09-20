@@ -184,6 +184,7 @@ Tests run with `pytest` after `pip install -e ".[dev]"`, or without it via
 | [docs/baseline-ralthas.md](docs/baseline-ralthas.md) | the known-good numbers regressions are measured against |
 | [docs/feasibility-ralthas-pr.md](docs/feasibility-ralthas-pr.md) | how much of a hand-authored content PR a capture can reproduce, measured |
 | [docs/feasibility-rakameg-pr.md](docs/feasibility-rakameg-pr.md) | a second, independently-chosen creature: what generalises and what does not |
+| [docs/feasibility-rust-port.md](docs/feasibility-rust-port.md) | whether to follow `trt` onto one Rust stack, measured — and what would have to change first |
 | [docs/prototype-notes.md](docs/prototype-notes.md) | what the superseded prototype was, and what is already ruled out |
 
 ## Data policy
