@@ -989,3 +989,64 @@ def test_loot_response_with_zero_items_still_exports_one_row_for_the_gold():
     ev = decode_one(LootResponse(), make_packet(0x160, body, "SMSG_LOOT_RESPONSE"), make_ctx())
     row = next(iter(LootResponse().sql_rows(ev, _sql_ctx())))
     assert row.values["gold"] == 50 and row.values["item_id"] is None
+
+
+# --------------------------------------------------------------------------
+# player_move: MSG_MOVE_* (the recording player's own path, C2S)
+# --------------------------------------------------------------------------
+
+MSG_MOVE_START_FORWARD = 0xB5
+
+
+def _movement_info(flags: int = 0, pos=(-9135.88, -1095.06, 72.64, 2.5295),
+                   ctime: int = 1234, fall_time: int = 0) -> bytes:
+    """MovementInfo::Read (Object.cpp:64) -- fallTime is unconditional."""
+    return (struct.pack("<II", flags, ctime)
+            + struct.pack("<ffff", *pos)
+            + struct.pack("<I", fall_time))
+
+
+def test_the_recording_players_own_movement_is_a_session_fact():
+    """C2S MSG_MOVE_* carries no guid: the server takes the mover from the
+    session (MovementHandler.cpp:304), so a client-sent movement IS the
+    recording player by construction -- a stronger attribution than any
+    heuristic, and the reason this survives --entry."""
+    from tortoise_capture.core.contracts import Direction
+    from tortoise_capture.modules.player_move import PlayerMove
+
+    pkt = make_packet(MSG_MOVE_START_FORWARD, _movement_info(),
+                      name="MSG_MOVE_START_FORWARD", direction=Direction.C2S)
+    ev = decode_one(PlayerMove(), pkt, make_ctx(make_tables()))
+    assert ev.kind == "session_player_move"
+    assert ev.scope == "session"
+    assert ev.data["opcode_name"] == "MSG_MOVE_START_FORWARD"
+    assert [round(v, 2) for v in ev.data["pos"]] == [-9135.88, -1095.06, 72.64, 2.53]
+
+
+def test_a_relayed_move_is_someone_elses_and_is_not_the_observer():
+    """The same opcode number in the other direction has a DIFFERENT layout --
+    the server prefixes the mover's packGUID (MovementHandler.cpp:456) -- and
+    means a different thing: another player's movement relayed to us. Reading
+    it as the observer's own path would put a stranger's position in the
+    recording's viewpoint."""
+    from tortoise_capture.core.contracts import Direction
+    from tortoise_capture.modules.player_move import PlayerMove
+
+    body = pack_guid(make_guid(0, 42, 0x0000)) + _movement_info()
+    pkt = make_packet(MSG_MOVE_START_FORWARD, body,
+                      name="MSG_MOVE_START_FORWARD", direction=Direction.S2C)
+    assert list(PlayerMove().decode(pkt, make_ctx(make_tables()))) == []
+
+
+def test_movement_flags_that_add_payload_are_still_read():
+    """SWIMMING adds a pitch float BEFORE the unconditional fallTime."""
+    from tortoise_capture.core.contracts import Direction
+    from tortoise_capture.modules.player_move import PlayerMove
+
+    swimming = 0x00200000
+    body = (struct.pack("<II", swimming, 1234) + struct.pack("<ffff", 1.0, 2.0, 3.0, 4.0)
+            + struct.pack("<f", 0.5) + struct.pack("<I", 99))
+    pkt = make_packet(MSG_MOVE_START_FORWARD, body,
+                      name="MSG_MOVE_START_FORWARD", direction=Direction.C2S)
+    ev = decode_one(PlayerMove(), pkt, make_ctx(make_tables()))
+    assert ev.data["fall_time"] == 99
