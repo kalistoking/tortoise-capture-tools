@@ -205,6 +205,47 @@ def test_create_block_names_unit_fields():
     assert "UNIT_FIELD_HEALTH = 342" in text and "UNIT_FIELD_MINDAMAGE = 20.2119" in text
 
 
+def _self_player_create_block() -> bytes:
+    """A CREATE for the session's own player: TYPEID 4, UPDATEFLAG_SELF set.
+
+    The server sets that flag exactly when `target == this` -- "building
+    packet for yourself" (Object.cpp:283-284, UpdateData.h:46) -- so it is
+    the wire's own statement of which player is the one recording, not a
+    guess made from position or packet order.
+    """
+    return (struct.pack("<I", 1) + bytes([0])
+            + bytes([2])                                # CREATE_OBJECT
+            + pack_guid(8) + bytes([4])                 # guid, objectTypeId = Player
+            + bytes([0x01])                             # updateFlags = UPDATEFLAG_SELF
+            + update_mask({6: 100}))
+
+
+def test_the_session_player_is_reported_as_a_session_scoped_fact():
+    """trt needs the standpoint the observations are relative to.
+
+    `--entry` drops it otherwise, which is a category error rather than
+    correct filtering: the recording player is not an event *about* any
+    creature (see Event.scope). It gets its own kind so that nothing
+    listening for `object_create` -- author/spawn.py takes any create's
+    position with no entry guard -- can mistake a player for the subject.
+    """
+    ctx = make_ctx(make_tables(field_names=FIELD_NAMES))
+    events = list(UpdateObject().decode(make_packet(0xA9, _self_player_create_block()), ctx))
+    player = next(ev for ev in events if ev.kind == "session_player")
+    assert player.scope == "session"
+    assert player.data["guid"] == 8 and player.data["object_type"] == 4
+    assert player.data["fields"] == [{"index": 6, "name": None, "raw": 100}]
+
+
+def test_another_players_create_is_not_the_session_player():
+    """Without UPDATEFLAG_SELF a player create is just another bystander."""
+    block = (struct.pack("<I", 1) + bytes([0]) + bytes([2])
+             + pack_guid(9) + bytes([4]) + bytes([0]) + update_mask({6: 100}))
+    ctx = make_ctx(make_tables(field_names=FIELD_NAMES))
+    events = list(UpdateObject().decode(make_packet(0xA9, block), ctx))
+    assert not any(ev.kind == "session_player" for ev in events)
+
+
 def test_gameobject_fields_are_never_given_unit_names():
     """Regression: unit field names applied to a gameobject are silent nonsense."""
     ctx = make_ctx(make_tables(field_names=FIELD_NAMES))
@@ -212,6 +253,12 @@ def test_gameobject_fields_are_never_given_unit_names():
     ev = decode_one(UpdateObject(), make_packet(0xA9, _create_block(guid)), ctx)
     assert ev.data["named_ok"] is False
     assert all(f["name"] is None for f in ev.data["fields"])
+    # A field this toolkit has no name for still carries its index and raw
+    # value: a consumer replaying the block to a game client needs the mask
+    # one for one, and the client knows what each index means even when the
+    # field table does not.
+    assert ev.data["fields"] == [{"index": 6, "name": None, "raw": 342},
+                                 {"index": 8, "name": None, "raw": MINDAMAGE_BITS}]
     assert list(UpdateObject().sql_rows(ev, _sql_ctx())) == []
 
 

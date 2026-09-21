@@ -845,6 +845,29 @@ session-scoped event reaches a sink under a non-matching `--entry`, and that
 an ordinary entry-tagged event for a different entry still does not — the
 regression that would matter is the escape hatch turning into a bypass.
 
+The second fact of that shape is the **recording player itself**. A consumer
+replaying a capture to a game client needs the standpoint the observations are
+relative to, not only the observations: the client will not enter the world
+without a session, and a session is a player guid. Under `--entry` that create
+block was dropped for the same reason `creature.map` was — no `entry` to match
+on — and for the same wrong reason: it was never a per-creature fact.
+
+Which player is *the* player is a wire fact, not a guess: the server sets
+`UPDATEFLAG_SELF` exactly when `target == this` (`Object.cpp:283`,
+`UpdateData.h:46`), so the recording player identifies itself in its own
+create block. `modules/update_object.py` emits that block a second time as
+`session_player`, session-scoped.
+
+A second *kind* rather than session-scoping the `object_create` itself, which
+would have been the smaller change and the wrong one: `author/spawn.py` takes
+the position of any create it is handed, with no entry guard of its own,
+because the `--entry` filter has always been what guarantees it only sees the
+subject. Letting a player create past that filter under its existing kind
+would have authored the observer's position as the creature's spawn point — a
+silent wrong value of exactly the kind [§17.4](#174-the-database-as-an-input)
+exists to avoid. The separate kind means nothing listening for `object_create`
+can mistake the frame for the subject.
+
 ### 17.6 What it does not do
 
 It does not apply anything. The output is a file for a human to read, argue

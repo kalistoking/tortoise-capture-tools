@@ -38,6 +38,7 @@ UPDATETYPE_CREATE_OBJECT2 = 3
 UPDATETYPE_OUT_OF_RANGE = 4
 UPDATETYPE_NEAR_OBJECTS = 5
 
+UPDATEFLAG_SELF = 0x01          # set only when target == this (Object.cpp:283)
 UPDATEFLAG_TRANSPORT = 0x02
 UPDATEFLAG_MELEE_ATTACKING = 0x04
 UPDATEFLAG_HIGHGUID = 0x08
@@ -179,6 +180,7 @@ class UpdateObject(BaseModule):
         "object_values": "entry={entry:<7} {block} {guid_type}\n{fields_text}",
         "object_movement": "entry={entry:<7} MOVEMENT {guid_type} flags=0x{update_flags:02X}",
         "objects_out_of_range": "{count} object(s) left range",
+        "session_player": "guid={guid} the recording player ({field_count} field(s))",
     }
     sql_tables = (_TABLE,)
 
@@ -211,9 +213,18 @@ class UpdateObject(BaseModule):
                 object_type = r.u8("objectTypeId")
                 movement = read_movement_update(r)
                 fields = read_update_fields(r)
+                block = ("CREATE2" if update_type == UPDATETYPE_CREATE_OBJECT2 else "CREATE")
                 yield self._field_event(pkt, ctx, "object_create", guid, fields,
-                                        block="CREATE2" if update_type == UPDATETYPE_CREATE_OBJECT2
-                                        else "CREATE", object_type=object_type, movement=movement)
+                                        block=block, object_type=object_type, movement=movement)
+                if movement["update_flags"] & UPDATEFLAG_SELF:
+                    # The recording player: not an event about any creature,
+                    # but the standpoint the others are relative to, so it
+                    # must survive --entry. Its own kind, because a consumer
+                    # of object_create (author/spawn.py takes any create's
+                    # position) would otherwise read a player as the subject.
+                    yield self._field_event(pkt, ctx, "session_player", guid, fields,
+                                            scope="session", block=block,
+                                            object_type=object_type, movement=movement)
             elif update_type == UPDATETYPE_VALUES:
                 guid = r.packguid("guid")
                 fields = read_update_fields(r)
@@ -225,7 +236,7 @@ class UpdateObject(BaseModule):
                                 f"(block {index + 1}/{block_count})")
 
     def _field_event(self, pkt: Packet, ctx: DecodeContext, kind: str, guid: int,
-                     fields: Mapping[int, int], **extra: Any) -> Event:
+                     fields: Mapping[int, int], scope: str = "entry", **extra: Any) -> Event:
         """Fields as [{index, name, raw}]; names only for units and pets.
 
         One list rather than parallel index/name maps, so text and SQL read the
@@ -243,7 +254,7 @@ class UpdateObject(BaseModule):
                                 "fields": decoded, "named_ok": is_unit(guid), **extra}
         if has_entry(guid):
             data["entry"] = guid_entry(guid)
-        return self.event(pkt, kind, **data)
+        return self.event(pkt, kind, scope=scope, **data)
 
     # -- text ---------------------------------------------------------------
 
@@ -258,6 +269,7 @@ class UpdateObject(BaseModule):
         if not data.get("named_ok", True):
             lines.insert(0, "    (field names unavailable: not a unit or pet)")
         data["fields_text"] = "\n".join(lines)
+        data["field_count"] = len(data.get("fields", ()))
         data.setdefault("entry", "-")
         return data
 

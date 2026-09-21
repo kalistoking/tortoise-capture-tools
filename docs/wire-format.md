@@ -118,6 +118,11 @@ if TRANSPORT (0x02):     uint32
 `SELF 0x01, TRANSPORT 0x02, MELEE_ATTACKING 0x04, HIGHGUID 0x08, ALL 0x10,
 LIVING 0x20, HAS_POSITION 0x40`.
 
+`SELF` carries no payload but identifies the capture's own player: the server
+ORs it in exactly when `target == this` (`Object.cpp:283`). It is the only
+wire statement of which of several player objects is the one recording —
+position and packet order are both guesses by comparison.
+
 `MovementInfo::Write` (`Object.cpp:146`):
 ```
 uint32 moveFlags ; uint32 stime ; float x,y,z,o
