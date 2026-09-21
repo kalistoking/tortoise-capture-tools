@@ -59,6 +59,14 @@ MIN_WAYPOINTS = 3            # fewer than this is not a route
 # rakameg-pr.md for the real capture that motivated this.
 MAX_COMBAT_HOP_FRACTION = 0.5
 
+# A patrol is defined by repetition, so a waypoint seen exactly once is a
+# destination, not a waypoint. Measured on both real captures: Ralthas's
+# genuine 41-point route has 0% single-visit points, Rakameg's fabricated one
+# 73%. This catches what MAX_COMBAT_HOP_FRACTION structurally cannot -- random
+# wandering happens out of combat, so its hops look peaceful while still
+# revisiting nothing.
+MAX_SINGLE_VISIT_FRACTION = 0.5
+
 _TABLE = TableSpec(
     name="capture_patrol_waypoint",
     columns=(
@@ -121,6 +129,18 @@ class _Route:
         in_combat = sum(1 for t in self.hop_times
                         if any(start <= t <= end for start, end in windows))
         return in_combat / len(self.hop_times)
+
+    def single_visit_fraction(self, order: list[int]) -> float:
+        """Share of the walked waypoints that were only ever seen once.
+
+        Scoped to the waypoints actually proposed, not every cluster: a
+        one-off detour that the walk already excluded should not count
+        against the route it was excluded from.
+        """
+        if not order:
+            return 0.0
+        once = sum(1 for index in order if len(self.clusters[index]) == 1)
+        return once / len(order)
 
     def centre(self, index: int) -> tuple[float, float, float]:
         """Mean of every observation of a waypoint -- one lap's noise averaged out."""
@@ -226,14 +246,18 @@ class Patrol(BaseAnalyzer):
                 continue
 
             combat_fraction = route.combat_hop_fraction()
-            confident = combat_fraction <= MAX_COMBAT_HOP_FRACTION
+            single_visit = route.single_visit_fraction(order)
+            confident = (combat_fraction <= MAX_COMBAT_HOP_FRACTION
+                         and single_visit <= MAX_SINGLE_VISIT_FRACTION)
             ctx.log.info("entry %s: %d waypoints from %d hops (%d cluster(s) seen, "
-                         "%.0f%% during combat)", route.entry, len(order), len(route.labels),
-                         len(route.clusters), combat_fraction * 100)
+                         "%.0f%% during combat, %.0f%% seen once)",
+                         route.entry, len(order), len(route.labels),
+                         len(route.clusters), combat_fraction * 100, single_visit * 100)
             yield self.event(route.last_packet, "patrol_route", guid=guid, entry=route.entry,
                              count=len(order), hops=len(route.labels),
                              closes_loop=getattr(route, "returns_to_start", False),
-                             combat_hop_fraction=combat_fraction, confident=confident)
+                             combat_hop_fraction=combat_fraction,
+                             single_visit_fraction=single_visit, confident=confident)
             for point, index in enumerate(order, start=1):
                 x, y, z = route.centre(index)
                 yield self.event(route.last_packet, "patrol_waypoint", guid=guid,

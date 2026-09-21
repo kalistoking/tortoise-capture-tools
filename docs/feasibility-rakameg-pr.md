@@ -289,6 +289,56 @@ proposes no `creature_movement` rows and no `spawntimesecsmin/max`, matching
 the PR's own silence on both; Ralthas's already-validated output is
 unchanged.
 
+## 6. What two creatures still could not show
+
+A later audit asked the obvious follow-up question — which parts of this
+toolkit encode a property of *these two creatures* rather than a general rule
+— and found that the fix above is one of them. `combat_hop_fraction` measures
+a specific *cause* of a fabricated route (combat repositioning), not the thing
+that actually matters, so it is structurally blind to the other common way to
+produce one: **a creature with `movement_type = 1` that wanders at random**.
+Wandering happens out of combat, so its hops look peaceful, pass the combat
+check, and would author exactly the waypoint route this document's headline
+finding is about.
+
+`closes_loop` is no help there either, and measurement says so: Rakameg's
+fabricated route reports `closes loop: True` just as Ralthas's genuine one
+does, because a most-common-successor walk returns to its anchor almost
+regardless. The signal that does separate them is repetition, which is what
+the word *patrol* means in the first place:
+
+| | walked waypoints | seen exactly once | median visits |
+|---|---|---|---|
+| Ralthas (genuine) | 41 | **0%** | 6 |
+| Rakameg (fabricated) | 11 | **73%** | 1 |
+
+A waypoint visited once is a destination, not a waypoint — and random
+wandering lands near 100% single-visit by construction, since every
+destination is new. `MAX_SINGLE_VISIT_FRACTION = 0.5` now gates
+`patrol_route` alongside the combat check; both real captures keep their
+existing verdicts (Ralthas confident, Rakameg refused), and the wanderer case
+is refused by a signal that does not depend on having seen one.
+
+Three other two-example assumptions came out of the same audit:
+
+- **`creature_equip_template` authored only slot 1 of 3.**
+  `UNIT_VIRTUAL_ITEM_DISPLAY` is Size:3 (`UpdateFields.h:95`) — mainhand,
+  offhand, ranged — but only a base index carries a name, so a shield or a bow
+  arrived unnamed and was dropped silently. Both creatures validated here
+  carry a single weapon, which is why it never showed. Now read by offset,
+  with an unresolvable slot skipped rather than defaulted to 0 ("no item").
+- **`creature_template` stats take the first `CREATE` and assume it was
+  clean.** Nothing guarantees the first sighting caught an unmodified
+  creature; one already enraged or buffed would author modified numbers as
+  `wire`. A later `CREATE` disagreeing on an authored column is now reported
+  instead of discarded. Narrowed to authored columns only — the first run
+  against real data flagged `UNIT_FIELD_FLAGS`, which moves between sightings
+  by design and says nothing about stats.
+- **`SMSG_MESSAGECHAT`'s emote form is dropped under `--entry`** — checked and
+  left alone. That one is not a defect: `core/contracts.py` documents it as
+  deliberate, because the emote form carries no sender guid and so cannot be
+  attributed to any creature for a per-entry migration to claim.
+
 The finding that matters going forward is not "patrol and respawn were
 buggy" — it is that **the discipline this toolkit already had in one place
 (`creature_spells` refusing an unbounded value) did not automatically apply

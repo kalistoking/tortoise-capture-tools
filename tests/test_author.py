@@ -9,7 +9,9 @@ from pathlib import Path
 
 from support import StubWorld, author_rows, make_event, make_packet
 from tortoise_capture.author.dialogue import EVENT_T_AGGRO, EVENT_T_DEATH, Dialogue
-from tortoise_capture.author.equipment import Equipment, unpack_item_info
+from tortoise_capture.author.equipment import (
+    DISPLAY_FIELD, INFO_FIELD, Equipment, unpack_item_info,
+)
 from tortoise_capture.author.spawn import Spawn
 from tortoise_capture.author.spells import Spells
 from tortoise_capture.author.stats import Stats
@@ -180,6 +182,35 @@ def test_stats_reads_the_create_block():
     assert row.values["attack_power"] == 44
     assert row.values["unit_class"] == 2
     assert abs(row.values["dmg_min"] - 20.2119007) < 1e-6
+
+
+def test_a_later_sighting_disagreeing_with_the_first_is_reported():
+    """First-CREATE-wins assumes the first sighting caught a clean creature.
+
+    Nothing guarantees that: a creature first seen already buffed, enraged or
+    debuffed broadcasts modified stats, and they would be authored as `wire`
+    with no hint. Both test captures happened to sight their creature idle, so
+    the assumption never showed. A second CREATE that disagrees is the one
+    piece of evidence a capture can offer, so it must not be discarded.
+    """
+    events = _stats_events() + [
+        make_event("object_create", 300.0, guid=GUID, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_MINDAMAGE=_float_bits(40.0),          # double: enraged earlier?
+            UNIT_FIELD_ATTACK_POWER=44,
+            UNIT_FIELD_BYTES_0=512,
+            OBJECT_FIELD_SCALE_X=_float_bits(1.0),
+        )),
+    ]
+    rows, gaps = author_rows(Stats(), events, ENTRY)
+    assert any("dmg_min" in gap for gap in gaps)
+    # The first sighting still wins the value; the disagreement is surfaced.
+    assert abs(rows[0].values["dmg_min"] - 20.2119007) < 1e-6
+
+
+def test_agreeing_sightings_say_nothing():
+    events = _stats_events() + _stats_events()
+    _, gaps = author_rows(Stats(), events, ENTRY)
+    assert not any("disagree" in gap for gap in gaps)
 
 
 def test_a_float_that_round_trips_lands_on_the_same_float32():
@@ -424,6 +455,36 @@ def test_a_lookup_the_packed_info_contradicts_is_withheld():
     rows, gaps = author_rows(Equipment(), _equip_events(), ENTRY, world=world)
     assert rows == []
     assert any("disagrees" in gap for gap in gaps)
+
+
+def _multi_slot_equip_events(displays, infos):
+    """A CREATE carrying more than one virtual-item slot.
+
+    UNIT_VIRTUAL_ITEM_DISPLAY is Size:3 and UNIT_VIRTUAL_ITEM_INFO Size:6
+    (UpdateFields.h:95-96), but only a base index carries a name -- the
+    field table names enum constants, not their sub-indices -- so the extra
+    slots arrive with name None and can only be read by offset.
+    """
+    fields = [{"index": 0, "name": DISPLAY_FIELD, "raw": displays[0]}]
+    fields += [{"index": 1 + i, "name": None, "raw": raw}
+               for i, raw in enumerate(displays[1:])]
+    fields.append({"index": 10, "name": INFO_FIELD, "raw": infos[0]})
+    fields += [{"index": 11 + i, "name": None, "raw": raw}
+               for i, raw in enumerate(infos[1:])]
+    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=fields)]
+
+
+def test_an_offhand_is_authored_too_not_silently_dropped():
+    """Both test creatures carry one weapon, so slots 2 and 3 never showed."""
+    world = StubWorld(displays={5010: 5276, 7788: 9001}, columns={
+        ("item_template", "class"): "2", ("item_template", "subclass"): "10",
+        ("item_template", "inventory_type"): "17"})
+    events = _multi_slot_equip_events([5010, 7788, 0],
+                                      [ITEM_INFO, 0, ITEM_INFO, 0, 0, 0])
+    rows, _ = author_rows(Equipment(), events, ENTRY, world=world)
+    assert rows[0].values["equipentry1"] == 5276
+    assert rows[0].values["equipentry2"] == 9001
+    assert "equipentry3" not in rows[0].values          # empty slot stays unset
 
 
 def test_without_a_database_equipment_is_a_gap_not_a_guess():

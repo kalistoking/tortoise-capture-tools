@@ -73,15 +73,27 @@ _CHECKED = {
 class Stats(BaseAuthorRule):
     def __init__(self) -> None:
         self._fields: dict[str, int] = {}
+        self._disagreed: dict[str, set[int]] = {}
         self._saw_spells = False
 
     def handle(self, ev: Event, mod: Any = None) -> None:
         if ev.kind == "object_create":
             # First CREATE wins: a creature's static stats never change after
-            # it is created, and later blocks only carry what moved.
+            # it is created, and later blocks only carry what moved. That holds
+            # only if the first sighting caught the creature unmodified, which
+            # nothing here can guarantee -- so a later CREATE that disagrees is
+            # kept and reported rather than dropped on the floor.
             for field in ev.data.get("fields", ()):
-                if field["name"] and field["name"] not in self._fields:
-                    self._fields[field["name"]] = field["raw"]
+                name = field["name"]
+                if not name:
+                    continue
+                if name not in self._fields:
+                    self._fields[name] = field["raw"]
+                elif field["raw"] != self._fields[name] and (name in _STATS or name in _CHECKED):
+                    # Only fields that feed an authored column: UNIT_FIELD_FLAGS
+                    # and friends move between sightings by design (in combat,
+                    # and so on) and say nothing about the stats being authored.
+                    self._disagreed.setdefault(name, set()).add(field["raw"])
         elif ev.kind == "spell_go":
             self._saw_spells = True
 
@@ -180,3 +192,10 @@ class Stats(BaseAuthorRule):
         elif ctx.world is None:
             yield ("creature_template level/health/mana not checked -- no database "
                    "configured to compare against")
+
+        for name, others in sorted(self._disagreed.items()):
+            column = _STATS.get(name) or _CHECKED[name][0]
+            yield (f"creature_template.{column} -- a later CREATE for this entry broadcast "
+                   f"{name} as {sorted(others)} where the first said {self._fields[name]}; "
+                   "the first sighting was used, but a creature whose stats move between "
+                   "sightings was not in its authored state in at least one of them")

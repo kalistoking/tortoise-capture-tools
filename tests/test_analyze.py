@@ -76,6 +76,30 @@ def test_combat_detours_do_not_enter_the_route():
     assert route.data["count"] == len(SQUARE)
 
 
+def test_a_wander_never_revisiting_a_point_is_not_a_confident_route():
+    """Random movement is out of combat, so the combat-hop check cannot see it.
+
+    A patrol is defined by repetition: the real Ralthas route has 0% of its
+    waypoints seen exactly once, the fabricated Rakameg one 73%, and random
+    wandering lands near 100% by construction -- every destination is new.
+    """
+    events, t = [], 1.0
+    for i in range(12):                      # twelve destinations, none repeated
+        events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY,
+                                 dest=(float(i * 20), float(i * 7), 10.0)))
+        t += 1.0
+    route = findings_by_kind(run_analyzer(Patrol(), events))["patrol_route"]
+    assert route.data["confident"] is False
+    assert route.data["single_visit_fraction"] > 0.5
+
+
+def test_a_genuinely_walked_loop_stays_confident():
+    """The regression guard: repetition is exactly what a real route has."""
+    route = findings_by_kind(run_analyzer(Patrol(), _hops(laps=2.5)))["patrol_route"]
+    assert route.data["confident"] is True
+    assert route.data["single_visit_fraction"] == 0.0
+
+
 def test_too_few_points_is_not_a_route():
     events = [make_event("move_linear", 1.0, guid=GUID, entry=ENTRY, dest=(0.0, 0.0, 0.0))]
     assert run_analyzer(Patrol(), events) == []
