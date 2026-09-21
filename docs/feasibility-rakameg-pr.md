@@ -71,7 +71,7 @@ does not patrol.
 | `creature_movement` | **0/0**, matching the PR — this toolkit fabricated 11 before the fix, now proposes none (§2) |
 | `creature_equip_template` | gap — no database configured this session, same mechanism as Ralthas §4, not a new limitation |
 | `broadcast_text` | **2/2** rows, text exact, `chat_type` correctly read as **YELL** (Ralthas's was SAY) — first real evidence the chat-type distinction generalises (§4) |
-| `creature_ai_events` + `creature_ai_scripts` | clean, same correlation logic as Ralthas (§4) |
+| `creature_ai_events` + `creature_ai_scripts` | correlation clean, but `creature_ai_scripts.datalong` was wrong until a later run *with a database* exposed it (§4a) |
 | `creature_spells` | both spells' `delayRepeatMin/Max` bounded and *tighter* than Ralthas's own (more samples); one spell's `delayInitial` is arguably wrong for a structural reason worth naming (§3) |
 
 ## 1. `creature_template` — the drift pattern holds
@@ -203,6 +203,55 @@ as **YELL** (`SMSG_MESSAGECHAT` type `0x0C`), where Ralthas's own lines were
 **SAY** (`0x0B`). The PR's own `creature_ai_scripts` comments ("Yell on
 aggro" / "Yell on death") confirm it. Ralthas alone could not have shown the
 SAY/YELL distinction actually holds; this is the first real evidence it does.
+
+## 4a. What only a database-backed comparison could see
+
+Everything above was produced without a world database configured. A later
+run *with* one, comparing against the live server rows, found three more
+defects that no capture-only run could have surfaced — two of them in the
+tables §4 had called clean:
+
+| | authored by the PR | this toolkit, before | after |
+|---|---|---|---|
+| `creature_ai_scripts.datalong` | **1** (yell) | **0** | **1** |
+| `broadcast_text.sound_id` | **60640 / 60641** | **0 / 0** | *not proposed*, named as a gap |
+| `creature_spells` slot order | 22417, then 28447 | 28447, then 22417 | 22417, then 28447 |
+
+**`datalong`.** For `SCRIPT_COMMAND_TALK` the server reads the say/yell
+distinction from `datalong` (`ScriptMgr.h:80`, numbered by `enum ChatType` at
+`Creature.h:122-123`), and this toolkit already computed exactly that value
+one column over, for `broadcast_text.chat_type` — it simply never carried it
+across. Worth being precise about the severity: `ScriptCommands.cpp:65` passes
+`datalong > 0 ? datalong : -1`, and `DoScriptText` treats a negative override
+as "use the text's own chat type" (`ScriptMgr.cpp:2816`), so the creature would
+still have yelled. The row was textually wrong against the hand-authored one,
+not behaviourally broken.
+
+**`sound_id`.** This one is the more interesting failure, because the module
+was already *trying* to do the right thing: `dialogue.py`'s docstring states
+that an unattributed sound is left out rather than written as `0`, precisely
+because a zero meaning "not observed" and a zero meaning "silent" are
+indistinguishable once stored. But `fill_schema_defaults` fills any column the
+rule did not set, and it is **a no-op without a database** — so the stated
+intent held in every capture-only run and was silently violated the moment a
+schema became readable. The fix is to declare the exclusion as `skip`, the
+same mechanism `spawntimesecsmin/max` already uses, and to emit a gap.
+
+**Slot order.** `creature_spells` is one wide positional row, so which slot a
+spell lands in is authored content. Ordering slots by observed cast count made
+that content depend on how long the capture happened to run — the same
+creature recorded twice could author the same two spells into swapped slots,
+and a positional diff then reports every column of both as changed. That is
+also why the raw comparison against the server looked worse than it was. Now
+ordered by spell id, which is stable across captures and happens to match both
+hand-authored PRs.
+
+The pattern across all three is the same one this document already names for
+`patrol` and `respawn_timer`: **a wrong value carrying the same provenance
+label as a right one**. What is new is the discovery channel — two of these
+were invisible not because the logic was subtle but because the code path that
+produced them only runs with a database attached, which no validation run in
+this document ever had.
 
 ## 5. `creature_equip_template` — same gap mechanism as Ralthas, not a new one
 

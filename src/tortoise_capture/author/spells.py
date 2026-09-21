@@ -70,7 +70,10 @@ class Spells(BaseAuthorRule):
     def rows(self, ctx: AuthorContext) -> Iterator[AuthoredRow]:
         if not self._casts:
             return
-        spells = sorted(self._casts, key=lambda s: -self._casts[s])[:MAX_SLOTS]
+        # By spell id, not by how often each was seen: creature_spells is
+        # positional, so cast counts would make a slot assignment depend on
+        # how long the capture happened to run.
+        spells = sorted(self._casts)[:MAX_SLOTS]
 
         values: dict[str, Any] = {"entry": ctx.entry, "name": self._name or str(ctx.entry)}
         provenance: dict[str, str] = {"entry": WIRE, "name": WIRE}

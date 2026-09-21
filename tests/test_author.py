@@ -95,6 +95,60 @@ def test_a_sound_attributed_by_behaviour_becomes_broadcast_text_sound_id():
     assert aggro_text.provenance["sound_id"] == DERIVED
 
 
+def test_a_yell_sets_the_talk_scripts_datalong_to_the_chat_type():
+    """SCRIPT_COMMAND_TALK reads the say/yell distinction from datalong.
+
+    ScriptMgr.h:80 -- `datalong = chat_type (see enum ChatType)`, and
+    Creature.h:122-123 numbers that enum SAY=0, YELL=1. The wire already
+    carries the distinction; leaving datalong unset let the schema default
+    write a 0 over it.
+    """
+    events = [
+        make_event("monster_yell", 59.9, guid=GUID, entry=ENTRY, message=AGGRO_TEXT,
+                   chat_type=0x0C, language=0),
+        make_event("text_trigger", 999.0, entry=ENTRY, subject=AGGRO_TEXT, trigger="aggro"),
+    ]
+    rows, _ = author_rows(Dialogue(), events, ENTRY)
+    script = next(r for r in rows if r.table == "creature_ai_scripts")
+    assert script.values["datalong"] == 1
+    assert script.provenance["datalong"] == WIRE
+
+
+def test_a_say_sets_datalong_to_zero_for_the_same_reason():
+    rows, _ = author_rows(Dialogue(), _dialogue_events(), ENTRY)
+    script = next(r for r in rows if r.table == "creature_ai_scripts")
+    assert script.values["datalong"] == 0
+
+
+def test_an_unattributed_sound_stays_a_gap_rather_than_a_schema_zero():
+    """A zero sound_id means "silent", which is not what "not observed" means.
+
+    The schema fill only runs with a database configured, so this defect is
+    invisible in a capture-only run -- which is how every validation so far
+    was done.
+    """
+    world = StubWorld(schema={"broadcast_text": {"sound_id": 0, "emote_id1": 0,
+                                                 "emote_delay1": 0, "female_text": ""}})
+    rows, gaps = author_rows(Dialogue(), _dialogue_events(), ENTRY, world=world)
+    text = next(r for r in rows if r.table == "broadcast_text")
+    assert "sound_id" not in text.values
+    assert "emote_id1" not in text.values
+    assert any("sound_id" in gap for gap in gaps)
+
+
+def test_an_attributed_sound_is_still_written_when_a_schema_exists():
+    world = StubWorld(schema={"broadcast_text": {"sound_id": 0}})
+    events = _dialogue_events() + [
+        make_event("text_trigger", 999.0, entry=ENTRY, subject=AGGRO_TEXT,
+                   trigger="aggro", sound_id=5150),
+    ]
+    rows, _ = author_rows(Dialogue(), events, ENTRY, world=world)
+    aggro = next(r for r in rows if r.table == "broadcast_text"
+                 and r.values["male_text"] == AGGRO_TEXT)
+    assert aggro.values["sound_id"] == 5150
+    assert aggro.provenance["sound_id"] == DERIVED
+
+
 def test_unattributed_dialogue_becomes_a_gap_not_a_row():
     events = [
         make_event("monster_say", 5.0, guid=GUID, entry=ENTRY, message="Who knows why",
@@ -402,6 +456,25 @@ def test_spells_emits_what_it_saw_cast():
     assert row.values["delayInitialMin_1"] == 0           # 0.047 s rounds to 0
     assert row.provenance["spellId_1"] == WIRE
     assert row.provenance["probability_1"] == CONVENTION
+
+
+def test_slot_order_does_not_depend_on_how_often_a_spell_happened_to_fire():
+    """creature_spells is positional, so the slot a spell lands in is content.
+
+    Ordering by observed cast count made that content depend on how long a
+    capture ran: the same creature recorded twice could author the same two
+    spells into swapped slots, and every column of both would then read as
+    changed against the same server row. Spell id is stable across captures.
+    """
+    events = [
+        make_event("creature_query", 12.9, entry=ENTRY, name="Death Prophet Rakameg"),
+        make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=22417),
+        make_event("spell_go", 70.0, guid=GUID, entry=ENTRY, spell_id=28447),
+        make_event("spell_go", 80.0, guid=GUID, entry=ENTRY, spell_id=28447),
+    ]
+    rows, _ = author_rows(Spells(), events, ENTRY)
+    assert rows[0].values["spellId_1"] == 22417      # lower id, cast less often
+    assert rows[0].values["spellId_2"] == 28447
 
 
 def test_an_unbounded_repeat_delay_is_a_gap_never_a_number():

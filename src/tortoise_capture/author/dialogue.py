@@ -17,7 +17,11 @@ carries no sender, so it is only ever attributed when exactly one line, from
 any creature, falls inside the coincidence window. Left out (rather than
 written as `0`) whenever no such match exists: a zero meaning "not observed"
 is indistinguishable from a zero meaning "silent" once it is in a table, so
-the emote columns stay left out the same way for the same reason.
+the emote columns stay left out the same way for the same reason. That
+exclusion has to be spelled out to `fill_schema_defaults` as `skip`, or the
+target table's own default writes the very zero this is avoiding -- which
+only happens with a database configured, and so stayed invisible through
+every capture-only validation run.
 """
 
 from __future__ import annotations
@@ -35,10 +39,17 @@ SCRIPT_COMMAND_TALK = 0    # ScriptCommands.cpp
 _EVENT_TYPES = {"aggro": EVENT_T_AGGRO, "death": EVENT_T_DEATH}
 
 # broadcast_text.chat_type is the say/yell distinction, which the wire carries
-# as the SMSG_MESSAGECHAT message type.
+# as the SMSG_MESSAGECHAT message type. The same numbering is `enum ChatType`
+# (Creature.h:122-123), which is also what a TALK script's datalong holds
+# (ScriptMgr.h:80) -- one wire fact, two columns.
 CHAT_MSG_MONSTER_SAY = 0x0B
 CHAT_MSG_MONSTER_YELL = 0x0C
 _CHAT_TYPES = {CHAT_MSG_MONSTER_SAY: 0, CHAT_MSG_MONSTER_YELL: 1}
+
+# Columns whose schema default is a real value ("silent", "no emote"), not
+# boilerplate -- see the module docstring.
+_NOT_OBSERVED = ("sound_id", "emote_id1", "emote_id2", "emote_id3",
+                 "emote_delay1", "emote_delay2", "emote_delay3")
 
 
 @author_rule(id="dialogue", table="broadcast_text", order=10)
@@ -99,14 +110,17 @@ class Dialogue(BaseAuthorRule):
                 bt_provenance["sound_id"] = DERIVED
                 bt_notes.append(f"sound_id {self._sounds[message]}: the only SMSG_PLAY_SOUND "
                                 "in this capture that coincided with exactly this line")
-            self.fill_schema_defaults(ctx, "broadcast_text", bt_values, bt_provenance, bt_notes)
+            self.fill_schema_defaults(ctx, "broadcast_text", bt_values, bt_provenance, bt_notes,
+                                      skip=[c for c in _NOT_OBSERVED if c not in bt_values])
             yield AuthoredRow(table="broadcast_text", values=bt_values,
                               provenance=bt_provenance, notes=tuple(bt_notes))
 
-            script_values = {"id": text_id, "command": SCRIPT_COMMAND_TALK, "dataint": text_id,
+            script_values = {"id": text_id, "command": SCRIPT_COMMAND_TALK,
+                             "datalong": chat_type, "dataint": text_id,
                              "comments": f"{self._name or ctx.entry} - {trigger.capitalize()} text"}
             script_provenance = {"id": CONVENTION, "command": CONVENTION,
-                                 "dataint": CONVENTION, "comments": CONVENTION}
+                                 "datalong": WIRE, "dataint": CONVENTION,
+                                 "comments": CONVENTION}
             script_notes = []
             self.fill_schema_defaults(ctx, "creature_ai_scripts", script_values,
                                       script_provenance, script_notes)
@@ -128,6 +142,11 @@ class Dialogue(BaseAuthorRule):
                               provenance=event_provenance, notes=tuple(event_notes))
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
+        for _, message, _ in self._numbered():
+            if message not in self._sounds:
+                yield (f"broadcast_text.sound_id for {message!r} -- no SMSG_PLAY_SOUND in this "
+                       "capture could be attributed to this line, so whether it is voiced is "
+                       "unknown; left unset rather than written as 0 (silent)")
         for message in self._untriggered:
             yield (f"broadcast_text/creature_ai_events for {message!r} -- seen, but it did not "
                    "coincide with the same trigger every time, so what fires it is unknown")
