@@ -12,10 +12,11 @@ logs/
 # --- local configuration (machine-specific paths) ------------------------
 tct.toml
 
-# --- cross-project working state, owned elsewhere ------------------------
-# TASKS.md is assembled and re-read by the board session from outside this
-# repository. It is working state about the work, not part of the work, and
-# a second copy of it in history is a second place for it to go stale.
+# --- internal development notes -----------------------------------------
+# TASKS.md tracks what is open while the work is being done. It is written and
+# re-read from outside this repository (the board session assembles it), and it
+# describes the work rather than being part of it -- so it stays on disk and
+# out of history, where a second copy would only be a second place to go stale.
 TASKS.md
 
 # --- generated artifacts ------------------------------------------------
