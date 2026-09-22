@@ -13,10 +13,10 @@ logs/
 tct.toml
 
 # --- internal development notes -----------------------------------------
-# TASKS.md tracks what is open while the work is being done. It is written and
-# re-read from outside this repository (the board session assembles it), and it
-# describes the work rather than being part of it -- so it stays on disk and
-# out of history, where a second copy would only be a second place to go stale.
+# Tracking this work does not live in this repository at all: the task file is
+# `tasks/tct.md` in the development manager, and that is the copy to edit. This
+# line remains only so a re-created TASKS.md here cannot be committed by
+# accident -- two copies of a plan diverge faster than anyone notices.
 TASKS.md
 
 # --- generated artifacts ------------------------------------------------
