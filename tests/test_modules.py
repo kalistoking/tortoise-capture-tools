@@ -62,9 +62,38 @@ def test_party_kill_of_a_player_victim_has_no_entry_key_and_still_renders():
     assert row.values["entry"] is None
 
 
+SPELL_MISS_REFLECT = 11          # SpellDefines.h:106
+TARGET_FLAG_UNIT = 0x0002        # DBCEnums.h:133
+TARGET_FLAG_DEST_LOCATION = 0x0040
+CAST_FLAG_AMMO = 0x0020          # Spell.h:67
+
+
+def _spell_go(caster, spell_id=1449, cast_flags=0, hits=(), misses=(),
+              target_mask=0, dest=None, ammo=None):
+    """A whole SMSG_SPELL_GO, in the order Spell::SendSpellGo writes it.
+
+    Spell.cpp:4662 for the head, WriteSpellGoTargets (4758) for the two lists,
+    SpellCastTargets::write (228) for the target block -- which is written
+    UNCONDITIONALLY, not gated on castFlags -- and WriteAmmoToPacket (4690).
+    """
+    body = pack_guid(caster) + pack_guid(caster)
+    body += struct.pack("<IH", spell_id, cast_flags)
+    body += bytes([len(hits)]) + b"".join(struct.pack("<Q", g) for g in hits)
+    body += bytes([len(misses)])
+    for guid, condition, *reflect in misses:
+        body += struct.pack("<QB", guid, condition)
+        if condition == SPELL_MISS_REFLECT:
+            body += bytes([reflect[0]])          # the extra byte, Spell.cpp:4799
+    body += struct.pack("<H", target_mask)
+    if target_mask & TARGET_FLAG_DEST_LOCATION:
+        body += struct.pack("<fff", *dest)
+    if cast_flags & CAST_FLAG_AMMO:
+        body += struct.pack("<II", *ammo)
+    return body
+
+
 def test_spell_go_reads_caster_and_spell():
-    body = pack_guid(GUID) + pack_guid(GUID) + struct.pack("<IH", 1449, 0)
-    ev = decode_one(SpellGo(), make_packet(0x132, body), make_ctx())
+    ev = decode_one(SpellGo(), make_packet(0x132, _spell_go(GUID)), make_ctx())
     assert ev.data["spell_id"] == 1449 and ev.data["entry"] == ENTRY
 
 
@@ -72,13 +101,55 @@ def test_spell_go_player_caster_has_no_entry_key_and_still_renders():
     """Regression: SendSpellGo fires for any cast, players included --
     guid_entry() on a player caster is meaningless."""
     player = make_guid(0, 9, 0x0000)
-    body = pack_guid(player) + pack_guid(player) + struct.pack("<IH", 1449, 0)
-    ev = decode_one(SpellGo(), make_packet(0x132, body), make_ctx())
+    ev = decode_one(SpellGo(), make_packet(0x132, _spell_go(player)), make_ctx())
     assert "entry" not in ev.data
     text = SpellGo().text_templates["spell_go"].format_map(SpellGo().text_fields(ev))
     assert "entry=-" in text
     row = next(iter(SpellGo().sql_rows(ev, _sql_ctx())))
     assert row.values["entry"] is None
+
+
+def test_spell_go_carries_who_it_hit():
+    victim = make_guid(0, 77, 0x0000)
+    body = _spell_go(GUID, hits=(victim,))
+    ev = decode_one(SpellGo(), make_packet(0x132, body), make_ctx())
+    assert ev.data["hits"] == [victim]
+    assert ev.data["misses"] == []
+
+
+def test_a_reflected_miss_carries_an_extra_byte_the_rest_of_the_packet_depends_on():
+    """The trap: Spell.cpp:4798 writes reflectResult ONLY for SPELL_MISS_REFLECT.
+
+    Reading a miss as a fixed nine bytes leaves one byte on the floor, and
+    everything after it -- the target block, the ammo -- decodes as garbage.
+    So the assertion that matters is not the miss list, it is the dest that
+    follows it.
+    """
+    dodged, reflected = make_guid(0, 77, 0x0000), make_guid(0, 78, 0x0000)
+    body = _spell_go(GUID, misses=((dodged, 3), (reflected, SPELL_MISS_REFLECT, 7)),
+                     target_mask=TARGET_FLAG_DEST_LOCATION, dest=(-9135.5, -1095.25, 72.5))
+    ev = decode_one(SpellGo(), make_packet(0x132, body), make_ctx())
+    assert ev.data["misses"] == [{"guid": dodged, "condition": 3},
+                                 {"guid": reflected, "condition": SPELL_MISS_REFLECT,
+                                  "reflect_result": 7}]
+    assert [round(v, 2) for v in ev.data["dest"]] == [-9135.5, -1095.25, 72.5]
+
+
+def test_a_ground_targeted_cast_carries_the_point_it_was_put_on():
+    body = _spell_go(GUID, target_mask=TARGET_FLAG_DEST_LOCATION,
+                     dest=(100.0, 200.0, 300.0))
+    ev = decode_one(SpellGo(), make_packet(0x132, body), make_ctx())
+    assert [round(v) for v in ev.data["dest"]] == [100, 200, 300]
+
+
+def test_ammo_is_only_present_when_the_cast_flag_says_so():
+    plain = decode_one(SpellGo(), make_packet(0x132, _spell_go(GUID)), make_ctx())
+    assert "ammo_display_id" not in plain.data
+
+    body = _spell_go(GUID, cast_flags=CAST_FLAG_AMMO, ammo=(2175, 24))
+    ranged = decode_one(SpellGo(), make_packet(0x132, body), make_ctx())
+    assert ranged.data["ammo_display_id"] == 2175
+    assert ranged.data["ammo_inventory_type"] == 24
 
 
 def test_monster_say_carries_sender_and_message():
