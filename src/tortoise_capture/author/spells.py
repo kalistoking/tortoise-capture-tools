@@ -93,7 +93,12 @@ class Spells(BaseAuthorRule):
                 provenance[f"delayInitialMin_{slot}"] = DERIVED
                 provenance[f"delayInitialMax_{slot}"] = DERIVED
                 notes.append(f"spell {spell}: first cast {self._initial[spell]:.3f}s after "
-                             f"engagement, so delayInitial rounds to {seconds}")
+                             f"a fight began from rest, so delayInitial rounds to {seconds}")
+            else:
+                # 0 would read as "casts the moment it aggroes" -- a claim, where
+                # the truth is that no fresh engagement ever reached this spell.
+                skip.add(f"delayInitialMin_{slot}")
+                skip.add(f"delayInitialMax_{slot}")
 
             repeat = self._repeat.get(spell)
             if repeat and repeat.get("confident"):
@@ -124,6 +129,11 @@ class Spells(BaseAuthorRule):
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
         for spell in sorted(self._casts):
+            if spell not in self._initial:
+                yield (f"creature_spells.delayInitialMin/Max for spell {spell} -- seen cast, "
+                       "but never inside a fight that began from rest (the first aggro of "
+                       "a life); a re-aggro mid-fight does not restart the timer, so it "
+                       "cannot be measured from one")
             observed = self._repeat.get(spell)
             if observed and not observed.get("confident"):
                 yield (f"creature_spells.delayRepeatMin/Max for spell {spell} -- "

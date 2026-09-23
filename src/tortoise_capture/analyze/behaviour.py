@@ -40,6 +40,7 @@ conclusion they cannot support.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Iterator
@@ -240,17 +241,47 @@ class Behaviour(BaseAnalyzer):
                 yield self.event(c.last_packet, "text_untriggered", entry=c.entry,
                                  subject=message, samples=len(times), **extra)
 
+    @staticmethod
+    def _fresh_engagements(c: _Creature) -> list[tuple[float, float]]:
+        """(start, end) of each fight that began from rest.
+
+        A spell's initial-delay timer starts when a creature enters combat from
+        an out-of-combat state, and SMSG_AI_REACTION does not say which aggro
+        that was: it fires again on every re-aggro mid-fight, when nothing
+        restarts. Measured on Rakameg, 14 aggros over 2 deaths -- the 2 fresh
+        ones matched the authored delayInitial for both spells, the 12 others
+        spread from 1.7s to 60s. So only the first aggro of each life counts:
+        the first in the capture, and the first after each death.
+
+        A full evade-and-reset also restarts the timers and is not detected
+        here, so a capture of repeated evades yields fewer samples than it
+        could. Fewer, never wrong -- the safe direction.
+
+        The fight ends at the next death, so a creature that dies before
+        casting a spell cannot lend that engagement a cast from its next life.
+        """
+        aggros = sorted(c.triggers.get("aggro", []))
+        deaths = sorted(c.deaths)
+        fights = []
+        for boundary in [-math.inf, *deaths]:
+            start = next((t for t in aggros if t > boundary), None)
+            if start is None or any(start == s for s, _ in fights):
+                continue
+            end = next((d for d in deaths if d > start), math.inf)
+            fights.append((start, end))
+        return fights
+
     def _spell_timing(self, c: _Creature) -> Iterator[Event]:
-        engagements = sorted(c.triggers.get("aggro", []))
+        fights = self._fresh_engagements(c)
         for spell_id, casts in sorted(c.spells.items()):
             casts = sorted(casts)
 
-            # Delay from each engagement to the first cast that followed it.
+            # Delay from each fight's start to the first cast inside that fight.
             initial = []
-            for start in engagements:
-                after = [t for t in casts if t >= start]
-                if after:
-                    initial.append(min(after) - start)
+            for start, end in fights:
+                inside = [t for t in casts if start <= t < end]
+                if inside:
+                    initial.append(inside[0] - start)
             if initial:
                 yield self.event(c.last_packet, "spell_initial_delay", entry=c.entry,
                                  subject=spell_id, value_min=min(initial),

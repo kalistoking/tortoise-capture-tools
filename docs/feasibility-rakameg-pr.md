@@ -72,7 +72,7 @@ does not patrol.
 | `creature_equip_template` | gap — no database configured this session, same mechanism as Ralthas §4, not a new limitation |
 | `broadcast_text` | **2/2** rows, text exact, `chat_type` correctly read as **YELL** (Ralthas's was SAY) — first real evidence the chat-type distinction generalises (§4) |
 | `creature_ai_events` + `creature_ai_scripts` | correlation clean, but `creature_ai_scripts.datalong` was wrong until a later run *with a database* exposed it (§4a) |
-| `creature_spells` | both spells' `delayRepeatMin/Max` bounded and *tighter* than Ralthas's own (more samples); one spell's `delayInitial` is arguably wrong for a structural reason worth naming (§3) |
+| `creature_spells` | both spells' `delayRepeatMin/Max` bounded and *tighter* than Ralthas's own (more samples); `delayInitial` now inside the authored range for both — one spell was wrong until mid-fight re-aggros stopped counting as engagement starts (§3) |
 
 ## 1. `creature_template` — the drift pattern holds
 
@@ -171,7 +171,7 @@ universally.
 | `delayRepeatMin/Max` (authored) | 18 / 22 | 11 / 17 |
 | `delayRepeatMin/Max` (derived) | **20 / 27** (29 samples) | **12 / 18** (38 samples) |
 | `delayInitialMin/Max` (authored) | 0 / 0 | 4 / 5 |
-| `delayInitialMin/Max` (derived) | **0 / 0** — exact | **2 / 2** |
+| `delayInitialMin/Max` (derived) | **0 / 0** — exact | **4 / 4** — was 2 / 2, see *Corrected* below |
 
 Same shape of disagreement Ralthas's own repeat delay showed (§7 of that
 document): the observed bound sits close at the floor and wider at the
@@ -192,6 +192,53 @@ as "how long after engagement spell 28447's own slot becomes eligible" if
 the AI sometimes casts spell 22417 first. `analyze/behaviour.py` does not
 currently distinguish these, and Ralthas — with only one spell — could not
 have surfaced this gap.
+
+**Corrected: that cause was wrong, and measuring it said so.** The paragraph
+above is kept because the correction only means something beside it. The task
+that followed it opened with *confirm the cause on the capture rather than
+assuming it*, and the confirmation disproved it.
+
+There is no competition between the two spells. The analyzer took every
+`SMSG_AI_REACTION` as the start of an engagement, and that opcode fires again on
+every re-aggro mid-fight — a target switch, the player re-engaging after kiting
+— when nothing about a spell's timer restarts. This capture has **14 aggros over
+2 deaths**. Split by whether each aggro started a fight from rest:
+
+| aggro | started from rest | 22417 first cast | 28447 first cast |
+|---|---|---|---|
+| #1 (first in the capture) | **yes** | **0.09 s** | **4.00 s** |
+| #12 (first after the first death) | **yes** | **0.09 s** | **4.03 s** |
+| the other 12 | no — mid-fight | 4.8 s – 56.7 s | 1.68 s – 60.6 s |
+
+Both fresh fights give **both** spells their authored value — 22417 at 0,
+28447 inside 4–5. Each spell is right independently, which is exactly what
+competition for the first cast would have prevented. The 1.68 s that `min()`
+picked came from aggro #5, eight seconds into a fight that had started
+long before.
+
+This is the **third** consequence of the capture technique §2 describes, after
+the fabricated patrol route and the single-sample respawn timer: re-engaging a
+stationary boss fourteen times by hand produces aggros that a naturally-pulled
+creature never would. Ralthas, pulled fresh on each of its three lives, gave
+three fresh engagements out of three and could not have shown it.
+
+A second defect sat underneath it: the search for "the first cast after an
+aggro" had no upper bound, so a creature that died before casting a spell would
+have lent that engagement a cast from its **next life**. Now the search ends at
+the next death.
+
+**Fixed.** `analyze/behaviour.py` measures `delayInitial` only from the first
+aggro of each life — the first in the capture, and the first after each death —
+and only up to the death that ends it. A full evade-and-reset also restarts the
+timers and is not detected, so repeated evades yield fewer samples than they
+could; fewer, never wrong. `author/spells.py` now skips `delayInitialMin/Max`
+and names a gap when no fresh fight ever reached a spell, rather than letting
+the schema's 0 claim it casts the instant it aggroes.
+
+After: 28447 authors **4 / 4** against the PR's 4 / 5. The minimum is exact.
+The maximum is a second short because two samples cannot reveal the top of a
+random range — the same *bound, not value* limit the repeat delay has — but the
+derived value now sits **inside** the authored range, where 2 / 2 sat below it.
 
 ## 4. `broadcast_text`, `creature_ai_events`, `creature_ai_scripts` — clean, and one real cross-check
 

@@ -568,6 +568,26 @@ def test_delay_repeat_is_never_schema_filled_even_with_a_default_available():
     assert any("delayRepeatMin/Max" in gap for gap in gaps)
 
 
+def test_an_unmeasured_initial_delay_is_never_schema_filled():
+    """0 there means "casts the moment it aggroes", which nothing observed.
+
+    A spell seen cast, but never within a fight that started from rest, has no
+    measured initial delay -- a capture that opens mid-combat, or whose fresh
+    engagements all ended before that spell came up. The schema's 0 would read
+    as a claim about the creature, not as the absence of one.
+    """
+    world = StubWorld(schema={"creature_spells": {"delayInitialMin_1": 0,
+                                                  "delayInitialMax_1": 0}})
+    events = [
+        make_event("creature_query", 12.9, entry=ENTRY, name="Ralthas"),
+        make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=1449),
+    ]
+    rows, gaps = author_rows(Spells(), events, ENTRY, world=world)
+    assert "delayInitialMin_1" not in rows[0].values
+    assert "delayInitialMax_1" not in rows[0].values
+    assert any("delayInitialMin/Max" in gap for gap in gaps)
+
+
 def test_a_confident_repeat_delay_is_proposed_as_derived():
     """The refusal is about small samples, not the column in general."""
     events = _spell_events(confident=True, samples=6)

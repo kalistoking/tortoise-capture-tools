@@ -219,6 +219,47 @@ def test_initial_cast_delay_is_measured_from_engagement():
     assert math.isclose(delay["value_min"], 0.047, abs_tol=0.001) and delay["samples"] == 2
 
 
+def test_a_mid_combat_reaggro_is_not_an_engagement_start():
+    """delayInitial counts from a fight that starts from rest, not from every aggro.
+
+    SMSG_AI_REACTION fires again whenever a creature re-aggroes mid-fight --
+    a target switch, a player re-engaging after kiting -- and a spell's timer
+    does not restart then. Rakameg's capture had 14 aggros over 2 deaths; the
+    2 fresh ones gave 4.0s and 4.03s against an authored 4-5s, and the 12
+    re-aggros gave anything from 1.68s to 60.6s. min() over all 14 picked 1.68.
+    """
+    events = [
+        make_event("object_create", 10.0, guid=GUID, entry=ENTRY),
+        make_event("ai_reaction", 100.0, guid=GUID, entry=ENTRY, reaction=2),   # from rest
+        make_event("spell_go", 104.0, guid=GUID, entry=ENTRY, spell_id=28447),
+        make_event("ai_reaction", 150.0, guid=GUID, entry=ENTRY, reaction=2),   # re-aggro
+        make_event("spell_go", 151.7, guid=GUID, entry=ENTRY, spell_id=28447),
+    ]
+    delay = findings_by_kind(run_analyzer(Behaviour(), events))["spell_initial_delay"].data
+    assert math.isclose(delay["value_min"], 4.0, abs_tol=0.001)
+    assert delay["samples"] == 1
+
+
+def test_a_cast_after_the_creature_died_does_not_count_for_the_life_before():
+    """First cast after a fresh aggro, but only within the fight that aggro began.
+
+    Without an upper bound, a creature that died before ever casting a spell
+    lends that engagement the first cast of its NEXT life, ninety seconds on.
+    """
+    events = [
+        make_event("object_create", 10.0, guid=GUID, entry=ENTRY),
+        make_event("ai_reaction", 100.0, guid=GUID, entry=ENTRY, reaction=2),
+        make_event("party_kill", 110.0, guid=GUID, entry=ENTRY),                # never cast
+        make_event("object_create", 180.0, guid=GUID, entry=ENTRY),
+        make_event("ai_reaction", 200.0, guid=GUID, entry=ENTRY, reaction=2),
+        make_event("spell_go", 203.0, guid=GUID, entry=ENTRY, spell_id=28447),
+    ]
+    delay = findings_by_kind(run_analyzer(Behaviour(), events))["spell_initial_delay"].data
+    assert math.isclose(delay["value_min"], 3.0, abs_tol=0.001)
+    assert math.isclose(delay["value_max"], 3.0, abs_tol=0.001)
+    assert delay["samples"] == 1
+
+
 def test_a_single_repeat_interval_is_reported_but_not_trusted():
     """The honest failure: one interval cannot bound an authored min/max."""
     found = findings_by_kind(run_analyzer(Behaviour(), _session()))
