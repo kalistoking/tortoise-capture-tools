@@ -39,7 +39,8 @@ limitation-of-liability terms (AGPL-3.0 §§15–16).
 
 ## Status
 
-The module system works end to end. Twenty-three modules cover 47 opcodes:
+The module system works end to end. What it covers, in words — the count is
+`tct opcodes --coverage`, which reads the registry rather than this paragraph:
 the recording player's own path (the twenty-two `MSG_MOVE_*` the server routes
 to one handler — the only thing here read from the client's half of the
 conversation, and never a source for authored content),

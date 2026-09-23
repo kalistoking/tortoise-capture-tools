@@ -184,7 +184,8 @@ So the technical risk is low. The cost is time and attention, not uncertainty.
 
 The dominant activity in this project is still adding one opcode at a time
 through a TDD cycle: read the C++, write a failing test, decode, validate
-against a real capture, repeat. Coverage is 47 opcodes and still growing.
+against a real capture, repeat. Coverage is still growing — `tct opcodes
+--coverage` says by how much, and this document deliberately does not.
 
 That workflow is exactly where Python's fast edit-run loop pays and where
 Rust's compile step and type friction tax hardest. Rust's return on investment
