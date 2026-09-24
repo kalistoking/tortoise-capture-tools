@@ -11,8 +11,13 @@ saw":
   support is left out of the statement and listed under NOT DERIVED at the end,
   with the reason. A zero that means "unknown" is how bad data enters a
   database.
-- **Rows that already exist are reported, not overwritten.** The output is a
-  reviewable proposal a human applies, never something that runs itself.
+- **Rows that already exist are not overwritten.** Every row is proposed as an
+  INSERT, so one the database already holds fails on its key rather than
+  replacing what is there. Checking for them first, and proposing an UPDATE
+  instead, is not done yet: content new to the database -- the use this was
+  built for -- never meets one, and re-authoring what it already holds needs
+  a decision on what should win. The output is a reviewable proposal a human
+  applies, never something that runs itself.
 """
 
 from __future__ import annotations
