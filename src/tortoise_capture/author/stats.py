@@ -40,8 +40,9 @@ of it -- and an observed range can only be narrower than the authored one. They
 are therefore checked against the database spawn by spawn and reported, never
 proposed. Against this repository's templates the captured server differs a lot
 here: most vanilla creatures broadcast x1.1 their stored health *and* damage,
-some x1.17 to x1.24, Deer and Ralthas x1.0 -- a rebalanced database rather than
-a runtime rate, since no single rate skips Deer and scales Cow.
+some x1.17 to x1.24, Deer x1.0 -- a rebalanced database rather than a runtime
+rate, since no single rate skips Deer and scales Cow. (Ralthas matches too, but
+its template was itself authored from a capture, so it is no evidence either way.)
 
 Floats are written with nine significant digits, the IEEE guarantee for a
 float32 round trip, so a value that does get proposed lands in the column
