@@ -375,6 +375,35 @@ def test_a_spawn_created_slowed_is_reported():
     assert any("speed_run" in gap for gap in gaps)
 
 
+def _casting():
+    return _stats_events() + [make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=12544)]
+
+
+def test_a_template_with_its_own_spell_list_is_not_repointed():
+    """Defias Rogue Wizard's template points at spell list 4740. Proposing the
+    convention's 474 in its place is an UPDATE that succeeds and silently cuts
+    the creature off from every spell the capture did not happen to see."""
+    world = StubWorld(columns={("creature_template", "spell_list_id"): "4740"})
+    rows, gaps = author_rows(Stats(), _casting(), ENTRY, world=world)
+    assert "spell_list_id" not in rows[0].values
+    assert any("spell_list_id" in gap and "4740" in gap for gap in gaps)
+
+
+def test_a_spell_list_already_at_the_convention_is_confirmed_not_reported():
+    """Ralthas's migration already points it at list 62635, its own entry."""
+    world = StubWorld(columns={("creature_template", "spell_list_id"): str(ENTRY)})
+    rows, gaps = author_rows(Stats(), _casting(), ENTRY, world=world)
+    assert rows[0].values["spell_list_id"] == ENTRY
+    assert rows[0].provenance["spell_list_id"] == CONFIRMED
+    assert not any("spell_list_id" in gap for gap in gaps)
+
+
+def test_a_template_without_a_spell_list_gets_the_conventional_one():
+    world = StubWorld(columns={("creature_template", "spell_list_id"): "0"})
+    rows, _ = author_rows(Stats(), _casting(), ENTRY, world=world)
+    assert rows[0].values["spell_list_id"] == ENTRY
+
+
 class _Displays:
     def __init__(self, scales):
         self._scales = scales
