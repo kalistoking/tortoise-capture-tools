@@ -38,3 +38,8 @@ def test_a_file_laid_out_otherwise_is_refused_not_misread():
 
 def test_no_directory_configured_means_no_scales():
     assert dbc.display_scales(None) is None
+
+
+def test_a_truncated_file_is_refused_not_read_past_its_end():
+    content = _display_info([(11415, 0.85), (11382, 2.0)])
+    assert _scales_from(content[:-30]) is None

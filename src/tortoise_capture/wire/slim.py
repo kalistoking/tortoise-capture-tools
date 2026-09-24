@@ -155,7 +155,9 @@ def _tcp(data: bytes, frame: int, end: int, link: int) -> tuple | None:
     if end - ip < 20 or data[ip] >> 4 != 4 or data[ip + 9] != 6:
         return None
     total, = struct.unpack_from(">H", data, ip + 2)
-    tcp, stop = ip + (data[ip] & 0x0F) * 4, min(ip + total, end)
+    # Large-send offload leaves 0 here on some loopback captures; the frame's
+    # own captured length bounds it then.
+    tcp, stop = ip + (data[ip] & 0x0F) * 4, min(ip + total, end) if total else end
     if stop - tcp < 20:
         return None
     sport, dport, seq = struct.unpack_from(">HHI", data, tcp)

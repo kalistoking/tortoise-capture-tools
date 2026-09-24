@@ -55,6 +55,10 @@ def display_scales(dbc_dir: Path | None) -> DisplayScales | None:
         _logger.warning("%s is not laid out as the server reads it (%s, %d fields of "
                         "%d bytes); model scales not used", path, magic, fields, size)
         return None
+    if len(data) < _HEADER.size + records * size:
+        _logger.warning("%s is truncated: %d record(s) declared, %d byte(s) short; model "
+                        "scales not used", path, records, _HEADER.size + records * size - len(data))
+        return None
     scales = {}
     for record in range(_HEADER.size, _HEADER.size + records * size, size):
         display, = struct.unpack_from("<I", data, record)

@@ -161,3 +161,13 @@ def test_the_report_says_what_went_and_where_the_world_address_came_from():
 
 def test_the_slim_copy_sits_beside_the_original():
     assert slim.slim_name(Path("x/Death Prophet Rakameg.pcap")) == Path("x/Death Prophet Rakameg.wow.pcap")
+
+
+def test_a_segment_whose_ip_length_reads_zero_is_still_read():
+    """Large-send offload leaves an IP total length of 0 on some loopback
+    captures; the frame's own captured length is then what bounds it."""
+    frame = bytearray(_segment(LOCAL, 5001, LOCAL, 8090, 1, b"\x00\x04world"))
+    frame[4 + 2:4 + 4] = b"\x00\x00"
+    content = _pcap([(101.0, bytes(frame)), (101.1, _segment(LOCAL, 8090, LOCAL, 5001, 1, b"hi"))])
+    p = _plan(content, world=Endpoint(None, 8090))
+    assert p.keep == {0, 1}

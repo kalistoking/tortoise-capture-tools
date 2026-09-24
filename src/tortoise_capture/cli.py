@@ -172,9 +172,12 @@ def _decoded(session, key, registry, ctx) -> list[tuple]:
             for p in pipeline.packets(session, key, registry, ctx)]
 
 
-def _write_verified(plan: slim.SlimPlan, out: Path, session, key, registry, ctx) -> bool:
+def _write_verified(plan: slim.SlimPlan, out: Path, session, key, registry, ctx,
+                    failed=_logger.error) -> bool:
     """Writes the slim copy, and keeps it only if it decodes exactly as the
-    original does: the same session key, the same packet records, times included."""
+    original does: the same session key, the same packet records, times included.
+    `failed` reports a copy that does not; an error unless the copy was a
+    by-product of some other command."""
     partial = out.with_name(out.name + ".partial")
     slim.write(plan, partial)
     try:
@@ -183,9 +186,9 @@ def _write_verified(plan: slim.SlimPlan, out: Path, session, key, registry, ctx)
                     == crypt.recover_session_key(session.c2s.segments))
         original, slimmed = _decoded(session, key, registry, ctx), _decoded(copy, key, registry, ctx)
         if not same_key or original != slimmed:
-            _logger.error("the slim copy of %s does not decode as the original does "
-                          "(%d packet record(s) against %d); not kept",
-                          plan.source, len(slimmed), len(original))
+            failed("the slim copy of %s does not decode as the original does "
+                   "(%d packet record(s) against %d); not kept",
+                   plan.source, len(slimmed), len(original))
             partial.unlink()
             return False
         os.replace(partial, out)
@@ -199,7 +202,8 @@ def _write_verified(plan: slim.SlimPlan, out: Path, session, key, registry, ctx)
 
 def _slim_beside(capture: Path, session, key, cfg: RunConfig, registry, ctx, args) -> None:
     """Leaves a verified slim copy beside a capture that holds more than its WoW
-    conversation -- once, and never touching the original."""
+    conversation -- once, and never touching the original. The copy is a
+    by-product: nothing about it may cost the command its real work."""
     out = slim.slim_name(capture)
     if getattr(args, "no_slim", False) or capture.stem.endswith(".wow") or out.exists():
         return
@@ -208,10 +212,14 @@ def _slim_beside(capture: Path, session, key, cfg: RunConfig, registry, ctx, arg
     except slim.SlimError as exc:
         _logger.warning("not slimmed: %s", exc)
         return
-    if plan.has_foreign:
-        for line in slim.describe(plan):
-            _logger.info("%s", line)
-        _write_verified(plan, out, session, key, registry, ctx)
+    if not plan.has_foreign:
+        return
+    for line in slim.describe(plan):
+        _logger.info("%s", line)
+    try:
+        _write_verified(plan, out, session, key, registry, ctx, failed=_logger.warning)
+    except OSError as exc:
+        _logger.warning("slim copy not written beside %s: %s", capture, exc)
 
 
 # --------------------------------------------------------------------------
