@@ -65,12 +65,26 @@ def _provenance_comment(rows: Sequence[AuthoredRow]) -> list[str]:
 
 
 def _insert(table: str, rows: Sequence[AuthoredRow], dialect: str) -> list[str]:
-    columns = list(rows[0].values)
-    body = ",\n".join(
-        "(" + ", ".join(literal(row.values.get(c), dialect) for c in columns) + ")"
-        for row in rows)
-    header = ", ".join(f"`{c}`" for c in columns)
-    return [f"INSERT INTO `{table}`", f"({header})", "VALUES", body + ";"]
+    """One INSERT per distinct set of columns, in first-appearance order.
+
+    Rows of one table need not carry the same columns -- one spawn measured a
+    respawn, another did not -- and one column list for all of them either
+    drops a later row's extra value or writes NULL where a row has none, which
+    a NOT NULL column refuses. A row that leaves a column out gets the table's
+    own default, exactly as it would inserted alone.
+    """
+    groups: dict[frozenset[str], list[AuthoredRow]] = {}
+    for row in rows:
+        groups.setdefault(frozenset(row.values), []).append(row)
+    lines: list[str] = []
+    for grouped in groups.values():
+        columns = list(grouped[0].values)
+        body = ",\n".join(
+            "(" + ", ".join(literal(row.values[c], dialect) for c in columns) + ")"
+            for row in grouped)
+        header = ", ".join(f"`{c}`" for c in columns)
+        lines += [f"INSERT INTO `{table}`", f"({header})", "VALUES", body + ";"]
+    return lines
 
 
 def _update(table: str, row: AuthoredRow, dialect: str) -> list[str]:

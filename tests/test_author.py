@@ -537,6 +537,43 @@ def test_a_low_confidence_route_is_not_proposed():
     assert any("creature_movement" in gap and "combat" in gap for gap in gaps)
 
 
+_MOVEMENT_SCHEMA = {"creature": {"movement_type": 0, "wander_distance": 5}}
+
+
+def test_a_withheld_route_says_its_schema_zero_is_a_placeholder():
+    """With a database, the schema's movement_type 0 filled in for every route
+    tct withheld: 45 spawns across the three captures moved, were refused a
+    route, and were authored as standing still -- every one of them 1 or 2 in
+    the live database. An INSERT needs a value, so the 0 stays, labelled as
+    the table's own; what changes is that a gap says it would stop a patrol."""
+    events = [ev for ev in _spawn_events() if ev.kind != "patrol_route"] + [
+        make_event("patrol_route", 999.0, guid=GUID, entry=ENTRY, count=2,
+                   closes_loop=True, confident=False, refused_because="short"),
+    ]
+    rows, gaps = author_rows(Spawn(), events, ENTRY, world=StubWorld(schema=_MOVEMENT_SCHEMA))
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.provenance["movement_type"] == CONVENTION
+    assert any(gap.startswith("creature.movement_type") and "placeholder" in gap for gap in gaps)
+
+
+def test_a_creature_that_moved_without_a_route_is_not_called_stationary():
+    events = [_create(12.9, 100.0, 200.0)] + [
+        make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(100.0 + t, 200.0, 70.0))
+        for t in (20.0, 30.0, 40.0)]
+    _, gaps = author_rows(Spawn(), events, ENTRY, world=StubWorld(schema=_MOVEMENT_SCHEMA))
+    assert any(gap.startswith("creature.movement_type") and "3 hop(s)" in gap for gap in gaps)
+
+
+def test_a_creature_that_never_moved_keeps_the_schema_zero():
+    """128 of 128 spawns that never moved in the captures are 0 in the live
+    database, so the schema's default stays for them."""
+    rows, gaps = author_rows(Spawn(), [_create(12.9, 100.0, 200.0)], ENTRY,
+                             world=StubWorld(schema=_MOVEMENT_SCHEMA))
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["movement_type"] == 0
+    assert not any(gap.startswith("creature.movement_type") for gap in gaps)
+
+
 def test_a_refused_route_names_the_reason_it_was_refused():
     """A route refused for being watched too briefly must not blame combat.
 
@@ -971,6 +1008,27 @@ def test_confirmed_provenance_appears_in_the_summary_line():
         sql = path.read_text(encoding="utf-8")
 
     assert "confirmed" in sql and "no-op): dmg_min" in sql
+
+
+def test_rows_of_one_table_with_different_columns_neither_lose_values_nor_write_null():
+    """One spawn measured a respawn and another did not: the INSERT took its
+    columns from the first row alone, so the second spawn's spawntimesecs
+    vanished -- or, the other way round, a NOT NULL column got NULL, which a
+    strict server refuses, failing the whole migration."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "out.sql"
+        writer = MigrationWriter(path, capture_id="test", entry=ENTRY)
+        writer.add([
+            AuthoredRow(table="creature", values={"guid": 1, "id": ENTRY}),
+            AuthoredRow(table="creature", values={"guid": 2, "id": ENTRY,
+                                                  "spawntimesecsmin": 300}),
+        ])
+        writer.write()
+        sql = path.read_text(encoding="utf-8")
+
+    assert "NULL" not in sql
+    assert "300" in sql
+    assert sql.count("INSERT INTO `creature`") == 2
 
 
 def test_rows_group_by_their_own_table_in_first_appearance_order():

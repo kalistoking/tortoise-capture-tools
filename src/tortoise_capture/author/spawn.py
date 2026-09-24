@@ -75,6 +75,7 @@ class _Spawn:
     route: dict[str, Any] | None = None       # its patrol_route finding
     wander: dict[str, Any] | None = None      # its wander_area finding
     respawn: dict[str, Any] | None = None     # its respawn_timer finding
+    hops: int = 0                             # linear moves broadcast, any kind
 
     def sighting(self) -> tuple[tuple[float, ...], bool] | None:
         """The create that followed a death, else the earliest one seen."""
@@ -82,6 +83,10 @@ class _Spawn:
 
     def patrols(self) -> bool:
         return bool(self.waypoints) and bool((self.route or {}).get("confident", True))
+
+    def moved(self) -> int:
+        """Hops seen, counted here or by the route patrol.py built from them."""
+        return self.hops or (self.route or {}).get("hops") or len(self.waypoints)
 
 
 @author_rule(id="spawn", table="creature", order=60)
@@ -115,6 +120,9 @@ class Spawn(BaseAuthorRule):
         elif ev.kind == "patrol_route":
             if (spawn := self._of(ev)) is not None:
                 spawn.route = dict(ev.data)
+        elif ev.kind == "move_linear":
+            if (spawn := self._of(ev)) is not None:
+                spawn.hops += 1
         elif ev.kind == "wander_area":
             if (spawn := self._of(ev)) is not None:
                 spawn.wander = dict(ev.data)
@@ -283,6 +291,15 @@ class Spawn(BaseAuthorRule):
                      else f"creature_movement (spawn {guid & GUID_COUNTER_MASK})")
             if spawn.patrols() or spawn.wander:
                 continue
+            if spawn.moved():
+                # An INSERT needs a value, and the schema's 0 is the one known to
+                # be wrong: 185 of 186 spawns in the test captures that moved
+                # without a settled route are 1 or 2 in the live database.
+                row = table.replace("creature_movement", "creature", 1)
+                yield (f"{row}.movement_type -- it moved ({spawn.moved()} hop(s)) but how was "
+                       "not settled, so any 0 in the row is only the table's placeholder, "
+                       "right only if it stands still out of combat -- as 1 in 186 such "
+                       "spawns in the test captures did; set it by hand")
             if not spawn.waypoints:
                 yield (f"{table} -- no closed route was reconstructed; the creature may "
                        "be stationary, or the capture may be too short to see a full lap")
