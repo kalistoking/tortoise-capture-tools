@@ -1,7 +1,8 @@
 """creature_template: the combat stats a CREATE block broadcasts.
 
 Every value here is read straight out of `SMSG_UPDATE_OBJECT`'s field payload
-at first sighting -- no correlation, no reconstruction. The stats are broadcast
+at first sighting -- or, for walk and run speed, its movement block, over the
+server's base speeds -- with no correlation and no reconstruction. The stats are broadcast
 to every observer (this core has no per-viewer field masking), so a passive
 capture sees them exactly as the server does.
 
@@ -55,7 +56,9 @@ import struct
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
-from ..core.contracts import CONFIRMED, CONVENTION, WIRE, AuthorContext, AuthoredRow, Event
+from ..core.contracts import (
+    CONFIRMED, CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event,
+)
 from ..core.registry import author_rule
 from ..fields import values as fv
 
@@ -86,6 +89,17 @@ _CHECKED = {
 }
 _ROLLED = ("UNIT_FIELD_BASE_HEALTH", "UNIT_FIELD_BASE_MANA")
 
+# creature_template column -> (index in a CREATE's six speeds, base speed). The
+# server multiplies the template's rate into baseMoveSpeed (Unit.cpp:7671-7674,
+# :76-84): every one of 58 creature kinds in the test captures broadcasts exactly
+# that -- 299 spawns checked against a live tw_world, five custom kinds against
+# the migrations that author them.
+_SPEEDS = {"speed_walk": (0, 2.5), "speed_run": (1, 7.0)}
+
+
+def _shown(values: list) -> str:
+    return ", ".join(f"{v:g}" if isinstance(v, float) else str(v) for v in values)
+
 
 def _agrees(stored: float, observed: float) -> bool:
     scale = max(abs(stored), abs(observed), 1.0)
@@ -110,6 +124,7 @@ def _at_level(level: int, levels: tuple[int, int], stored: tuple[int, int]) -> i
 class Stats(BaseAuthorRule):
     def __init__(self) -> None:
         self._fields: dict[str, int] = {}
+        self._speeds: dict[str, float] = {}                 # column -> first CREATE's speed
         self._spawns: dict[int, dict[str, int]] = {}       # guid -> its own first CREATE
         self._disagreed: dict[str, set[tuple[int, int]]] = {}  # name -> (first, later)
         self._saw_spells = False
@@ -138,6 +153,13 @@ class Stats(BaseAuthorRule):
                     # and friends move between sightings by design (in combat,
                     # and so on) and say nothing about the stats being authored.
                     self._disagreed.setdefault(name, set()).add((first[name], field["raw"]))
+            speeds = (ev.data.get("movement") or {}).get("speeds")
+            for column, (index, _) in _SPEEDS.items() if speeds else ():
+                self._speeds.setdefault(column, speeds[index])
+                if column not in first:
+                    first[column] = speeds[index]
+                elif speeds[index] != first[column]:
+                    self._disagreed.setdefault(column, set()).add((first[column], speeds[index]))
         elif ev.kind == "spell_go":
             self._saw_spells = True
 
@@ -230,6 +252,17 @@ class Stats(BaseAuthorRule):
                 values[column] = observed
                 provenance[column] = WIRE
 
+        for column, (_, base) in _SPEEDS.items():
+            if column not in self._speeds:
+                continue
+            observed = self.wire_float(self._speeds[column] / base)
+            stored = self._confirmed_value(ctx, column, observed)
+            if stored is not None:
+                values[column], provenance[column] = stored, CONFIRMED
+                confirmed.append(column)
+            else:
+                values[column], provenance[column] = observed, DERIVED
+
         if "UNIT_FIELD_BYTES_0" in self._fields:
             unit_class = fv.bytes_0(self._fields["UNIT_FIELD_BYTES_0"])["class"]
             stored = self._confirmed_value(ctx, "unit_class", unit_class)
@@ -281,11 +314,11 @@ class Stats(BaseAuthorRule):
             yield from self._checked(ctx)
 
         for name, pairs in sorted(self._disagreed.items()):
-            column = _STATS.get(name) or _CHECKED[name][0]
+            column = _STATS.get(name) or _CHECKED.get(name, (name,))[0]
             firsts = sorted({first for first, _ in pairs})
             laters = sorted({later for _, later in pairs})
             yield (f"creature_template.{column} -- a later CREATE of the same spawn broadcast "
-                   f"{name} as {laters} where its first said {', '.join(map(str, firsts))}; "
+                   f"{name} as {_shown(laters)} where its first said {_shown(firsts)}; "
                    "the first sighting was used, but a creature whose stats move between "
                    "sightings was not in its authored state in at least one of them")
 

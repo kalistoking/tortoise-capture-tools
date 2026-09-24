@@ -342,6 +342,39 @@ def test_a_column_the_database_already_holds_is_restated_as_its_own_value():
     assert row.provenance["attack_power"] == CONFIRMED
 
 
+def _moving(t, run, guid=GUID):
+    """A CREATE carrying the six speeds: walk, run, run_back, swim, swim_back, turn."""
+    return make_event("object_create", t, guid=guid, entry=ENTRY,
+                      fields=_fields(UNIT_FIELD_ATTACK_POWER=44),
+                      movement={"speeds": (2.5, run, 4.5, 4.722222, 2.5, 3.141594)})
+
+
+def test_walk_and_run_speed_are_the_create_blocks_speeds_over_the_base():
+    """Unit.cpp:7671-7674 multiplies the template's rates into the base speeds
+    of Unit.cpp:76-84 (walk 2.5, run 7.0): Ralthas runs at 8.0, a speed_run of
+    1.14286. Every creature kind in the three captures broadcasts exactly that."""
+    rows, _ = author_rows(Stats(), [_moving(12.9, 8.0)], ENTRY)
+    row = rows[0]
+    assert abs(row.values["speed_walk"] - 1.0) < 1e-6
+    assert abs(row.values["speed_run"] - 1.14286) < 1e-5
+    assert row.provenance["speed_run"] == DERIVED
+
+
+def test_a_speed_the_database_already_holds_is_restated():
+    world = StubWorld(columns={("creature_template", "speed_walk"): "1",
+                               ("creature_template", "speed_run"): "1.14286"})
+    rows, _ = author_rows(Stats(), [_moving(12.9, 8.0)], ENTRY, world=world)
+    assert rows[0].provenance["speed_run"] == CONFIRMED
+    assert rows[0].values["speed_run"] == 1.14286
+
+
+def test_a_spawn_created_slowed_is_reported():
+    """A 30% slow turns 8.0 into 5.6; a spawn first seen under one would
+    author a creature that walks through life slowed."""
+    _, gaps = author_rows(Stats(), [_moving(12.9, 5.6), _moving(300.0, 8.0)], ENTRY)
+    assert any("speed_run" in gap for gap in gaps)
+
+
 class _Displays:
     def __init__(self, scales):
         self._scales = scales
