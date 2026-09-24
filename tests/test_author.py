@@ -292,9 +292,9 @@ def test_health_and_mana_are_checked_at_each_spawns_own_level():
 
 
 def test_health_off_the_template_at_its_level_is_reported_not_proposed():
-    """The repository's Prowler is 176-198; the captured server broadcasts 206
-    at level 9. The capture is the newer truth, but one spawn pins at most one
-    end of a range, so the evidence is reported for a human to author."""
+    """A database older than its migrations holds Prowler at 176-198, where the
+    wire says 206 at level 9. One spawn pins at most one end of a range, so the
+    contradiction is reported for a human to resolve, never proposed."""
     world = StubWorld(columns={**_WIZARD_TEMPLATE,
                                ("creature_template", "health_min"): "176",
                                ("creature_template", "health_max"): "198"})

@@ -38,11 +38,11 @@ falls in the range (the per-rank rates are 1 on this core, mangosd.conf.dist),
 so one spawn can confirm or contradict a stored range but pins at most one end
 of it -- and an observed range can only be narrower than the authored one. They
 are therefore checked against the database spawn by spawn and reported, never
-proposed. Against this repository's templates the captured server differs a lot
-here: most vanilla creatures broadcast x1.1 their stored health *and* damage,
-some x1.17 to x1.24, Deer x1.0 -- a rebalanced database rather than a runtime
-rate, since no single rate skips Deer and scales Cow. (Ralthas matches too, but
-its template was itself authored from a capture, so it is no evidence either way.)
+proposed. Against a fully migrated tw_world the check holds exactly: every
+spawn of all 58 creature kinds in the three test captures lands on its
+template's level range, health and mana at its own level. `sql/base` alone does
+not -- it predates the migration that replaces `creature_template` wholesale
+(20260510092659), and compared against it most creatures look x1.1 off.
 
 Floats are written with nine significant digits, the IEEE guarantee for a
 float32 round trip, so a value that does get proposed lands in the column
