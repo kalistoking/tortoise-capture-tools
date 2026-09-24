@@ -410,6 +410,17 @@ combat check stays; it catches a different cause. `single_visit_fraction` is
 still reported and no longer gates anything. Ralthas authors unchanged (51 rows
 / 4 gaps, all 41 waypoints); Rakameg is now refused on two independent counts.
 
+Refusing a wanderer's fake route only made it a gap, and for the commonest
+creature in the game a gap is most of the answer. So a route refused *because
+it is unordered* — watched long enough, outside combat — is now authored as
+what it is: `movement_type` 1, with `wander_distance` from the smallest circle
+round its destinations, rounded up, and the circle's centre as the spawn
+position. Against the server's spawn rows for the same capture: **19 of 19
+wanderers authored as `movement_type` 1 with the right `wander_distance`**,
+the home placed within 0.37 yd at the median (1.63 worst) where the first
+sighting it used to report was 4.53 yd off (10.93 worst), and no creature in
+the capture given a wrong movement type.
+
 Three other two-example assumptions came out of the same audit:
 
 - **`creature_equip_template` authored only slot 1 of 3.**

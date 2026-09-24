@@ -37,6 +37,7 @@ typed; see docs/feasibility-ralthas-pr.md.
 from __future__ import annotations
 
 import math
+import random
 from collections import Counter, defaultdict
 from typing import Any, Iterator, Mapping
 
@@ -72,6 +73,61 @@ MIN_TRANSITION_ORDER = 0.65
 # simulated, up to 30% of 10-20 hop observations inside 2-5 yards, under 1%
 # past 30 at every radius. Watching longer is what earns a verdict.
 MIN_HOPS_FOR_ORDER = 30
+
+
+# -- the smallest circle round a wanderer's destinations -------------------
+#
+# RandomMovementGenerator picks each destination around the creature's respawn
+# point, never farther than its wander_distance (Map.cpp GetWalkRandomPosition:
+# a radius drawn in [0, maxRadius], and a navmesh point pulled back to it). So
+# the true home is always a valid centre for a circle of radius
+# wander_distance, and the smallest enclosing circle can only be that small or
+# smaller: a lower bound that tightens as destinations reach the edge.
+
+def _circle_on(a, b):
+    centre = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+    return centre, math.dist(a, centre)
+
+
+def _circle_through(a, b, c):
+    (ax, ay), (bx, by), (cx, cy) = a, b, c
+    d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-12:
+        # Collinear: no circle passes through all three, and the smallest one
+        # holding them is the circle on the two that lie farthest apart.
+        return max((_circle_on(p, q) for p, q in ((a, b), (a, c), (b, c))), key=lambda t: t[1])
+    ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay)
+          + (cx * cx + cy * cy) * (ay - by)) / d
+    uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx)
+          + (cx * cx + cy * cy) * (bx - ax)) / d
+    return (ux, uy), math.dist((ux, uy), a)
+
+
+def _inside(circle, p) -> bool:
+    return math.dist(circle[0], p) <= circle[1] + 1e-7
+
+
+def enclosing_circle(points) -> tuple[tuple[float, float], float]:
+    """Smallest circle holding every (x, y): Welzl's incremental method.
+
+    Correct for any order of the points; the fixed shuffle is only what keeps
+    its expected cost linear and its answer repeatable.
+    """
+    pts = list(points)
+    random.Random(0).shuffle(pts)
+    circle = (pts[0], 0.0)
+    for i, p in enumerate(pts):
+        if _inside(circle, p):
+            continue
+        circle = (p, 0.0)
+        for j in range(i):
+            if _inside(circle, pts[j]):
+                continue
+            circle = _circle_on(p, pts[j])
+            for k in range(j):
+                if not _inside(circle, pts[k]):
+                    circle = _circle_through(p, pts[j], pts[k])
+    return circle
 
 _TABLE = TableSpec(
     name="capture_patrol_waypoint",
@@ -219,6 +275,8 @@ class Patrol(BaseAnalyzer):
                         "from {hops} hop(s)",
         "patrol_waypoint": "  point {point:>3}  ({position_x:11.4f}, {position_y:11.4f}, "
                            "{position_z:9.4f})  seen {observations}x",
+        "wander_area": "entry={entry:<7} wanders within {radius:.2f} yd of ({position_x:.2f}, "
+                       "{position_y:.2f}), from {hops} hop(s)",
     }
     sql_tables = (_TABLE,)
 
@@ -274,9 +332,20 @@ class Patrol(BaseAnalyzer):
             combat_fraction = route.combat_hop_fraction()
             single_visit = route.single_visit_fraction(order)
             ordered = route.transition_order()
-            confident = (combat_fraction <= MAX_COMBAT_HOP_FRACTION
-                         and len(route.labels) >= MIN_HOPS_FOR_ORDER
-                         and ordered is not None and ordered >= MIN_TRANSITION_ORDER)
+            # Why a route is not trusted, in the order the reasons dominate. Only
+            # "unordered" is positive evidence of anything: watched long enough,
+            # outside combat, and still going somewhere different from each point.
+            if combat_fraction > MAX_COMBAT_HOP_FRACTION:
+                refused = "combat"
+            elif len(route.labels) < MIN_HOPS_FOR_ORDER:
+                refused = "short"
+            elif ordered is None:
+                refused = "unrevisited"     # e.g. a long route seen for under a lap
+            elif ordered < MIN_TRANSITION_ORDER:
+                refused = "unordered"
+            else:
+                refused = None
+            confident = refused is None
             ctx.log.info("entry %s: %d waypoints from %d hops (%d cluster(s) seen, "
                          "%.0f%% during combat, order %s)",
                          route.entry, len(order), len(route.labels), len(route.clusters),
@@ -286,7 +355,20 @@ class Patrol(BaseAnalyzer):
                              closes_loop=getattr(route, "returns_to_start", False),
                              combat_hop_fraction=combat_fraction,
                              single_visit_fraction=single_visit,
-                             transition_order=ordered, confident=confident)
+                             transition_order=ordered, confident=confident,
+                             refused_because=refused)
+            if refused == "unordered":
+                points = [p for members in route.clusters for p in members]
+                (cx, cy), radius = enclosing_circle((p[0], p[1]) for p in points)
+                # The centre is a 2-D answer; its Z is the destination nearest to
+                # it, a real ground sample rather than an average that could hang
+                # in the air above a slope.
+                cz = min(points, key=lambda p: math.dist((p[0], p[1]), (cx, cy)))[2]
+                ctx.log.info("entry %s: wanders within %.2f yd of (%.2f, %.2f)",
+                             route.entry, radius, cx, cy)
+                yield self.event(route.last_packet, "wander_area", guid=guid, entry=route.entry,
+                                 position_x=cx, position_y=cy, position_z=cz,
+                                 radius=radius, hops=len(route.labels))
             for point, index in enumerate(order, start=1):
                 x, y, z = route.centre(index)
                 yield self.event(route.last_packet, "patrol_waypoint", guid=guid,

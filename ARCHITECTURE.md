@@ -797,6 +797,11 @@ wrong rather than harmless boilerplate:
   rather than left to the schema's default of `5`: the column has no reader
   at all for `WAYPOINT_MOTION_TYPE` (verified against `Creature.cpp`), so the
   default is inert but reads as a real value sitting next to `movement_type`.
+  For a random mover it is *derived*: the server draws every destination
+  within `wander_distance` of the spawn point (`Map.cpp`
+  `GetWalkRandomPosition`), so the smallest circle round the observed
+  destinations can only undershoot it, and is rounded up. Its centre replaces
+  the first sighting as the spawn position when no respawn was seen.
 
 Checked against the hand-authored PR this was validated on
 ([docs/feasibility-ralthas-pr.md](docs/feasibility-ralthas-pr.md)): 207 of 210

@@ -346,7 +346,7 @@ def test_a_low_confidence_route_is_not_proposed():
     already get from insufficient evidence."""
     events = [ev for ev in _spawn_events() if ev.kind != "patrol_route"] + [
         make_event("patrol_route", 999.0, guid=GUID, entry=ENTRY, count=2,
-                   closes_loop=True, confident=False),
+                   closes_loop=True, confident=False, refused_because="combat"),
     ]
     rows, gaps = author_rows(Spawn(), events, ENTRY)
     creature = next(r for r in rows if r.table == "creature")
@@ -354,6 +354,78 @@ def test_a_low_confidence_route_is_not_proposed():
     assert "wander_distance" not in creature.values
     assert not any(r.table == "creature_movement" for r in rows)
     assert any("creature_movement" in gap and "combat" in gap for gap in gaps)
+
+
+def test_a_refused_route_names_the_reason_it_was_refused():
+    """A route refused for being watched too briefly must not blame combat.
+
+    Every refusal used to be explained as combat, which was the only reason
+    when the explanation was written; the order gate added two more.
+    """
+    events = [ev for ev in _spawn_events() if ev.kind != "patrol_route"] + [
+        make_event("patrol_route", 999.0, guid=GUID, entry=ENTRY, count=2,
+                   closes_loop=True, confident=False, refused_because="short"),
+    ]
+    _, gaps = author_rows(Spawn(), events, ENTRY)
+    gap = next(g for g in gaps if g.startswith("creature_movement"))
+    assert "combat" not in gap
+    assert "30 hops" in gap
+
+
+def test_two_spawns_of_one_entry_are_two_rows_not_one_mixed_row():
+    """creature is one row per spawn, and a capture can see many of one entry.
+
+    Ralthas and Rakameg each existed once in the world, so a rule that kept
+    one guid, one position and one route per ENTRY never showed that it took
+    the guid from the last spawn seen and the position from the first. The
+    Elwynn capture saw five cows and twenty-seven Prowlers.
+    """
+    other = GUID + 1                                        # same entry, next spawn
+    events = [
+        _create(10.0, 100.0, 200.0),
+        make_event("object_create", 11.0, guid=other, entry=ENTRY,
+                   movement={"movement_info": {"pos": (300.0, 400.0, 70.0, 2.0)}}),
+    ]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creatures = {r.values["guid"]: r.values for r in rows if r.table == "creature"}
+    assert set(creatures) == {SPAWN_GUID, SPAWN_GUID + 1}
+    assert creatures[SPAWN_GUID]["position_x"] == 100.0
+    assert creatures[SPAWN_GUID + 1]["position_x"] == 300.0
+
+
+def test_a_wanderer_is_authored_as_a_random_mover():
+    """movement_type 1, and the area it wanders rather than where it was first seen."""
+    events = [
+        _create(12.9, 110.0, 205.0),               # first sighting: mid-wander
+        make_event("patrol_route", 999.0, guid=GUID, entry=ENTRY, count=6,
+                   closes_loop=False, confident=False, refused_because="unordered"),
+        make_event("wander_area", 999.0, guid=GUID, entry=ENTRY, position_x=100.0,
+                   position_y=200.0, position_z=70.0, radius=4.92, hops=81),
+    ]
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["movement_type"] == 1
+    assert creature.values["wander_distance"] == 5           # a radius just under 5, rounded up
+    assert creature.provenance["wander_distance"] == DERIVED
+    assert (creature.values["position_x"], creature.values["position_y"]) == (100.0, 200.0)
+    assert creature.provenance["position_x"] == DERIVED
+    assert not any(r.table == "creature_movement" for r in rows)
+    assert not any(g.startswith("creature_movement") for g in gaps)
+
+
+def test_a_respawn_still_beats_the_wander_centre_for_position():
+    """A create after a death is the home exactly; the centre is an estimate."""
+    events = [
+        _create(12.9, 110.0, 205.0),
+        make_event("party_kill", 50.0, guid=GUID, entry=ENTRY),
+        _create(80.0, 101.0, 199.0),                           # respawn, at home
+        make_event("wander_area", 999.0, guid=GUID, entry=ENTRY, position_x=100.0,
+                   position_y=200.0, position_z=70.0, radius=4.92, hops=81),
+    ]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["position_x"] == 101.0
+    assert creature.values["movement_type"] == 1
 
 
 def test_the_map_id_is_reported_as_missing_when_no_transfer_was_seen():

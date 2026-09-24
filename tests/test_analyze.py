@@ -128,6 +128,47 @@ def test_a_loop_watched_too_briefly_is_not_yet_confident():
     assert route.data["confident"] is False
 
 
+def test_a_confined_wander_is_reported_as_the_area_it_wanders():
+    """The smallest circle round a wanderer's destinations is its wander area.
+
+    Its radius cannot overshoot: the true home is always a valid centre, so the
+    smallest circle is never larger than wander_distance. Measured on 19 real
+    wanderers, it rounded up to the true value 19 of 19 times, and put the
+    home within 0.37 yd at the median where the first sighting was 4.53 yd off.
+    """
+    found = findings_by_kind(run_analyzer(Patrol(), _confined_wander()))
+    assert found["patrol_route"].data["refused_because"] == "unordered"
+    area = found["wander_area"].data
+    # _WANDER_POINTS are the corners and edge midpoints of a 6 x 3 rectangle
+    assert math.isclose(area["position_x"], 3.0, abs_tol=0.01)
+    assert math.isclose(area["position_y"], 1.5, abs_tol=0.01)
+    assert math.isclose(area["radius"], math.hypot(3.0, 1.5), abs_tol=0.01)
+
+
+def test_a_patrol_is_not_reported_as_a_wander_area():
+    found = findings_by_kind(run_analyzer(Patrol(), _hops(laps=10)))
+    assert "wander_area" not in found
+
+
+def test_a_route_watched_too_briefly_is_neither_patrol_nor_wander():
+    """Ten hops cannot tell order from luck, so they say nothing either way."""
+    found = findings_by_kind(run_analyzer(Patrol(), _hops(laps=2.5)))
+    assert found["patrol_route"].data["refused_because"] == "short"
+    assert "wander_area" not in found
+
+
+def test_combat_movement_is_neither_patrol_nor_wander():
+    """Rakameg's shape: hops that all happened inside a fight.
+
+    Repositioning around a player looks unordered too, and must not be
+    authored as a random mover -- the creature it came from stands still.
+    """
+    events = [make_event("ai_reaction", 0.5, guid=GUID, entry=ENTRY, reaction=2)]
+    found = findings_by_kind(run_analyzer(Patrol(), events + _confined_wander()))
+    assert found["patrol_route"].data["refused_because"] == "combat"
+    assert "wander_area" not in found
+
+
 def test_too_few_points_is_not_a_route():
     events = [make_event("move_linear", 1.0, guid=GUID, entry=ENTRY, dest=(0.0, 0.0, 0.0))]
     assert run_analyzer(Patrol(), events) == []
