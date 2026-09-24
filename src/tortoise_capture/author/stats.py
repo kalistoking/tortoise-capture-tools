@@ -28,8 +28,20 @@ no-op: applying it cannot introduce the ~3e-6 drift a straight round-trip of
 the broadcast value would. Without a database there is nothing to compare
 against, and the broadcast value is proposed with that caveat attached.
 
-Integers do not have this problem: level, attack power, unit class and the rest
-match the database exactly.
+Integers do not have this problem: attack power, unit class and the rest match
+the database exactly.
+
+**Level, health and mana are one spawn's roll, not the template.**
+`Creature::SelectLevel` (Creature.cpp:1576-1612) rolls each spawn's level from
+`level_min..level_max` and derives its health and mana from where that level
+falls in the range (the per-rank rates are 1 on this core, mangosd.conf.dist),
+so one spawn can confirm or contradict a stored range but pins at most one end
+of it -- and an observed range can only be narrower than the authored one. They
+are therefore checked against the database spawn by spawn and reported, never
+proposed. Against this repository's templates the captured server differs a lot
+here: most vanilla creatures broadcast x1.1 their stored health *and* damage,
+some x1.17 to x1.24, Deer and Ralthas x1.0 -- a rebalanced database rather than
+a runtime rate, since no single rate skips Deer and scales Cow.
 
 Floats are written with nine significant digits, the IEEE guarantee for a
 float32 round trip, so a value that does get proposed lands in the column
@@ -38,6 +50,7 @@ bit-identically to what came off the wire.
 
 from __future__ import annotations
 
+import struct
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
@@ -61,19 +74,36 @@ _STATS = {
     "UNIT_FIELD_RANGED_ATTACK_POWER": "ranged_attack_power",
 }
 
-# Broadcast, but a template's own business: proposed only on disagreement.
+# Broadcast per spawn, a template's own business: checked, never proposed.
+# The BASE_ fields are SelectLevel's own output, which auras never touch.
 _CHECKED = {
     "UNIT_FIELD_LEVEL": ("level_min", "level_max"),
-    "UNIT_FIELD_MAXHEALTH": ("health_min", "health_max"),
+    "UNIT_FIELD_BASE_HEALTH": ("health_min", "health_max"),
     "UNIT_FIELD_BASE_MANA": ("mana_min", "mana_max"),
 }
+_ROLLED = ("UNIT_FIELD_BASE_HEALTH", "UNIT_FIELD_BASE_MANA")
+
+
+def _f32(value: float) -> float:
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+def _at_level(level: int, levels: tuple[int, int], stored: tuple[int, int]) -> int:
+    """SelectLevel's health or mana for a spawn at `level`, in its float32
+    arithmetic -- at rate 1, the two share one formula."""
+    (lo, hi), (least, most) = levels, stored
+    if lo == hi:
+        return least
+    rellevel = _f32((level - lo) / (hi - lo))
+    return least + int(_f32(rellevel * (most - least)))
 
 
 @author_rule(id="stats", table="creature_template", order=50)
 class Stats(BaseAuthorRule):
     def __init__(self) -> None:
         self._fields: dict[str, int] = {}
-        self._disagreed: dict[str, set[int]] = {}
+        self._spawns: dict[int, dict[str, int]] = {}       # guid -> its own first CREATE
+        self._disagreed: dict[str, set[tuple[int, int]]] = {}  # name -> (first, later)
         self._saw_spells = False
 
     def handle(self, ev: Event, mod: Any = None) -> None:
@@ -83,17 +113,23 @@ class Stats(BaseAuthorRule):
             # only if the first sighting caught the creature unmodified, which
             # nothing here can guarantee -- so a later CREATE that disagrees is
             # kept and reported rather than dropped on the floor.
+            #
+            # "Later" means the same spawn's: each spawn rolls its own level
+            # from the template's range (Creature::SelectLevel), so two spawns
+            # of one entry disagreeing is the template, not a modified creature.
+            first = self._spawns.setdefault(ev.data.get("guid"), {})
             for field in ev.data.get("fields", ()):
                 name = field["name"]
                 if not name:
                     continue
-                if name not in self._fields:
-                    self._fields[name] = field["raw"]
-                elif field["raw"] != self._fields[name] and (name in _STATS or name in _CHECKED):
+                self._fields.setdefault(name, field["raw"])
+                if name not in first:
+                    first[name] = field["raw"]
+                elif field["raw"] != first[name] and (name in _STATS or name in _CHECKED):
                     # Only fields that feed an authored column: UNIT_FIELD_FLAGS
                     # and friends move between sightings by design (in combat,
                     # and so on) and say nothing about the stats being authored.
-                    self._disagreed.setdefault(name, set()).add(field["raw"])
+                    self._disagreed.setdefault(name, set()).add((first[name], field["raw"]))
         elif ev.kind == "spell_go":
             self._saw_spells = True
 
@@ -165,21 +201,18 @@ class Stats(BaseAuthorRule):
         if confirmed:
             notes.append("restated as the database's own value, a no-op -- already agreed "
                          "with the wire within drift tolerance: " + ", ".join(sorted(confirmed)))
+        levels = sorted({spawn["UNIT_FIELD_LEVEL"] for spawn in self._spawns.values()
+                         if "UNIT_FIELD_LEVEL" in spawn})
+        if len(levels) > 1:
+            spawned = sum("UNIT_FIELD_LEVEL" in spawn for spawn in self._spawns.values())
+            notes.append(f"UNIT_FIELD_LEVEL seen as {levels[0]}-{levels[-1]} across {spawned} "
+                         "spawns, each rolling its own; level_min/level_max span at least "
+                         "this, and are not proposed from it -- an observed range can only "
+                         "be narrower than the authored one")
         if ctx.world is None:
             notes.append("float stats are the server's computed broadcast values, which "
                          "drift ~3e-6 from the authored ones; no database was available to "
                          "compare against, so applying these would nudge the stored values")
-        for name, columns in _CHECKED.items():
-            if name not in self._fields or ctx.world is None:
-                continue
-            observed = self._fields[name]
-            current = ctx.world.column("creature_template", columns[0], f"entry = {ctx.entry}")
-            if current is not None and str(observed) != str(int(float(current))):
-                for column in columns:
-                    values[column] = observed
-                    provenance[column] = WIRE
-                notes.append(f"{columns[0]}/{columns[1]}: capture says {observed}, "
-                             f"database has {current}")
 
         if values:
             yield self.row(values, provenance, statement="update",
@@ -192,10 +225,50 @@ class Stats(BaseAuthorRule):
         elif ctx.world is None:
             yield ("creature_template level/health/mana not checked -- no database "
                    "configured to compare against")
+        else:
+            yield from self._checked(ctx)
 
-        for name, others in sorted(self._disagreed.items()):
+        for name, pairs in sorted(self._disagreed.items()):
             column = _STATS.get(name) or _CHECKED[name][0]
-            yield (f"creature_template.{column} -- a later CREATE for this entry broadcast "
-                   f"{name} as {sorted(others)} where the first said {self._fields[name]}; "
+            firsts = sorted({first for first, _ in pairs})
+            laters = sorted({later for _, later in pairs})
+            yield (f"creature_template.{column} -- a later CREATE of the same spawn broadcast "
+                   f"{name} as {laters} where its first said {', '.join(map(str, firsts))}; "
                    "the first sighting was used, but a creature whose stats move between "
                    "sightings was not in its authored state in at least one of them")
+
+    def _stored_range(self, ctx: AuthorContext, columns: tuple[str, str]) -> tuple[int, int] | None:
+        stored = [ctx.world.numeric_column("creature_template", column, f"entry = {ctx.entry}")
+                  for column in columns]
+        if None in stored:
+            return None
+        return tuple(sorted(int(value) for value in stored))
+
+    def _checked(self, ctx: AuthorContext) -> Iterator[str]:
+        """Each spawn's level, health and mana against the database's ranges."""
+        spawns = [spawn for spawn in self._spawns.values() if "UNIT_FIELD_LEVEL" in spawn]
+        levels = self._stored_range(ctx, _CHECKED["UNIT_FIELD_LEVEL"])
+        if not spawns or levels is None:
+            return
+        outside = sorted({spawn["UNIT_FIELD_LEVEL"] for spawn in spawns
+                          if not levels[0] <= spawn["UNIT_FIELD_LEVEL"] <= levels[1]})
+        if outside:
+            yield (f"creature_template.level_min/level_max -- spawns broadcast level "
+                   f"{outside}, outside the database's {levels[0]}-{levels[1]}; not "
+                   "proposed, an observed range can only be narrower than the authored one")
+            return      # health and mana follow the level: a wrong range checks neither
+
+        for name in _ROLLED:
+            columns = _CHECKED[name]
+            stored = self._stored_range(ctx, columns)
+            if stored is None:
+                continue
+            off = sorted({(spawn["UNIT_FIELD_LEVEL"], spawn[name]) for spawn in spawns
+                          if name in spawn
+                          and spawn[name] != _at_level(spawn["UNIT_FIELD_LEVEL"], levels, stored)})
+            if off:
+                seen = ", ".join(f"{value} at level {level}" for level, value in off)
+                yield (f"creature_template.{columns[0]}/{columns[1]} -- spawns broadcast "
+                       f"{name} {seen}, off the database's {stored[0]}-{stored[1]} over "
+                       f"levels {levels[0]}-{levels[1]}; not proposed, one spawn pins at "
+                       "most one end of the range")

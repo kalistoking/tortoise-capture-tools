@@ -207,6 +207,103 @@ def test_a_later_sighting_disagreeing_with_the_first_is_reported():
     assert abs(rows[0].values["dmg_min"] - 20.2119007) < 1e-6
 
 
+def test_two_spawns_rolling_different_levels_are_not_a_modified_creature():
+    """A level range is one template rolled per spawn, not a creature changing.
+
+    Prowler is level 9-10: across 28 spawns in the Elwynn capture, 15 were 9
+    and 13 were 10, with max health to match. Comparing one spawn's CREATE with
+    another's reported that as a creature "not in its authored state" -- no
+    spawn's own later CREATE ever disagreed with its own first. The range is
+    kept as evidence instead, and not proposed: an observed range can only be
+    narrower than the authored one, and proposing it would narrow a template
+    that a capture merely failed to see the ends of.
+    """
+    other = GUID + 1
+    events = [
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_LEVEL=9, UNIT_FIELD_MAXHEALTH=206, UNIT_FIELD_ATTACK_POWER=44)),
+        make_event("object_create", 13.1, guid=other, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_LEVEL=10, UNIT_FIELD_MAXHEALTH=231, UNIT_FIELD_ATTACK_POWER=44)),
+    ]
+    rows, gaps = author_rows(Stats(), events, ENTRY)
+    assert not any("later CREATE" in gap for gap in gaps)
+    assert any("9-10" in note and "2 spawns" in note for note in rows[0].notes)
+    assert "level_min" not in rows[0].values
+
+
+def test_a_disagreement_is_reported_against_its_own_spawns_first_sighting():
+    other = GUID + 1
+    events = _stats_events() + [
+        make_event("object_create", t, guid=other, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_MINDAMAGE=_float_bits(damage)))
+        for t, damage in ((20.0, 30.0), (40.0, 45.0))
+    ]
+    _, gaps = author_rows(Stats(), events, ENTRY)
+    gap = next(gap for gap in gaps if "dmg_min" in gap)
+    assert f"said {_float_bits(30.0)}" in gap
+
+
+def test_a_spawn_level_inside_the_database_range_is_agreement():
+    """A 9-10 template spawning at 10 is not a level_min of 10."""
+    world = StubWorld(columns={("creature_template", "level_min"): "9",
+                               ("creature_template", "level_max"): "10"})
+    events = [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+        UNIT_FIELD_LEVEL=10, UNIT_FIELD_ATTACK_POWER=44))]
+    rows, gaps = author_rows(Stats(), events, ENTRY, world=world)
+    assert "level_min" not in rows[0].values and "level_max" not in rows[0].values
+    assert not any("level" in note for note in rows[0].notes)
+    assert not any("level_min" in gap for gap in gaps)
+
+
+def test_a_spawn_level_outside_the_database_range_is_reported_not_proposed():
+    world = StubWorld(columns={("creature_template", "level_min"): "9",
+                               ("creature_template", "level_max"): "10"})
+    events = [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+        UNIT_FIELD_LEVEL=12, UNIT_FIELD_ATTACK_POWER=44))]
+    rows, gaps = author_rows(Stats(), events, ENTRY, world=world)
+    assert "level_min" not in rows[0].values
+    assert any("level_min" in gap and "12" in gap and "9-10" in gap for gap in gaps)
+
+
+def _wizard(level, health, mana):
+    return make_event("object_create", 12.9 + level, guid=GUID + level, entry=ENTRY,
+                      fields=_fields(UNIT_FIELD_LEVEL=level, UNIT_FIELD_BASE_HEALTH=health,
+                                     UNIT_FIELD_BASE_MANA=mana, UNIT_FIELD_ATTACK_POWER=44))
+
+
+# Defias Rogue Wizard as the Elwynn capture broadcasts it.
+_WIZARD_TEMPLATE = {("creature_template", "level_min"): "9",
+                    ("creature_template", "level_max"): "10",
+                    ("creature_template", "health_min"): "186",
+                    ("creature_template", "health_max"): "208",
+                    ("creature_template", "mana_min"): "350",
+                    ("creature_template", "mana_max"): "382"}
+
+
+def test_health_and_mana_are_checked_at_each_spawns_own_level():
+    """Level 9 spawns broadcast 186/350 and level 10 spawns 208/382: SelectLevel
+    derives both from where the rolled level falls in the template's range, so
+    neither end contradicts it -- a first spawn at 10 is not a health_min of 208."""
+    world = StubWorld(columns=_WIZARD_TEMPLATE)
+    events = [_wizard(10, 208, 382), _wizard(9, 186, 350)]
+    rows, gaps = author_rows(Stats(), events, ENTRY, world=world)
+    assert not {"health_min", "mana_min"} & set(rows[0].values)
+    assert not any("health" in gap or "mana" in gap for gap in gaps)
+
+
+def test_health_off_the_template_at_its_level_is_reported_not_proposed():
+    """The repository's Prowler is 176-198; the captured server broadcasts 206
+    at level 9. The capture is the newer truth, but one spawn pins at most one
+    end of a range, so the evidence is reported for a human to author."""
+    world = StubWorld(columns={**_WIZARD_TEMPLATE,
+                               ("creature_template", "health_min"): "176",
+                               ("creature_template", "health_max"): "198"})
+    rows, gaps = author_rows(Stats(), [_wizard(9, 206, 350)], ENTRY, world=world)
+    assert "health_min" not in rows[0].values
+    assert any("health_min" in gap and "206 at level 9" in gap for gap in gaps)
+    assert not any("mana" in gap for gap in gaps)
+
+
 def test_agreeing_sightings_say_nothing():
     events = _stats_events() + _stats_events()
     _, gaps = author_rows(Stats(), events, ENTRY)
