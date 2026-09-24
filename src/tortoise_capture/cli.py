@@ -344,7 +344,7 @@ def cmd_author(args, cfg: RunConfig) -> int:
                                  dialect=cfg.sql_dialect)
     author_ctx = AuthorContext(capture_id=stem, entry=args.entry,
                                log=_log.get_logger("author"), world=world,
-                               displays=displays)
+                               displays=displays, fields=tables.fields)
     for rule in rules:
         try:
             writer.add(rule.rows(author_ctx))

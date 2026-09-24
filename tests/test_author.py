@@ -765,6 +765,31 @@ def test_an_offhand_is_authored_too_not_silently_dropped():
     assert "equipentry3" not in rows[0].values          # empty slot stays unset
 
 
+class _FieldTable:
+    """The field table's indices for the two virtual-item fields, as in the fixtures."""
+
+    def index_of(self, name):
+        return {DISPLAY_FIELD: 0, INFO_FIELD: 10}.get(name)
+
+
+def test_a_creature_armed_only_with_a_bow_is_not_called_unarmed():
+    """Rallic Finn (1198) holds a bow and nothing else: equipentry3 5260, the
+    first two 0. A CREATE omits every zero field, so it carries no field named
+    UNIT_VIRTUAL_ITEM_DISPLAY at all -- only the unnamed third slot -- and the
+    slots were counted from a name that never arrived."""
+    world = StubWorld(displays={6233: 5260}, columns={
+        ("item_template", "class"): "2", ("item_template", "subclass"): "2",
+        ("item_template", "inventory_type"): "15"})
+    bow_info = 0x0F000202                          # class 2, subclass 2, inventory type 15
+    fields = [{"index": 2, "name": None, "raw": 6233}, {"index": 14, "name": None, "raw": bow_info}]
+    events = [make_event("object_create", t, guid=GUID, entry=ENTRY, fields=fields)
+              for t in (12.9, 300.0)]              # seen twice
+    rows, gaps = author_rows(Equipment(), events, ENTRY, world=world, fields=_FieldTable())
+    assert rows[0].values["equipentry3"] == 5260
+    assert rows[0].values["equipentry1"] == 0 and rows[0].provenance["equipentry1"] == WIRE
+    assert not any("unarmed" in gap for gap in gaps)
+
+
 def test_without_a_database_equipment_is_a_gap_not_a_guess():
     rows, gaps = author_rows(Equipment(), _equip_events(), ENTRY, world=None)
     assert rows == []

@@ -230,6 +230,7 @@ class AuthorContext:
     log: "logging.Logger"
     world: Any = None        # a read-only world database accessor, or None
     displays: Any = None     # the server's CreatureDisplayInfo.dbc model scales, or None
+    fields: Any = None       # the UpdateField table, for a field a CREATE did not carry
 
 
 @runtime_checkable

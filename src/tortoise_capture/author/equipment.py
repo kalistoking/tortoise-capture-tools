@@ -17,6 +17,12 @@ field spans -- so the second and third slots can only be read by offset, and
 are recognisable precisely by arriving unnamed. Reading slot one alone quietly
 dropped a shield or a bow, which neither creature validated so far happens to
 carry.
+
+The slots are counted from the field table's index, not from a name the CREATE
+happened to carry: a CREATE omits every zero field, so a creature holding only
+a bow carries no field named `UNIT_VIRTUAL_ITEM_DISPLAY` at all. Rallic Finn
+(1198) in the Elwynn capture is one, and was reported unarmed. The same
+omission makes an empty main hand a reading, not a guess: it is a 0.
 """
 
 from __future__ import annotations
@@ -42,63 +48,73 @@ def unpack_item_info(raw: int) -> dict[str, int]:
 @author_rule(id="equipment", table="creature_equip_template", order=40)
 class Equipment(BaseAuthorRule):
     def __init__(self) -> None:
-        self._display: int | None = None
-        self._info: int | None = None
-        self._extra: list[tuple[int, int, int | None]] = []   # (slot, display, info)
+        self._raw: dict[int, int] | None = None     # the first unit CREATE's fields, by index
+        self._named: dict[str, int] = {}             # name -> index, as that CREATE named them
         self._unresolved: str | None = None
         self._unresolved_extra: list[str] = []
 
     def handle(self, ev: Event, mod: Any = None) -> None:
-        if ev.kind != "object_create" or self._display is not None:
+        # First CREATE wins, as for every template column; later ones carry the same.
+        if (ev.kind != "object_create" or self._raw is not None
+                or not ev.data.get("named_ok", True) or not ev.data.get("fields")):
             return
-        fields = list(ev.data.get("fields", ()))
-        raw = {f["index"]: f["raw"] for f in fields}
-        named = {f["index"] for f in fields if f["name"]}
+        self._raw = {f["index"]: f["raw"] for f in ev.data["fields"]}
+        self._named = {f["name"]: f["index"] for f in ev.data["fields"] if f["name"]}
 
-        def slot(base: int | None, offset: int) -> int | None:
+    def _base(self, ctx: AuthorContext, name: str) -> int | None:
+        table = getattr(ctx, "fields", None)
+        index = table.index_of(name) if table is not None else None
+        return index if index is not None else self._named.get(name)
+
+    def _slots(self, ctx: AuthorContext) -> list[tuple[int, int, int | None]]:
+        """(slot, display, info) for every slot that broadcast an item."""
+        if not self._raw:
+            return []
+        named = set(self._named.values())
+
+        def read(base: int | None, offset: int) -> int | None:
             # A sub-slot always arrives unnamed; a named index at the offset is
             # a different field that merely sits next to this one.
             if base is None or (offset and base + offset in named):
                 return None
-            return raw.get(base + offset)
+            return self._raw.get(base + offset)
 
-        display_base = next((f["index"] for f in fields if f["name"] == DISPLAY_FIELD), None)
-        info_base = next((f["index"] for f in fields if f["name"] == INFO_FIELD), None)
-        self._display = slot(display_base, 0)
-        self._info = slot(info_base, 0)
-        for index in range(1, EQUIP_SLOTS):
-            found = slot(display_base, index)
-            if found:
-                self._extra.append((index + 1, found,
-                                    slot(info_base, index * INFO_WORDS_PER_SLOT)))
+        display_base, info_base = self._base(ctx, DISPLAY_FIELD), self._base(ctx, INFO_FIELD)
+        return [(index + 1, display, read(info_base, index * INFO_WORDS_PER_SLOT))
+                for index in range(EQUIP_SLOTS)
+                if (display := read(display_base, index))]
 
     def rows(self, ctx: AuthorContext) -> Iterator[AuthoredRow]:
-        if not self._display:
+        slots = self._slots(ctx)
+        if not slots:
             return
         if ctx.world is None:
             self._unresolved = ("no database configured, so display id "
-                                f"{self._display} could not be resolved to an item")
+                                f"{slots[0][1]} could not be resolved to an item")
             return
 
-        entry, notes, failure = self._resolve(ctx, self._display, self._info)
-        if entry is None:
-            self._unresolved = failure
-            return
-
-        values = {"entry": ctx.entry, "equipentry1": entry}
-        provenance = {"entry": WIRE, "equipentry1": LOOKUP}
+        values: dict[str, Any] = {"entry": ctx.entry}
+        provenance = {"entry": WIRE}
+        notes: list[str] = []
         skip = []
-        for slot, display, info in self._extra:
-            found, extra_notes, extra_failure = self._resolve(ctx, display, info)
+        if slots[0][0] != 1:
+            values["equipentry1"], provenance["equipentry1"] = 0, WIRE
+            notes.append("no main-hand item was broadcast; a CREATE carries every non-zero "
+                         "field, so its absence is a 0, not an unknown")
+        for slot, display, info in slots:
+            found, found_notes, failure = self._resolve(ctx, display, info)
             if found is None:
+                if slot == 1:
+                    self._unresolved = failure
+                    return
                 # A slot that broadcast an item but could not be resolved must
                 # not fall back to the schema's 0, which reads as "no item".
                 skip.append(f"equipentry{slot}")
-                self._unresolved_extra.append(f"equipentry{slot} -- {extra_failure}")
+                self._unresolved_extra.append(f"equipentry{slot} -- {failure}")
                 continue
             values[f"equipentry{slot}"] = found
             provenance[f"equipentry{slot}"] = LOOKUP
-            notes.extend(extra_notes)
+            notes.extend(found_notes)
         self.fill_schema_defaults(ctx, "creature_equip_template", values, provenance, notes,
                                   skip=skip)
         yield self.row(values, provenance, notes=tuple(notes))
@@ -136,6 +152,6 @@ class Equipment(BaseAuthorRule):
             yield f"creature_equip_template.{unresolved}"
         if self._unresolved:
             yield f"creature_equip_template.equipentry1 -- {self._unresolved}"
-        elif not self._display:
+        elif not self._slots(ctx):
             yield ("creature_equip_template -- no virtual item was broadcast; the creature "
                    "was unarmed, or no CREATE block was captured")

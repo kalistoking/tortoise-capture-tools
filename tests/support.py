@@ -122,12 +122,12 @@ class StubWorld:
         return self._schema.get(table, {})
 
 
-def author_rows(rule, events, entry: int, world=None, displays=None):
+def author_rows(rule, events, entry: int, world=None, displays=None, fields=None):
     """Feeds an authoring rule a stream and returns (rows, gaps)."""
     from tortoise_capture.core.contracts import AuthorContext
     from tortoise_capture.log import get_logger
     for ev in events:
         rule.handle(ev, None)
     ctx = AuthorContext(capture_id="test", entry=entry, log=get_logger("test"), world=world,
-                        displays=displays)
+                        displays=displays, fields=fields)
     return list(rule.rows(ctx)), list(rule.gaps(ctx))
