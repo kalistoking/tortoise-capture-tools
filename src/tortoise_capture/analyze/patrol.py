@@ -59,13 +59,19 @@ MIN_WAYPOINTS = 3            # fewer than this is not a route
 # rakameg-pr.md for the real capture that motivated this.
 MAX_COMBAT_HOP_FRACTION = 0.5
 
-# A patrol is defined by repetition, so a waypoint seen exactly once is a
-# destination, not a waypoint. Measured on both real captures: Ralthas's
-# genuine 41-point route has 0% single-visit points, Rakameg's fabricated one
-# 73%. This catches what MAX_COMBAT_HOP_FRACTION structurally cannot -- random
-# wandering happens out of combat, so its hops look peaceful while still
-# revisiting nothing.
-MAX_SINGLE_VISIT_FRACTION = 0.5
+# A patrol goes from A to B every time; a random mover goes somewhere different
+# each time it leaves a point. That is what this measures, and it replaced a
+# revisit count that a real capture proved blind: a wanderer confined to a few
+# yards revisits its points as surely as a patrol does, and the revisit gate
+# accepted 14 of 20 wanderers in Cow_Elwyn_Forest.pcap as patrols. Order,
+# measured on that capture against the server's own spawn rows: 9 real patrols
+# 0.82-1.00, 19 wanderers 0.30-0.48; Ralthas's route 0.99, Rakameg's 0.60.
+MIN_TRANSITION_ORDER = 0.65
+
+# Below this many hops a small random mover can look ordered by chance --
+# simulated, up to 30% of 10-20 hop observations inside 2-5 yards, under 1%
+# past 30 at every radius. Watching longer is what earns a verdict.
+MIN_HOPS_FOR_ORDER = 30
 
 _TABLE = TableSpec(
     name="capture_patrol_waypoint",
@@ -133,14 +139,34 @@ class _Route:
     def single_visit_fraction(self, order: list[int]) -> float:
         """Share of the walked waypoints that were only ever seen once.
 
-        Scoped to the waypoints actually proposed, not every cluster: a
-        one-off detour that the walk already excluded should not count
-        against the route it was excluded from.
+        Reported, no longer a gate: a real capture showed a wanderer confined
+        to a few yards scores 0% here exactly as a patrol does, and scoping it
+        to the walked waypoints made that worse, since the walk follows the
+        busiest clusters by construction. See transition_order().
         """
         if not order:
             return 0.0
         once = sum(1 for index in order if len(self.clusters[index]) == 1)
         return once / len(order)
+
+    def transition_order(self) -> float | None:
+        """How consistently each point is left for the same next point.
+
+        Counted only over points left at least twice: a point left once has one
+        successor, which is its commonest by definition, and says nothing about
+        order either way. None when no point has been left twice -- then there
+        is no evidence of order at all, which is not the same as evidence of
+        disorder.
+        """
+        successors: dict[int, Counter] = defaultdict(Counter)
+        for a, b in zip(self.labels, self.labels[1:]):
+            if a != b:
+                successors[a][b] += 1
+        revisited = [c for c in successors.values() if sum(c.values()) >= 2]
+        total = sum(sum(c.values()) for c in revisited)
+        if not total:
+            return None
+        return sum(max(c.values()) for c in revisited) / total
 
     def centre(self, index: int) -> tuple[float, float, float]:
         """Mean of every observation of a waypoint -- one lap's noise averaged out."""
@@ -247,17 +273,20 @@ class Patrol(BaseAnalyzer):
 
             combat_fraction = route.combat_hop_fraction()
             single_visit = route.single_visit_fraction(order)
+            ordered = route.transition_order()
             confident = (combat_fraction <= MAX_COMBAT_HOP_FRACTION
-                         and single_visit <= MAX_SINGLE_VISIT_FRACTION)
+                         and len(route.labels) >= MIN_HOPS_FOR_ORDER
+                         and ordered is not None and ordered >= MIN_TRANSITION_ORDER)
             ctx.log.info("entry %s: %d waypoints from %d hops (%d cluster(s) seen, "
-                         "%.0f%% during combat, %.0f%% seen once)",
-                         route.entry, len(order), len(route.labels),
-                         len(route.clusters), combat_fraction * 100, single_visit * 100)
+                         "%.0f%% during combat, order %s)",
+                         route.entry, len(order), len(route.labels), len(route.clusters),
+                         combat_fraction * 100, "-" if ordered is None else f"{ordered:.2f}")
             yield self.event(route.last_packet, "patrol_route", guid=guid, entry=route.entry,
                              count=len(order), hops=len(route.labels),
                              closes_loop=getattr(route, "returns_to_start", False),
                              combat_hop_fraction=combat_fraction,
-                             single_visit_fraction=single_visit, confident=confident)
+                             single_visit_fraction=single_visit,
+                             transition_order=ordered, confident=confident)
             for point, index in enumerate(order, start=1):
                 x, y, z = route.centre(index)
                 yield self.event(route.last_packet, "patrol_waypoint", guid=guid,

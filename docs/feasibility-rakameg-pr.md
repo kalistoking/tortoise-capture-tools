@@ -366,6 +366,50 @@ destination is new. `MAX_SINGLE_VISIT_FRACTION = 0.5` now gates
 existing verdicts (Ralthas confident, Rakameg refused), and the wanderer case
 is refused by a signal that does not depend on having seen one.
 
+**Corrected: that gate was wrong, and the first real wanderer proved it.** The
+paragraph above is kept because the correction only means something beside it.
+Its load-bearing sentence — *"random wandering lands near 100% single-visit by
+construction, since every destination is new"* — is false for the commonest
+shape in the game, and "a signal that does not depend on having seen one" is
+exactly what should have made it suspect.
+
+`Cow_Elwyn_Forest.pcap` was recorded for this: a stretch of east Elwynn watched
+for fifteen minutes without engaging anything. The server's own
+`sql/base/tw_world_creature.sql` says which of its creatures really patrol, so
+every route could be scored against the truth. **The revisit gate accepted 14
+of 20 random wanderers as patrols.** A wanderer confined to five yards does not
+keep finding new ground; it keeps landing on the same few spots, and the five
+cows scored 0% single-visit — identical to Ralthas. Scoping the fraction to the
+walked waypoints made it worse, because the walk follows the busiest clusters by
+construction.
+
+A simulation of the gate had predicted the failure before the recording, and
+underestimated it for that same reason. It also showed why it matters: 61% of
+all spawns in `tw_world` are random wanderers, and 58% of those wander within
+five yards.
+
+What separates a patrol from a wanderer is not revisits but **order** — from
+waypoint A a patrol goes to B every time, and a wanderer goes somewhere
+different. Counted only over points left at least twice, because a point left
+once has one successor and so looks perfectly ordered by definition:
+
+| | transition order |
+|---|---|
+| Ralthas (patrol, 276 hops) | **0.99** |
+| 9 real Prowler patrols in the Elwynn capture | **0.82 – 1.00** |
+| 19 real wanderers (cows and Prowlers) | **0.30 – 0.48** |
+| Rakameg (stationary, fabricated from combat) | **0.60** |
+
+**Fixed.** `patrol_route` is now confident only with transition order ≥ 0.65
+and at least 30 hops — below that a small random mover can look ordered by
+chance (simulated: up to 30% of 10–20 hop observations inside 2–5 yards, under
+1% past 30). Scored against the truth for every creature in the Elwynn capture:
+**0 of 19 wanderers accepted**, 8 of 11 real patrols accepted, and the 3 refused
+were each watched for fewer than 30 hops — a gap, never a fabricated route. The
+combat check stays; it catches a different cause. `single_visit_fraction` is
+still reported and no longer gates anything. Ralthas authors unchanged (51 rows
+/ 4 gaps, all 41 waypoints); Rakameg is now refused on two independent counts.
+
 Three other two-example assumptions came out of the same audit:
 
 - **`creature_equip_template` authored only slot 1 of 3.**

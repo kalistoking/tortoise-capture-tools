@@ -76,28 +76,56 @@ def test_combat_detours_do_not_enter_the_route():
     assert route.data["count"] == len(SQUARE)
 
 
-def test_a_wander_never_revisiting_a_point_is_not_a_confident_route():
-    """Random movement is out of combat, so the combat-hop check cannot see it.
+# A wanderer confined to a small area, the way a 5-yard random mover is: six
+# points it keeps coming back to, but never in the same order twice.
+_WANDER_POINTS = [(0.0, 0.0), (3.0, 0.0), (6.0, 0.0), (0.0, 3.0), (3.0, 3.0), (6.0, 3.0)]
+_WANDER_LAPS = [[0, 1, 2, 3, 4, 5], [3, 0, 4, 1, 5, 2], [5, 4, 3, 2, 1, 0],
+                [1, 3, 5, 0, 2, 4], [2, 5, 1, 4, 0, 3], [4, 2, 0, 5, 3, 1],
+                [0, 4, 2, 5, 1, 3], [3, 5, 4, 0, 1, 2]]
 
-    A patrol is defined by repetition: the real Ralthas route has 0% of its
-    waypoints seen exactly once, the fabricated Rakameg one 73%, and random
-    wandering lands near 100% by construction -- every destination is new.
-    """
+
+def _confined_wander():
     events, t = [], 1.0
-    for i in range(12):                      # twelve destinations, none repeated
-        events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY,
-                                 dest=(float(i * 20), float(i * 7), 10.0)))
-        t += 1.0
-    route = findings_by_kind(run_analyzer(Patrol(), events))["patrol_route"]
+    for lap in _WANDER_LAPS:
+        for i in lap:
+            x, y = _WANDER_POINTS[i]
+            events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(x, y, 10.0)))
+            t += 1.0
+    return events
+
+
+def test_a_confined_wander_revisits_its_points_but_in_no_order():
+    """The failure the cow capture proved, kept as the reason for the gate.
+
+    A random mover confined to a few yards DOES revisit its points -- the five
+    real cows in Cow_Elwyn_Forest.pcap had 0% single-visit waypoints, and the
+    revisit-count gate accepted all five as patrols. What it lacks is order:
+    from any one point it goes somewhere different each time. So the assertion
+    that carries the test is the second one -- the old measure is fooled here.
+    """
+    route = findings_by_kind(run_analyzer(Patrol(), _confined_wander()))["patrol_route"]
     assert route.data["confident"] is False
-    assert route.data["single_visit_fraction"] > 0.5
+    assert route.data["single_visit_fraction"] == 0.0          # what fooled the old gate
+    assert route.data["transition_order"] < 0.65
 
 
 def test_a_genuinely_walked_loop_stays_confident():
-    """The regression guard: repetition is exactly what a real route has."""
-    route = findings_by_kind(run_analyzer(Patrol(), _hops(laps=2.5)))["patrol_route"]
+    """The regression guard: a real patrol goes from A to B every time."""
+    route = findings_by_kind(run_analyzer(Patrol(), _hops(laps=10)))["patrol_route"]
     assert route.data["confident"] is True
-    assert route.data["single_visit_fraction"] == 0.0
+    assert route.data["transition_order"] == 1.0
+
+
+def test_a_loop_watched_too_briefly_is_not_yet_confident():
+    """Order needs watching long enough to show itself.
+
+    Simulated, a random mover within 2-5 yards looks ordered by chance in up to
+    30% of 10-20 hop observations and almost never past 30. So a perfect loop
+    seen for ten hops is refused: not because it is wrong, but because ten hops
+    cannot tell it from luck. Fewer confident routes, never a wrong one.
+    """
+    route = findings_by_kind(run_analyzer(Patrol(), _hops(laps=2.5)))["patrol_route"]
+    assert route.data["confident"] is False
 
 
 def test_too_few_points_is_not_a_route():
