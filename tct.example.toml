@@ -55,3 +55,10 @@ text_layout = "grouped"         # grouped | stream
 # port = 3306
 # user = "mangos"
 # world = "tw_world"
+
+# Optional, and only read alongside [database]: the target server's dbc
+# directory. A creature_template.scale of 0 means "the model's own scale",
+# which lives in CreatureDisplayInfo.dbc, not the database -- without it such
+# a scale is left out of the migration rather than checked.
+# [server]
+# dbc = "/path/to/server/data/dbc"

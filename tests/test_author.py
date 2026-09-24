@@ -342,6 +342,57 @@ def test_a_column_the_database_already_holds_is_restated_as_its_own_value():
     assert row.provenance["attack_power"] == CONFIRMED
 
 
+class _Displays:
+    def __init__(self, scales):
+        self._scales = scales
+
+    def scale(self, display_id):
+        return self._scales.get(display_id)
+
+
+def _scaled(scale):
+    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+        OBJECT_FIELD_SCALE_X=_float_bits(scale), UNIT_FIELD_ATTACK_POWER=44))]
+
+
+_MODEL_SCALED = {("creature_template", "scale"): "0",
+                 ("creature_template", "display_id1"): "11415"}
+
+
+def test_a_zero_scale_the_model_explains_is_restated_not_overwritten():
+    """Prowler stores scale 0 -- "the model's own" (ObjectMgr.cpp:1436) -- and
+    broadcasts 0.85, display 11415's scale in CreatureDisplayInfo.dbc.
+    Proposing the 0.85 pins a value the database deliberately leaves to the
+    model; 51 of the 58 creature kinds in the test captures store a 0."""
+    rows, _ = author_rows(Stats(), _scaled(0.85), ENTRY, world=StubWorld(columns=_MODEL_SCALED),
+                          displays=_Displays({11415: 0.85}))
+    row = rows[0]
+    assert row.values["scale"] == 0 and row.provenance["scale"] == CONFIRMED
+    assert any("11415" in note and "0.85" in note for note in row.notes)
+
+
+def test_a_zero_scale_the_wire_contradicts_is_proposed():
+    rows, _ = author_rows(Stats(), _scaled(1.2), ENTRY, world=StubWorld(columns=_MODEL_SCALED),
+                          displays=_Displays({11415: 0.85}))
+    assert abs(rows[0].values["scale"] - 1.2) < 1e-6 and rows[0].provenance["scale"] == WIRE
+
+
+def test_a_zero_scale_resolves_through_the_first_display_the_dbc_knows():
+    """ObjectMgr.cpp:1295-1306 skips a display id the DBC lacks."""
+    world = StubWorld(columns={("creature_template", "scale"): "0",
+                               ("creature_template", "display_id1"): "999",
+                               ("creature_template", "display_id2"): "11415"})
+    rows, _ = author_rows(Stats(), _scaled(0.85), ENTRY, world=world,
+                          displays=_Displays({11415: 0.85}))
+    assert rows[0].provenance["scale"] == CONFIRMED
+
+
+def test_a_zero_scale_is_left_alone_without_the_dbc():
+    rows, _ = author_rows(Stats(), _scaled(0.85), ENTRY, world=StubWorld(columns=_MODEL_SCALED))
+    assert "scale" not in rows[0].values
+    assert any("CreatureDisplayInfo.dbc" in note for note in rows[0].notes)
+
+
 def test_a_genuinely_different_value_is_still_proposed():
     world = StubWorld(columns={("creature_template", "attack_power"): "10"})
     rows, _ = author_rows(Stats(), _stats_events(), ENTRY, world=world)

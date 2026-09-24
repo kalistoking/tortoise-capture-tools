@@ -26,6 +26,9 @@ update_object = "debug"
 
 [output]
 sql_dialect = "sqlite"
+
+[server]
+dbc = "C:/server/data/dbc"
 """
 
 
@@ -72,6 +75,11 @@ def test_config_file_is_picked_up_from_the_working_directory():
     assert cfg.log_level == "warn" and cfg.file_log_level == "debug"
     assert cfg.module_levels == {"update_object": "debug"}
     assert cfg.sql_dialect == "sqlite"
+    assert cfg.dbc_dir == Path("C:/server/data/dbc")
+
+
+def test_the_server_dbc_directory_is_optional():
+    assert _in_dir(lambda _: RunConfig.resolve(Args())).dbc_dir is None
 
 
 def test_precedence_is_file_then_environment_then_flag():

@@ -823,6 +823,13 @@ Every lookup that can be cross-checked is: the item resolved from
 packed into `UNIT_VIRTUAL_ITEM_INFO`, and a disagreement withholds the row
 rather than guessing between two answers.
 
+One value the database defers rather than holds: a `creature_template.scale`
+of 0 is "the model's own", filled in at load from `CreatureDisplayInfo.dbc`
+(ObjectMgr.cpp:1436-1443), and the world database's `creaturedisplayinfo`
+table is empty. `dbc.py` reads that one file from the server's dbc directory
+(`[server] dbc`), checking its layout against DBCfmt.h rather than assuming
+it, so a stored 0 the model explains is restated instead of pinned over.
+
 Without a database the command still runs; the lookups become gaps.
 
 ### 17.5 Not every fact is about a creature

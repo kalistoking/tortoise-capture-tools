@@ -229,6 +229,7 @@ class AuthorContext:
     entry: int
     log: "logging.Logger"
     world: Any = None        # a read-only world database accessor, or None
+    displays: Any = None     # the server's CreatureDisplayInfo.dbc model scales, or None
 
 
 @runtime_checkable

@@ -149,7 +149,10 @@ An optional `[database]` section points `tct author` at a read-only world
 database for the things that need one: resolving an item's display id to its
 entry, confirming a value before proposing to change it, and reading a target
 table's own column defaults so the output matches its full width. The password
-is not a config key — set `TCT_DB_PASSWORD` instead.
+is not a config key — set `TCT_DB_PASSWORD` instead. Alongside it, an optional
+`[server] dbc` points at the target server's dbc directory: a stored
+`creature_template.scale` of 0 means "the model's own scale", which only
+`CreatureDisplayInfo.dbc` knows.
 
 `tct.toml` is git-ignored (machine-specific paths); `tct.example.toml` is
 versioned and documents every key.

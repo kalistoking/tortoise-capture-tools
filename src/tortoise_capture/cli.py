@@ -22,7 +22,7 @@ from .config import CONFIG_NAME, RunConfig
 from .core import pipeline, registry as registry_mod
 from .core.contracts import AuthorContext, DecodeContext, Tables
 from .core.dispatch import Filters, Runner
-from . import world as world_db
+from . import dbc, world as world_db
 from .emit import jsonl as jsonl_emit
 from .emit.author_json import AuthorJsonWriter, author_json_name
 from .emit.migration import MigrationWriter, migration_name
@@ -237,6 +237,8 @@ def cmd_author(args, cfg: RunConfig) -> int:
         return EXIT_WITH_ERRORS
 
     world = None if args.no_db else world_db.from_config(cfg.database)
+    # Only a database's stored scale of 0 needs the model's, so no database, no read.
+    displays = dbc.display_scales(cfg.dbc_dir) if world is not None else None
     rules = registry_mod.load_author_rules().all()
     analyzers = registry_mod.load_analyzers().all()
 
@@ -252,7 +254,8 @@ def cmd_author(args, cfg: RunConfig) -> int:
         writer = MigrationWriter(out_path, capture_id=stem, entry=args.entry,
                                  dialect=cfg.sql_dialect)
     author_ctx = AuthorContext(capture_id=stem, entry=args.entry,
-                               log=_log.get_logger("author"), world=world)
+                               log=_log.get_logger("author"), world=world,
+                               displays=displays)
     for rule in rules:
         try:
             writer.add(rule.rows(author_ctx))

@@ -50,6 +50,8 @@ SCHEMA: dict[str, dict[str, str]] = {
     # stays safe to share.
     "database": {"client": "db_client", "host": "db_host", "port": "db_port",
                  "user": "db_user", "world": "db_world"},
+    # The target server's own client data, for what the database defers to it.
+    "server": {"dbc": "dbc_dir"},
 }
 
 _DEFAULTS: dict[str, Any] = {
@@ -70,6 +72,7 @@ _DEFAULTS: dict[str, Any] = {
     "db_port": 3306,
     "db_user": "mangos",
     "db_world": "tw_world",
+    "dbc_dir": None,
 }
 
 
@@ -87,6 +90,7 @@ class RunConfig:
     sql_dialect: str
     text_layout: str
     database: dict[str, Any]
+    dbc_dir: Path | None = None      # the server's data/dbc; None -> model scales unchecked
     quiet: bool = False
     source: Path | None = None       # the config file actually used
     issues: tuple[tuple[str, str], ...] = field(default_factory=tuple)
@@ -129,6 +133,7 @@ class RunConfig:
             database={"client": values["db_client"], "host": values["db_host"],
                       "port": values["db_port"], "user": values["db_user"],
                       "world": values["db_world"]},
+            dbc_dir=Path(values["dbc_dir"]) if values["dbc_dir"] else None,
             quiet=bool(getattr(args, "key_only", False)),
             source=path,
             issues=tuple(issues),

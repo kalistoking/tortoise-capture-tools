@@ -64,6 +64,8 @@ from ..fields import values as fv
 # authoring change is orders of magnitude larger, so this sits well between.
 AGREEMENT_TOLERANCE = 1e-4
 
+DEFAULT_OBJECT_SCALE = 1.0      # what a scale of 0 falls back to without a model (ObjectMgr.cpp:1442)
+
 # UpdateField name -> creature_template column.
 _STATS = {
     "OBJECT_FIELD_SCALE_X": "scale",
@@ -83,6 +85,11 @@ _CHECKED = {
     "UNIT_FIELD_BASE_MANA": ("mana_min", "mana_max"),
 }
 _ROLLED = ("UNIT_FIELD_BASE_HEALTH", "UNIT_FIELD_BASE_MANA")
+
+
+def _agrees(stored: float, observed: float) -> bool:
+    scale = max(abs(stored), abs(observed), 1.0)
+    return abs(stored - observed) / scale <= AGREEMENT_TOLERANCE
 
 
 def _f32(value: float) -> float:
@@ -155,23 +162,65 @@ class Stats(BaseAuthorRule):
         if stored_value is None:
             return None
         if isinstance(observed, float):
-            scale = max(abs(stored_value), abs(observed), 1.0)
-            if abs(stored_value - observed) / scale > AGREEMENT_TOLERANCE:
-                return None
-            return self.wire_float(stored_value)
+            return self.wire_float(stored_value) if _agrees(stored_value, observed) else None
         if stored_value != float(observed):
             return None
         return int(round(stored_value))
+
+    def _zero_scale(self, ctx: AuthorContext,
+                    observed: float) -> tuple[float | None, str | None, str] | None:
+        """A stored scale of 0 is not a scale but "the model's own": at load
+        the server gives it the scale of the first of the template's display
+        ids that CreatureDisplayInfo.dbc knows, else 1 (ObjectMgr.cpp:1295-1306,
+        1436-1443). The wire carries that resolution, so it is checked against
+        the model, and a 0 it agrees with is restated, never pinned over.
+
+        None when the stored scale is not 0 and the ordinary comparison
+        applies; otherwise (value, provenance, note), value None to leave the
+        column out.
+        """
+        if ctx.world is None:
+            return None
+        where = f"entry = {ctx.entry}"
+        stored = ctx.world.numeric_column("creature_template", "scale", where)
+        if stored is None or stored > 0:
+            return None
+        if ctx.displays is None:
+            return None, None, (f"scale left out: the database stores {stored:g}, the model's "
+                                "own scale, and no CreatureDisplayInfo.dbc was configured to "
+                                f"check the wire's {observed:g} against")
+
+        model = DEFAULT_OBJECT_SCALE
+        source = "no display id of the template is in CreatureDisplayInfo.dbc, so the default"
+        for slot in range(1, 5):
+            display = ctx.world.numeric_column("creature_template", f"display_id{slot}", where)
+            if display and (found := ctx.displays.scale(int(display))) is not None:
+                model = found
+                source = f"display {int(display)} is {found:g} in CreatureDisplayInfo.dbc"
+                break
+        if _agrees(model, observed):
+            return self.wire_float(stored), CONFIRMED, (
+                f"scale {stored:g} is the model's own, as the wire says: {source}")
+        return observed, WIRE, (f"scale: the database's {stored:g} resolves to {model:g} "
+                                f"({source}), the wire says {observed:g}")
 
     def rows(self, ctx: AuthorContext) -> Iterator[AuthoredRow]:
         values: dict[str, Any] = {}
         provenance: dict[str, str] = {}
         confirmed: list[str] = []
+        scale_note = None
 
         for name, column in _STATS.items():
             if name not in self._fields:
                 continue
             observed = self._typed(name)
+            if column == "scale" and (zero := self._zero_scale(ctx, observed)) is not None:
+                value, source, scale_note = zero
+                if value is not None:
+                    values[column], provenance[column] = value, source
+                    if source == CONFIRMED:
+                        confirmed.append(column)
+                continue
             stored = self._confirmed_value(ctx, column, observed)
             if stored is not None:
                 values[column] = stored
@@ -202,6 +251,8 @@ class Stats(BaseAuthorRule):
         if confirmed:
             notes.append("restated as the database's own value, a no-op -- already agreed "
                          "with the wire within drift tolerance: " + ", ".join(sorted(confirmed)))
+        if scale_note:
+            notes.append(scale_note)
         levels = sorted({spawn["UNIT_FIELD_LEVEL"] for spawn in self._spawns.values()
                          if "UNIT_FIELD_LEVEL" in spawn})
         if len(levels) > 1:
