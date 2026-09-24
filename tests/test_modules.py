@@ -16,6 +16,7 @@ from tortoise_capture.modules.messagechat import MessageChat
 from tortoise_capture.modules.monster_move import MonsterMove, unpack_offset
 from tortoise_capture.modules.party_kill import PartyKill
 from tortoise_capture.modules.spell_go import SpellGo
+from tortoise_capture.modules.spline_speed import SplineSpeed
 from tortoise_capture.modules.update_object import UpdateObject
 
 ENTRY = 62635
@@ -1121,3 +1122,34 @@ def test_movement_flags_that_add_payload_are_still_read():
                       name="MSG_MOVE_START_FORWARD", direction=Direction.C2S)
     ev = decode_one(PlayerMove(), pkt, make_ctx(make_tables()))
     assert ev.data["fall_time"] == 99
+
+
+# --------------------------------------------------------------------------
+# SMSG_SPLINE_SET_*_SPEED / SMSG_SPLINE_MOVE_SET_*_MODE: a server-moved unit's pace
+# --------------------------------------------------------------------------
+
+def test_a_spline_speed_change_reads_the_unit_and_its_speed():
+    """MovementPacketSender.cpp:126-131: packguid, then rate x base -- the
+    speed itself, not the rate. Ralthas broadcasts 8.0, 7.0 x speed_run 1.14286."""
+    body = pack_guid(GUID) + struct.pack("<f", 8.0)
+    ev = decode_one(SplineSpeed(), make_packet(0x2FE, body, "SMSG_SPLINE_SET_RUN_SPEED"), make_ctx())
+    assert ev.kind == "speed_change" and ev.data["entry"] == ENTRY and ev.data["guid"] == GUID
+    assert ev.data["move_type"] == "run" and ev.data["speed"] == 8.0
+
+
+def test_each_spline_speed_opcode_names_its_own_movement():
+    names = {0x2FF: "SMSG_SPLINE_SET_RUN_BACK_SPEED", 0x300: "SMSG_SPLINE_SET_SWIM_SPEED",
+             0x301: "SMSG_SPLINE_SET_WALK_SPEED", 0x302: "SMSG_SPLINE_SET_SWIM_BACK_SPEED",
+             0x303: "SMSG_SPLINE_SET_TURN_RATE"}
+    body = pack_guid(GUID) + struct.pack("<f", 1.0)
+    seen = {decode_one(SplineSpeed(), make_packet(op, body, name), make_ctx()).data["move_type"]
+            for op, name in names.items()}
+    assert seen == {"run_back", "swim", "walk", "swim_back", "turn_rate"}
+
+
+def test_a_walk_or_run_mode_switch_carries_only_the_unit():
+    """Unit.cpp:11487: a 9-byte packet, the packguid alone."""
+    for op, name, mode in ((0x30E, "SMSG_SPLINE_MOVE_SET_WALK_MODE", "walk"),
+                           (0x30D, "SMSG_SPLINE_MOVE_SET_RUN_MODE", "run")):
+        ev = decode_one(SplineSpeed(), make_packet(op, pack_guid(GUID), name), make_ctx())
+        assert ev.kind == "move_mode" and ev.data["mode"] == mode and ev.data["entry"] == ENTRY
