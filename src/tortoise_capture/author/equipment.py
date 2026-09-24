@@ -7,7 +7,10 @@ database as an input rather than as something to check against afterwards.
 The lookup checks itself. `UNIT_VIRTUAL_ITEM_INFO` packs the item's class,
 subclass and inventory type into the next slot, and those must match the
 `item_template` row the display id resolved to. Two independent paths to the
-same item: if they disagree, the lookup is wrong and the row is withheld.
+same item: if they disagree, the lookup is wrong and the row is withheld. The
+same word settles a display several items share, when exactly one of them fits
+it -- 2 of the 8 shared displays in the test captures, both matching the live
+database; the other 6 are items identical in all three, and are left unguessed.
 
 There are three slots, not one: `UNIT_VIRTUAL_ITEM_DISPLAY` is Size:3 and
 `UNIT_VIRTUAL_ITEM_INFO` Size:6 (`UpdateFields.h:95-96`), mainhand, offhand
@@ -121,31 +124,46 @@ class Equipment(BaseAuthorRule):
 
     def _resolve(self, ctx: AuthorContext, display: int,
                  info: int | None) -> tuple[int | None, list[str], str | None]:
-        """One slot's display id to an item entry, cross-checked against its info word."""
-        entry = ctx.world.item_entry_for_display(display)
-        if entry is None:
-            return None, [], (f"display id {display} did not resolve to exactly one "
-                              "item_template row")
+        """One slot's display id to an item entry, settled by its info word.
 
-        notes = [f"item {entry} resolved from {DISPLAY_FIELD} = {display}"]
+        The info word packs the class, subclass and inventory type of the item
+        itself, so it is a second, independent path to it: it cross-checks a
+        display only one item wears, and it settles a display several items
+        share -- when exactly one of them fits. When none or several fit, the
+        slot is left to a human with the candidates named.
+        """
+        items = ctx.world.items_for_display(display)
+        if not items:
+            return None, [], f"display id {display} matches no item_template row"
         if info is None:
-            return entry, notes, None
+            if len(items) == 1:
+                return items[0][0], [f"item {items[0][0]} resolved from {DISPLAY_FIELD} = "
+                                     f"{display}"], None
+            return None, [], (f"display id {display} matches {len(items)} items "
+                              f"({', '.join(str(i[0]) for i in items)}) and no "
+                              f"{INFO_FIELD} was broadcast to tell them apart")
 
         packed = unpack_item_info(info)
-        checks = {"class": packed["class"], "subclass": packed["subclass"],
-                  "inventory_type": packed["inventory_type"]}
-        mismatched = []
-        for column, expected in checks.items():
-            actual = ctx.world.column("item_template", column, f"entry = {entry}")
-            if actual is not None and int(actual) != expected:
-                mismatched.append(f"{column} {actual} != {expected} on the wire")
-        if mismatched:
-            return None, [], (f"display id {display} resolved to item {entry}, but "
-                              f"{INFO_FIELD} disagrees ({'; '.join(mismatched)}) -- "
-                              "withheld rather than guess")
-        notes.append(f"cross-checked against {INFO_FIELD}: class, subclass and "
-                     "inventory type all match")
-        return entry, notes, None
+        wire = (packed["class"], packed["subclass"], packed["inventory_type"])
+        fitting = [item[0] for item in items if tuple(item[1:]) == wire]
+        if len(items) == 1:
+            if not fitting:
+                return None, [], (f"display id {display} resolved to item {items[0][0]}, but "
+                                  f"{INFO_FIELD} disagrees (class/subclass/inventory type "
+                                  f"{'/'.join(map(str, items[0][1:]))} != "
+                                  f"{'/'.join(map(str, wire))} on the wire) -- withheld "
+                                  "rather than guess")
+            return fitting[0], [f"item {fitting[0]} resolved from {DISPLAY_FIELD} = {display}",
+                                f"cross-checked against {INFO_FIELD}: class, subclass and "
+                                "inventory type all match"], None
+        if len(fitting) == 1:
+            return fitting[0], [f"item {fitting[0]}: {DISPLAY_FIELD} = {display} matches "
+                                f"{len(items)} items, and only this one has the class, subclass "
+                                f"and inventory type {INFO_FIELD} packs"], None
+        named = ", ".join(str(e) for e in (fitting or [i[0] for i in items]))
+        return None, [], (f"display id {display} matches {len(items)} items, and "
+                          f"{len(fitting)} of them fit {INFO_FIELD}'s class, subclass and "
+                          f"inventory type ({named}) -- not guessing which")
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
         for unresolved in self._unresolved_extra:

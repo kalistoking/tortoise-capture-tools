@@ -89,23 +89,16 @@ class World:
 
     # -- the lookups authoring needs ---------------------------------------
 
-    def item_entry_for_display(self, display_id: int) -> int | None:
-        """The item whose display id the creature was seen wearing.
+    def items_for_display(self, display_id: int) -> list[tuple[int, int, int, int]]:
+        """(entry, class, subclass, inventory_type) of every item wearing a display.
 
-        Ambiguity is possible in principle -- several items can share a display
-        -- so a non-unique answer is reported rather than silently taking the
-        first, which would put a plausible wrong item in a world table.
+        Several items can share a display, so all of them are returned: which
+        one a creature holds is the caller's to settle, against what else the
+        wire says about it, or to leave unsettled.
         """
-        rows = self.query(f"SELECT entry FROM item_template WHERE display_id = {int(display_id)}")
-        if not rows:
-            _logger.warning("no item_template row has display_id %d", display_id)
-            return None
-        if len(rows) > 1:
-            found = ", ".join(r[0] for r in rows[:5])
-            _logger.warning("display_id %d matches %d items (%s...); not guessing which",
-                            display_id, len(rows), found)
-            return None
-        return int(rows[0][0])
+        rows = self.query("SELECT entry, class, subclass, inventory_type FROM item_template "
+                          f"WHERE display_id = {int(display_id)} ORDER BY entry")
+        return [tuple(int(v) for v in row) for row in rows]
 
     def describe(self, table: str) -> dict[str, Any]:
         """Column -> the table's own DEFAULT, from DESCRIBE. Cached per table.

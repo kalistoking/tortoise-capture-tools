@@ -765,6 +765,32 @@ def test_an_offhand_is_authored_too_not_silently_dropped():
     assert "equipentry3" not in rows[0].values          # empty slot stays unset
 
 
+# class 4, subclass 6, inventory type 14 -- a shield.
+SHIELD_INFO = 0x0E000604
+
+
+def test_a_display_several_items_share_is_settled_by_the_info_word():
+    """Stormwind Guard's shield, display 2080, is two items (143, 50315); only
+    143 is a shield by class, subclass and inventory type -- what the live
+    database authors, and what UNIT_VIRTUAL_ITEM_INFO packs beside it."""
+    world = StubWorld(displays={2080: [143, 50315]}, items={143: (4, 6, 14), 50315: (4, 6, 13)})
+    rows, gaps = author_rows(Equipment(), _equip_events(display=2080, info=SHIELD_INFO),
+                             ENTRY, world=world)
+    assert rows[0].values["equipentry1"] == 143
+    assert any("2 items" in note for note in rows[0].notes)
+    assert gaps == []
+
+
+def test_items_the_info_word_cannot_tell_apart_are_not_guessed_between():
+    """Defias Rogue Wizard's staff, display 10654, is four items all packed the
+    same; the lowest entry happens to be right, and a guess is still a guess."""
+    world = StubWorld(displays={5010: [1907, 6215, 15397]},
+                      items={1907: (2, 10, 17), 6215: (2, 10, 17), 15397: (2, 10, 17)})
+    rows, gaps = author_rows(Equipment(), _equip_events(), ENTRY, world=world)
+    assert rows == []
+    assert any("1907, 6215, 15397" in gap for gap in gaps)
+
+
 class _FieldTable:
     """The field table's indices for the two virtual-item fields, as in the fixtures."""
 
