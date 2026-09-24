@@ -33,6 +33,8 @@ ENV_CONFIG = "TCT_CONFIG"
 ENV_REPO = "TCT_REPO"
 ENV_PORT = "TCT_PORT"
 ENV_SERVER_IP = "TCT_SERVER_IP"
+ENV_LOGON_PORT = "TCT_LOGON_PORT"
+ENV_LOGON_IP = "TCT_LOGON_IP"
 ENV_LOG_LEVEL = "TCT_LOG_LEVEL"
 
 SQL_DIALECTS = ("mysql", "sqlite")
@@ -40,7 +42,8 @@ TEXT_LAYOUTS = ("grouped", "stream")
 
 # section -> {key in file: attribute name}
 SCHEMA: dict[str, dict[str, str]] = {
-    "capture": {"repo": "repo", "port": "port", "server_ip": "server_ip"},
+    "capture": {"repo": "repo", "port": "port", "server_ip": "server_ip",
+                "logon_port": "logon_port", "logon_ip": "logon_ip"},
     "log": {"level": "log_level", "file_level": "file_log_level", "dir": "log_dir",
             "file": "log_to_file", "modules": "module_levels"},
     "output": {"dir": "out_dir", "cache_dir": "cache_dir", "sql_dialect": "sql_dialect",
@@ -58,6 +61,8 @@ _DEFAULTS: dict[str, Any] = {
     "repo": None,
     "port": 8090,                    # this fork's WorldServerPort
     "server_ip": "127.0.0.1",
+    "logon_port": 3724,              # realmd's port; the world address comes from its realm list
+    "logon_ip": None,                # None -> any address
     "log_level": _log.DEFAULT_LEVEL,
     "file_log_level": None,          # None -> same as log_level
     "log_dir": "logs",
@@ -81,6 +86,8 @@ class RunConfig:
     repo: Path | None                # tortoise-wow checkout; None -> numeric-only tables
     port: int
     server_ip: str
+    logon_port: int
+    logon_ip: str | None
     log_level: str
     file_log_level: str | None
     module_levels: dict[str, str]
@@ -91,6 +98,10 @@ class RunConfig:
     text_layout: str
     database: dict[str, Any]
     dbc_dir: Path | None = None      # the server's data/dbc; None -> model scales unchecked
+    # Capture settings given in a file, the environment or a flag rather than
+    # left at their default. A named world port overrides the one the realm
+    # list gives; a default one must not.
+    named: frozenset[str] = frozenset()
     quiet: bool = False
     source: Path | None = None       # the config file actually used
     issues: tuple[tuple[str, str], ...] = field(default_factory=tuple)
@@ -111,10 +122,13 @@ class RunConfig:
         issues: list[tuple[str, str]] = []
 
         path = _find_config(getattr(args, "config", None), issues)
+        named: set[str] = set()
         if path is not None:
-            values.update(_read_file(path, issues))
-        _apply_env(values, issues)
-        _apply_args(values, args)
+            from_file = _read_file(path, issues)
+            values.update(from_file)
+            named.update(from_file)
+        named.update(_apply_env(values, issues))
+        named.update(_apply_args(values, args))
         _validate(values, issues)
 
         log_dir = None if not values["log_to_file"] else Path(values["log_dir"])
@@ -122,6 +136,8 @@ class RunConfig:
             repo=Path(values["repo"]) if values["repo"] else None,
             port=int(values["port"]),
             server_ip=str(values["server_ip"]),
+            logon_port=int(values["logon_port"]),
+            logon_ip=str(values["logon_ip"]) if values["logon_ip"] else None,
             log_level=values["log_level"],
             file_log_level=values["file_log_level"],
             module_levels=dict(values["module_levels"]),
@@ -134,6 +150,7 @@ class RunConfig:
                       "port": values["db_port"], "user": values["db_user"],
                       "world": values["db_world"]},
             dbc_dir=Path(values["dbc_dir"]) if values["dbc_dir"] else None,
+            named=frozenset(named & set(SCHEMA["capture"].values())),
             quiet=bool(getattr(args, "key_only", False)),
             source=path,
             issues=tuple(issues),
@@ -184,26 +201,34 @@ def _read_file(path: Path, issues: list[tuple[str, str]]) -> dict[str, Any]:
     return values
 
 
-def _apply_env(values: dict[str, Any], issues: list[tuple[str, str]]) -> None:
+def _apply_env(values: dict[str, Any], issues: list[tuple[str, str]]) -> set[str]:
+    given = set()
     for name, key in ((ENV_REPO, "repo"), (ENV_PORT, "port"),
-                      (ENV_SERVER_IP, "server_ip"), (ENV_LOG_LEVEL, "log_level")):
+                      (ENV_SERVER_IP, "server_ip"), (ENV_LOGON_PORT, "logon_port"),
+                      (ENV_LOGON_IP, "logon_ip"), (ENV_LOG_LEVEL, "log_level")):
         raw = os.environ.get(name)
         if raw:
             values[key] = raw
+            given.add(key)
+    return given
 
 
-def _apply_args(values: dict[str, Any], args) -> None:
+def _apply_args(values: dict[str, Any], args) -> set[str]:
     """Only flags actually given override; argparse defaults are None."""
+    named = set()
     for attribute, flag in (("repo", "repo"), ("port", "port"), ("server_ip", "server_ip"),
+                            ("logon_port", "logon_port"), ("logon_ip", "logon_ip"),
                             ("log_level", "log_level"), ("out_dir", "out_dir"),
                             ("log_dir", "log_dir"), ("cache_dir", "cache_dir")):
         given = getattr(args, flag, None)
         if given is not None:
             values[attribute] = given
+            named.add(attribute)
     if getattr(args, "debug", False):
         values["log_level"] = "debug"
     if getattr(args, "no_log_file", False):
         values["log_to_file"] = False
+    return named
 
 
 def _validate(values: dict[str, Any], issues: list[tuple[str, str]]) -> None:

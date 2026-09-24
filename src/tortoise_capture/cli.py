@@ -14,6 +14,7 @@ section 7.1 in practice.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from .emit.migration import MigrationWriter, migration_name
 from .emit.sql import SqlSink
 from .emit.text import TextSink
 from .fields import tables as field_tables
-from .wire import crypt, opcodes as opcode_tables, pcap
+from .wire import crypt, opcodes as opcode_tables, pcap, slim
 
 EXIT_OK, EXIT_FATAL, EXIT_WITH_ERRORS = 0, 1, 2
 
@@ -40,12 +41,19 @@ _logger = _log.get_logger("cli")
 # argument parsing
 # --------------------------------------------------------------------------
 
+_NO_SLIM = ("do not leave a slim copy (only the WoW conversation) beside a capture "
+            "that holds more")
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", help=f"config file (default: ./{CONFIG_NAME}); env TCT_CONFIG")
     common.add_argument("--repo", help="tortoise-wow checkout (opcode and field tables); env TCT_REPO")
     common.add_argument("--port", type=int, help="world server port of the capture (default 8090)")
     common.add_argument("--server-ip", help="server address in the capture (default 127.0.0.1)")
+    common.add_argument("--logon-port", type=int,
+                        help="logon server port of the capture (default 3724); env TCT_LOGON_PORT")
+    common.add_argument("--logon-ip", help="logon server address (default: any); env TCT_LOGON_IP")
     common.add_argument("--log-level", choices=_log.LEVEL_NAMES,
                         help="console verbosity (default: info, or [log] level in the config)")
     common.add_argument("--debug", action="store_true", help="shortcut for --log-level debug")
@@ -65,12 +73,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_dump = sub.add_parser("dump", parents=[common], help="decrypt and frame into JSONL")
     p_dump.add_argument("capture")
+    p_dump.add_argument("--no-slim", action="store_true", help=_NO_SLIM)
     p_dump.add_argument("--out", help="output .jsonl (default: <out-dir>/<capture stem>.jsonl)")
     p_dump.add_argument("--session-key", help="hex key, skips recovery")
 
     p_dec = sub.add_parser("decode", parents=[common], help="run the opcode modules")
     p_dec.add_argument("source", help="a capture, or a .jsonl produced by `tct dump`")
     p_dec.add_argument("--session-key", help="hex key, skips recovery (captures only)")
+    p_dec.add_argument("--no-slim", action="store_true", help=_NO_SLIM)
     p_dec.add_argument("--format", default="text", help="text,sql,jsonl (default: text)")
     p_dec.add_argument("--entry", type=int, help="only events about this creature_template entry")
     p_dec.add_argument("--guid", type=lambda v: int(v, 0), help="only events about this wire GUID")
@@ -90,11 +100,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_auth.add_argument("--entry", type=int, required=True,
                         help="the creature_template entry to author")
     p_auth.add_argument("--session-key", help="hex key, skips recovery (captures only)")
+    p_auth.add_argument("--no-slim", action="store_true", help=_NO_SLIM)
     p_auth.add_argument("--out", help="output file (default: <out-dir>/<timestamp>_world.<ext>)")
     p_auth.add_argument("--format", choices=("sql", "json"), default="sql",
                         help="sql (commented migration) or json (default: sql)")
     p_auth.add_argument("--no-db", action="store_true",
                         help="skip database lookups and diffing even if one is configured")
+
+    p_slim = sub.add_parser("slim", parents=[common],
+                            help="keep only the WoW conversation of a capture, beside it")
+    p_slim.add_argument("capture")
+    p_slim.add_argument("--out", help="output capture (default: <capture stem>.wow<suffix>, beside it)")
+    p_slim.add_argument("--replace", action="store_true",
+                        help="replace the original with the verified slim copy -- it is the only "
+                             "copy of a session that cannot be recorded again")
+    p_slim.add_argument("--session-key", help="hex key, skips recovery")
 
     p_ops = sub.add_parser("opcodes", parents=[common], help="opcode table and coverage")
     p_ops.add_argument("--coverage", action="store_true", help="show which opcodes have a module")
@@ -131,7 +151,67 @@ def _packet_source(args, cfg: RunConfig, registry, ctx):
     key = _session_key(session, args.session_key)
     if key is None:
         return None, source.stem
+    _slim_beside(source, session, key, cfg, registry, ctx, args)
     return pipeline.packets(session, key, registry, ctx), source.stem
+
+
+def _logon(cfg: RunConfig) -> slim.Endpoint:
+    return slim.Endpoint(cfg.logon_ip, cfg.logon_port)
+
+
+def _named_world(cfg: RunConfig) -> slim.Endpoint | None:
+    """The world server as named, or None to read it from the realm list -- a
+    default port is not a name, and must not win over what the capture says."""
+    if "port" not in cfg.named:
+        return None
+    return slim.Endpoint(cfg.server_ip if "server_ip" in cfg.named else None, cfg.port)
+
+
+def _decoded(session, key, registry, ctx) -> list[tuple]:
+    return [(p.seq, p.t, p.direction, p.opcode, p.name, p.body, p.via)
+            for p in pipeline.packets(session, key, registry, ctx)]
+
+
+def _write_verified(plan: slim.SlimPlan, out: Path, session, key, registry, ctx) -> bool:
+    """Writes the slim copy, and keeps it only if it decodes exactly as the
+    original does: the same session key, the same packet records, times included."""
+    partial = out.with_name(out.name + ".partial")
+    slim.write(plan, partial)
+    try:
+        copy = pcap.read_session(partial, *plan.world_server)
+        same_key = (crypt.recover_session_key(copy.c2s.segments)
+                    == crypt.recover_session_key(session.c2s.segments))
+        original, slimmed = _decoded(session, key, registry, ctx), _decoded(copy, key, registry, ctx)
+        if not same_key or original != slimmed:
+            _logger.error("the slim copy of %s does not decode as the original does "
+                          "(%d packet record(s) against %d); not kept",
+                          plan.source, len(slimmed), len(original))
+            partial.unlink()
+            return False
+        os.replace(partial, out)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    _logger.info("wrote %s (%d bytes), which decodes identically: %d packet record(s), "
+                 "the same session key", out, plan.kept_bytes, len(original))
+    return True
+
+
+def _slim_beside(capture: Path, session, key, cfg: RunConfig, registry, ctx, args) -> None:
+    """Leaves a verified slim copy beside a capture that holds more than its WoW
+    conversation -- once, and never touching the original."""
+    out = slim.slim_name(capture)
+    if getattr(args, "no_slim", False) or capture.stem.endswith(".wow") or out.exists():
+        return
+    try:
+        plan = slim.plan(capture, _logon(cfg), slim.Endpoint(*session.server))
+    except slim.SlimError as exc:
+        _logger.warning("not slimmed: %s", exc)
+        return
+    if plan.has_foreign:
+        for line in slim.describe(plan):
+            _logger.info("%s", line)
+        _write_verified(plan, out, session, key, registry, ctx)
 
 
 # --------------------------------------------------------------------------
@@ -156,6 +236,7 @@ def cmd_dump(args, cfg: RunConfig) -> int:
     key = _session_key(session, args.session_key)
     if key is None:
         return EXIT_WITH_ERRORS
+    _slim_beside(Path(args.capture), session, key, cfg, registry, ctx, args)
 
     out_path = Path(args.out) if args.out else cfg.out_dir / f"{Path(args.capture).stem}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -272,6 +353,36 @@ def cmd_author(args, cfg: RunConfig) -> int:
     return EXIT_OK
 
 
+def cmd_slim(args, cfg: RunConfig) -> int:
+    capture = Path(args.capture)
+    try:
+        plan = slim.plan(capture, _logon(cfg), _named_world(cfg))
+    except slim.SlimError as exc:
+        _logger.error("%s", exc)
+        return EXIT_WITH_ERRORS
+    for line in slim.describe(plan):
+        _logger.info("%s", line)
+    if not plan.has_foreign:
+        _logger.info("%s holds nothing but the WoW conversation; nothing to drop", capture)
+        return EXIT_OK
+
+    out = slim.slim_name(capture) if args.replace or not args.out else Path(args.out)
+    if out.exists():
+        _logger.error("%s already exists and is not overwritten", out)
+        return EXIT_WITH_ERRORS
+    tables = _load_tables(cfg)
+    registry = registry_mod.load(tables)
+    ctx = _context(tables, cfg)
+    session = pcap.read_session(capture, *plan.world_server)
+    key = _session_key(session, args.session_key)
+    if key is None or not _write_verified(plan, out, session, key, registry, ctx):
+        return EXIT_WITH_ERRORS
+    if args.replace:
+        os.replace(out, capture)
+        _logger.info("replaced %s with its slim copy, as asked", capture)
+    return EXIT_OK
+
+
 def cmd_opcodes(args, cfg: RunConfig) -> int:
     tables = _load_tables(cfg)
     registry = registry_mod.load(tables)
@@ -295,7 +406,7 @@ def cmd_opcodes(args, cfg: RunConfig) -> int:
 
 
 _COMMANDS = {"key": cmd_key, "dump": cmd_dump, "decode": cmd_decode,
-             "author": cmd_author, "opcodes": cmd_opcodes}
+             "author": cmd_author, "slim": cmd_slim, "opcodes": cmd_opcodes}
 
 
 def main(argv: list[str] | None = None) -> int:

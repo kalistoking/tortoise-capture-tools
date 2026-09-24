@@ -38,7 +38,7 @@ class Args:
     def __init__(self, **kwargs):
         defaults = dict(config=None, repo=None, port=None, server_ip=None, log_level=None,
                         debug=False, out_dir=None, log_dir=None, no_log_file=False,
-                        cache_dir=None, key_only=False)
+                        cache_dir=None, key_only=False, logon_port=None, logon_ip=None)
         defaults.update(kwargs)
         for key, value in defaults.items():
             setattr(self, key, value)
@@ -80,6 +80,33 @@ def test_config_file_is_picked_up_from_the_working_directory():
 
 def test_the_server_dbc_directory_is_optional():
     assert _in_dir(lambda _: RunConfig.resolve(Args())).dbc_dir is None
+
+
+def test_the_logon_server_defaults_to_3724_on_any_address():
+    cfg = _in_dir(lambda _: RunConfig.resolve(Args()))
+    assert cfg.logon_port == 3724 and cfg.logon_ip is None
+
+
+def test_a_port_given_anywhere_is_named_and_a_default_is_not():
+    """A named world port overrides the one the realm list gives; the default
+    8090 must not, or it would silently win over what the capture says."""
+    def body(tmp):
+        defaults = RunConfig.resolve(Args())
+        (tmp / CONFIG_NAME).write_text("[capture]\nlogon_port = 3725\n", encoding="utf-8")
+        from_file = RunConfig.resolve(Args())
+        os.environ["TCT_PORT"] = "8090"
+        try:
+            from_env = RunConfig.resolve(Args())
+        finally:
+            del os.environ["TCT_PORT"]
+        from_flag = RunConfig.resolve(Args(logon_ip="10.0.0.1"))
+        return defaults, from_file, from_env, from_flag
+
+    defaults, from_file, from_env, from_flag = _in_dir(body)
+    assert not defaults.named
+    assert from_file.named == {"logon_port"} and from_file.logon_port == 3725
+    assert "port" in from_env.named                    # named, even as the default's value
+    assert "logon_ip" in from_flag.named and from_flag.logon_ip == "10.0.0.1"
 
 
 def test_precedence_is_file_then_environment_then_flag():

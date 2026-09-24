@@ -113,6 +113,27 @@ tct decode capture.jsonl --entry <creature_template.entry> --format text,sql
 tct author capture.jsonl --entry <creature_template.entry>
 ```
 
+A capture is mostly whatever else the machine was doing -- one here is 285 MB
+with a WoW session of 1.2 MB. The first time `dump`, `decode` or `author` reads
+a capture that holds more than the WoW conversation, it leaves a slim copy
+beside it (`capture.wow.pcap`): the logon and world connections, record for
+record, kept only after it decodes to exactly the same packets and session key
+as the original. The original is never touched; `tct slim capture.pcap
+--replace` swaps it for the slim copy when you ask, and `--no-slim` skips the
+copy altogether.
+
+```bash
+tct slim capture.pcap                  # write capture.wow.pcap beside it, verified
+tct slim capture.pcap --replace        # ...and replace the original with it
+```
+
+The world server's address is read from the realm list the logon server sends
+(port 3724), so no port has to be given; a capture that begins after the logon
+has no realm list, and then the world port must be named. A port given in the
+config file, the environment or a flag always wins over a detected one:
+`--port` / `TCT_PORT` / `[capture] port` for the world server,
+`--logon-port` / `TCT_LOGON_PORT` / `[capture] logon_port` for the logon one.
+
 `tct author` writes a migration for a human to review, never one that applies
 itself: every value says whether it was read off the wire, inferred, resolved
 against the database or fixed by convention, and anything the capture could not

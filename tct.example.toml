@@ -14,6 +14,11 @@
 repo = "/path/to/tortoise-wow"
 port = 8090                     # this fork's WorldServerPort
 server_ip = "127.0.0.1"
+# The logon server, whose realm list names the world server. Setting `port`
+# above (here, in TCT_PORT or with --port) overrides the address the realm list
+# gives -- leave it out to have `tct slim` read it from the capture instead.
+# logon_port = 3724
+# logon_ip = "127.0.0.1"        # default: any address
 
 [log]
 # Console verbosity: error | warn | info | debug

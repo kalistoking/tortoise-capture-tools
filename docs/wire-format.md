@@ -198,6 +198,7 @@ fighting creature that is `health`.
 ## Other decoded opcodes
 | opcode | layout (source) |
 |---|---|
+| logon `CMD_REALM_LIST` (0x10), server to client | not a world opcode: the logon server's reply, plaintext. `uint8 0x10` + `uint16 size`, then `uint32 0` + `uint8 count`, and per realm `uint32 icon` + `uint8 flags` + CString name + CString address (`"ip:port"`) + `float population` + `uint8 characters` + `uint8 timezone` + `uint8 0`, closed by `uint16 0x0002` (`AuthSocket.cpp:1221-1280`). The address is where the client goes next, which is how `tct slim` finds the world connection without a port being given. The challenge before it carries random bytes, so a 0x10 is a realm list only when the whole structure parses to its declared size. |
 | `SMSG_CREATURE_QUERY_RESPONSE` (0x61) | `uint32 entry` + CString name + 3×`uint8(0)` + CString subname + 7×`uint32` (type_flags, type, beast_family, rank, unk, pet_spell_list_id, display_id) + `uint8 civilian` + `uint8 racial_leader` (`QueryHandler.cpp:186`). Does **not** carry unit_class/scale/damage — those are UpdateFields only. |
 | `SMSG_MESSAGECHAT` | `ChatHandler::BuildChatPacket` (`Chat.cpp:2254`). MONSTER_SAY 0x0B / YELL 0x0C: raw 8-byte sender guid + `uint32 nameLen` + name + raw 8-byte target guid + `uint32 msgLen` + msg. MONSTER_EMOTE 0x0D: **no sender guid** — cannot be filtered by entry. |
 | `SMSG_PARTYKILLLOG` | raw killer guid + raw victim guid (`Unit.cpp:1127`). |
