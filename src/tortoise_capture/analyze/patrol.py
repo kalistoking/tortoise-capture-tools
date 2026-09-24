@@ -43,7 +43,7 @@ from typing import Any, Iterator, Mapping
 
 from ..core.base import BaseAnalyzer
 from ..core.contracts import (
-    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec,
+    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec, spawn_sighting,
 )
 from ..core.registry import analyzer
 
@@ -153,7 +153,7 @@ class _Route:
         self.clusters: list[list[tuple[float, float, float]]] = []
         self.labels: list[int] = []
         self.hop_times: list[float] = []            # packet time per hop, parallel to labels
-        self.spawn: tuple[float, float, float] | None = None
+        self.creates: list[tuple[float, tuple[float, float, float]]] = []   # (t, position)
         self.entry: int | None = None
         self.last_packet: Packet | None = None
         self.engagements: list[float] = []          # aggro-trigger timestamps (ai_reaction)
@@ -255,15 +255,19 @@ class _Route:
         return order
 
     def _anchor(self) -> int:
-        """Start at the spawn point when one was seen, else the busiest waypoint.
+        """Start at the spawn sighting when one was seen, else the busiest waypoint.
 
         A creature's route is authored starting from where it spawns, so a
         respawn sighting pins the numbering to the same origin the database
-        uses instead of wherever the capture happened to begin.
+        uses instead of wherever the capture happened to begin. Without a
+        death the sighting is the first one -- where the spawn row stands
+        too, so the route at least starts where the authored creature does.
         """
-        if self.spawn is not None:
+        sighting = spawn_sighting(self.creates, self.deaths)
+        if sighting is not None:
+            spawn = sighting[0]
             return min(range(len(self.clusters)),
-                       key=lambda i: math.dist(self.clusters[i][0][:2], self.spawn[:2]))
+                       key=lambda i: math.dist(self.clusters[i][0][:2], spawn[:2]))
         return max(range(len(self.clusters)), key=lambda i: len(self.clusters[i]))
 
 
@@ -300,12 +304,12 @@ class Patrol(BaseAnalyzer):
         elif ev.kind == "object_create":
             # A create block is the creature standing where it spawned -- but
             # only the respawn one is; the first sighting catches it mid-route.
-            # Both land here, and the later one wins, which is the respawn.
+            # spawn_sighting() tells them apart once the deaths are known too.
             position = (ev.data.get("movement") or {}).get("movement_info", {}).get("pos")
-            if position:
+            if position and ev.packet.t is not None:
                 route = self._routes.setdefault(guid, _Route())
                 route.entry = ev.data.get("entry")
-                route.spawn = tuple(position[:3])
+                route.creates.append((ev.packet.t, tuple(position[:3])))
         elif ev.kind == "ai_reaction" and ev.data.get("reaction") == 2 and ev.packet.t is not None:
             self._routes.setdefault(guid, _Route()).engagements.append(ev.packet.t)
         elif ev.kind == "party_kill" and ev.packet.t is not None:

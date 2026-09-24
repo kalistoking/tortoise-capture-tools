@@ -23,7 +23,12 @@ the create that follows a death puts it back at its spawn point. Without a
 death, a wanderer's position is the centre of the area it was seen to wander
 (`analyze/patrol.py`'s `wander_area`), and anything else keeps the first
 sighting, flagged, because it is then wherever the creature was when the
-capture started.
+capture started. A patrol's route offers nothing better: against the twelve
+authored patrols in the Elwynn capture, the first sighting lands a median 31
+yd from the authored spawn and the route's centre 35 yd, and the authored spawn
+sits 2.5-17 yd off its own waypoints, at no point the route itself marks. Both
+this rule and `patrol.py` read the spawn through `spawn_sighting()`, so the
+route is numbered from where the row stands.
 
 `spawntimesecsmin/max` is looser about this than position has to be: it reads
 the spawn's own `respawn_timer` finding from `behaviour.py`, which counts a
@@ -50,7 +55,9 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
-from ..core.contracts import CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event
+from ..core.contracts import (
+    CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, spawn_sighting,
+)
 from ..core.registry import author_rule
 
 MOVEMENT_TYPE_RANDOM = 1        # MovementGeneratorType: wanders within wander_distance of its spawn
@@ -71,11 +78,7 @@ class _Spawn:
 
     def sighting(self) -> tuple[tuple[float, ...], bool] | None:
         """The create that followed a death, else the earliest one seen."""
-        for death in sorted(self.deaths):
-            after = [(t, pos) for t, pos in self.creates if t > death]
-            if after:
-                return min(after)[1], True
-        return (min(self.creates)[1], False) if self.creates else None
+        return spawn_sighting(self.creates, self.deaths)
 
     def patrols(self) -> bool:
         return bool(self.waypoints) and bool((self.route or {}).get("confident", True))

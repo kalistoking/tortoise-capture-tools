@@ -193,6 +193,24 @@ CONVENTION = "convention"    # fixed by the authoring convention, not observed
 CONFIRMED = "confirmed"      # matches the wire, restated as the DB's own value -- a safe no-op
 
 
+def spawn_sighting(creates: Iterable[tuple[float, Any]],
+                   deaths: Iterable[float]) -> tuple[Any, bool] | None:
+    """Which CREATE stands for the spawn: (what it carried, after a death?).
+
+    Only the create that follows a death puts a creature back at its spawn
+    point; without one, the earliest sighting is all there is. The patrol
+    analyzer numbers a route from this sighting and the spawn rule places the
+    row at it, so both must read it the same way -- when they did not, a
+    Prowler seen seven times stood 87 yd from its own point 1.
+    """
+    creates = sorted(creates, key=lambda c: c[0])
+    for death in sorted(deaths):
+        after = [c for c in creates if c[0] > death]
+        if after:
+            return after[0][1], True
+    return (creates[0][1], False) if creates else None
+
+
 @dataclass(frozen=True, slots=True)
 class AuthoredRow:
     """One row destined for a world table, with its provenance attached."""

@@ -67,6 +67,31 @@ def test_numbering_starts_at_the_spawn_point_not_the_capture_start():
     assert (round(first["position_x"]), round(first["position_y"])) == (0, 0)
 
 
+def _sighted(t, corner):
+    x, y, z = SQUARE[corner]
+    return make_event("object_create", t, guid=GUID, entry=ENTRY,
+                      movement={"movement_info": {"pos": (x, y, z, 0.0)}})
+
+
+def test_without_a_death_numbering_starts_where_the_spawn_row_stands():
+    """The spawn row keeps the first sighting when there is no death, so the
+    route must be numbered from there too. Numbering from the last sighting
+    put a Prowler seen seven times 87 yd from its own point 1."""
+    events = [_sighted(0.5, 2)] + _hops(laps=2.5) + [_sighted(40.0, 1)]
+    points = [ev for ev in run_analyzer(Patrol(), events) if ev.kind == "patrol_waypoint"]
+    first = points[0].data
+    assert (round(first["position_x"]), round(first["position_y"])) == SQUARE[2][:2]
+
+
+def test_the_respawn_pins_the_numbering_even_when_seen_again_later():
+    events = ([_sighted(0.5, 2)] + _hops(laps=2.5)
+              + [make_event("party_kill", 20.0, guid=GUID, entry=ENTRY),
+                 _sighted(30.0, 0), _sighted(40.0, 3)])        # the respawn, then back in view
+    points = [ev for ev in run_analyzer(Patrol(), events) if ev.kind == "patrol_waypoint"]
+    first = points[0].data
+    assert (round(first["position_x"]), round(first["position_y"])) == SQUARE[0][:2]
+
+
 def test_combat_detours_do_not_enter_the_route():
     """Positions visited once while fighting are not part of the patrol."""
     events = _hops(laps=2.5)
