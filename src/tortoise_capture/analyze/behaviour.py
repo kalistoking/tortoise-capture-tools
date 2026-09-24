@@ -34,6 +34,13 @@ of them, falls inside the coincidence window: two creatures talking in the
 same instant makes that sound's owner a coin flip, not a fact, and it is left
 unattributed rather than guessed.
 
+Every measurement is taken on one spawn -- keyed by guid, not entry -- because
+an entry is a template and a capture can hold many of its spawns: one dying
+while another ticks its health is not a respawn, and one casting after another
+is not a repeat delay. The respawn timer is reported per spawn, since it is a
+column of the spawn's own `creature` row; texts and spell timing belong to the
+template, so each spawn's own matches and delays are pooled per entry.
+
 Findings are observations with their evidence attached, never rounded into a
 conclusion they cannot support.
 """
@@ -95,7 +102,9 @@ def _health_of(ev: Event) -> int | None:
 
 @dataclass
 class _Creature:
+    """One spawn: an entry is a template, and a capture can hold many."""
     entry: int
+    guid: int
     triggers: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     texts: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     spells: dict[int, list[float]] = field(default_factory=lambda: defaultdict(list))
@@ -124,7 +133,7 @@ class Behaviour(BaseAnalyzer):
     sql_tables = (_TABLE,)
 
     def __init__(self) -> None:
-        self._seen: dict[int, _Creature] = {}
+        self._seen: dict[tuple[int, int], _Creature] = {}   # (entry, guid) -> one spawn
         self._sounds: list[tuple[float, int]] = []     # session-wide: no entry on the wire
 
     # -- collect -----------------------------------------------------------
@@ -142,7 +151,8 @@ class Behaviour(BaseAnalyzer):
         entry = ev.data.get("entry")
         if entry is None:
             return
-        creature = self._seen.setdefault(entry, _Creature(entry=entry))
+        guid = ev.data.get("guid") or 0
+        creature = self._seen.setdefault((entry, guid), _Creature(entry=entry, guid=guid))
         creature.last_packet = ev.packet
 
         if ev.kind in _TRIGGERS:
@@ -172,17 +182,23 @@ class Behaviour(BaseAnalyzer):
 
     def finish(self, ctx: DecodeContext) -> Iterator[Event]:
         sound_for = self._sound_attribution()
-        for entry, creature in sorted(self._seen.items()):
-            if creature.last_packet is None:
-                continue
-            yield from self._respawn(creature)
-            yield from self._text_triggers(creature, sound_for)
-            yield from self._spell_timing(creature)
+        spawns_of: dict[int, list[_Creature]] = defaultdict(list)
+        for (entry, _), creature in sorted(self._seen.items()):
+            if creature.last_packet is not None:
+                spawns_of[entry].append(creature)
+        for entry, spawns in sorted(spawns_of.items()):
+            # Pooled findings hang off the entry's latest packet, as a lone
+            # spawn's did before there could be several.
+            last = max((c.last_packet for c in spawns), key=lambda p: p.t)
+            for creature in spawns:
+                yield from self._respawn(creature)
+            yield from self._text_triggers(entry, spawns, last, sound_for)
+            yield from self._spell_timing(entry, spawns, last)
 
     def _sound_attribution(self) -> dict[tuple[int, str], int]:
         """(entry, message) -> sound_id, only where exactly one line -- from
         any creature -- falls inside the window of a captured sound."""
-        occurrences = [(entry, message, t) for entry, creature in self._seen.items()
+        occurrences = [(entry, message, t) for (entry, _), creature in self._seen.items()
                        for message, times in creature.texts.items() for t in times]
 
         attributed: dict[tuple[int, str], int] = {}
@@ -208,37 +224,42 @@ class Behaviour(BaseAnalyzer):
                 gaps.append(min(after) - death)
         if gaps:
             confident = len(gaps) >= MIN_RESPAWNS_FOR_CONFIDENCE
-            yield self.event(c.last_packet, "respawn_timer", entry=c.entry,
+            yield self.event(c.last_packet, "respawn_timer", entry=c.entry, guid=c.guid,
                              value_min=min(gaps), value_max=max(gaps), samples=len(gaps),
                              confident=confident,
                              caveat="" if confident else
                                     f" -- too few to bound (want {MIN_RESPAWNS_FOR_CONFIDENCE}+)")
 
-    def _text_triggers(self, c: _Creature,
+    def _text_triggers(self, entry: int, spawns: list[_Creature], last: Packet,
                        sound_for: dict[tuple[int, str], int]) -> Iterator[Event]:
-        for message, times in c.texts.items():
-            matched: dict[str, list[float]] = defaultdict(list)
-            for t in times:
-                for name, trigger_times in c.triggers.items():
-                    near = [abs(t - tt) for tt in trigger_times
-                            if abs(t - tt) <= COINCIDENCE_WINDOW]
-                    if near:
-                        matched[name].append(min(near))
+        # Each line is matched against its own speaker's triggers, then pooled.
+        said: dict[str, list[float]] = defaultdict(list)
+        matched: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+        for c in spawns:
+            for message, times in c.texts.items():
+                said[message].extend(times)
+                for t in times:
+                    for name, trigger_times in c.triggers.items():
+                        near = [abs(t - tt) for tt in trigger_times
+                                if abs(t - tt) <= COINCIDENCE_WINDOW]
+                        if near:
+                            matched[message][name].append(min(near))
 
-            sound_id = sound_for.get((c.entry, message))
+        for message, times in said.items():
+            sound_id = sound_for.get((entry, message))
             extra = {"sound_id": sound_id} if sound_id is not None else {}
 
             # Only attribute when one trigger explains every occurrence: a text
             # that lines up once out of three has told us nothing.
-            winner = next((name for name, offsets in matched.items()
+            winner = next((name for name, offsets in matched[message].items()
                            if len(offsets) == len(times)), None)
             if winner:
-                offsets = matched[winner]
-                yield self.event(c.last_packet, "text_trigger", entry=c.entry, subject=message,
+                offsets = matched[message][winner]
+                yield self.event(last, "text_trigger", entry=entry, subject=message,
                                  trigger=winner, samples=len(times),
                                  offset=sum(offsets) / len(offsets), **extra)
             else:
-                yield self.event(c.last_packet, "text_untriggered", entry=c.entry,
+                yield self.event(last, "text_untriggered", entry=entry,
                                  subject=message, samples=len(times), **extra)
 
     @staticmethod
@@ -271,29 +292,34 @@ class Behaviour(BaseAnalyzer):
             fights.append((start, end))
         return fights
 
-    def _spell_timing(self, c: _Creature) -> Iterator[Event]:
-        fights = self._fresh_engagements(c)
-        for spell_id, casts in sorted(c.spells.items()):
-            casts = sorted(casts)
+    def _spell_timing(self, entry: int, spawns: list[_Creature],
+                      last: Packet) -> Iterator[Event]:
+        initial: dict[int, list[float]] = defaultdict(list)
+        repeats: dict[int, list[float]] = defaultdict(list)
+        for c in spawns:
+            fights = self._fresh_engagements(c)
+            for spell_id, casts in c.spells.items():
+                casts = sorted(casts)
 
-            # Delay from each fight's start to the first cast inside that fight.
-            initial = []
-            for start, end in fights:
-                inside = [t for t in casts if start <= t < end]
-                if inside:
-                    initial.append(inside[0] - start)
-            if initial:
-                yield self.event(c.last_packet, "spell_initial_delay", entry=c.entry,
-                                 subject=spell_id, value_min=min(initial),
-                                 value_max=max(initial), samples=len(initial))
+                # Delay from each fight's start to the first cast inside that fight.
+                for start, end in fights:
+                    inside = [t for t in casts if start <= t < end]
+                    if inside:
+                        initial[spell_id].append(inside[0] - start)
 
-            # Intervals between consecutive casts inside one engagement: a gap
-            # spanning a death and respawn is not a repeat delay.
-            intervals = [b - a for a, b in zip(casts, casts[1:])
-                         if not any(a < d < b for d in c.deaths)]
-            if intervals:
+                # Intervals between consecutive casts inside one engagement: a
+                # gap spanning a death and respawn is not a repeat delay.
+                repeats[spell_id].extend(b - a for a, b in zip(casts, casts[1:])
+                                         if not any(a < d < b for d in c.deaths))
+
+        for spell_id in sorted(initial.keys() | repeats.keys()):
+            if delays := initial[spell_id]:
+                yield self.event(last, "spell_initial_delay", entry=entry,
+                                 subject=spell_id, value_min=min(delays),
+                                 value_max=max(delays), samples=len(delays))
+            if intervals := repeats[spell_id]:
                 confident = len(intervals) >= MIN_INTERVALS_FOR_CONFIDENCE
-                yield self.event(c.last_packet, "spell_repeat_delay", entry=c.entry,
+                yield self.event(last, "spell_repeat_delay", entry=entry,
                                  subject=spell_id, value_min=min(intervals),
                                  value_max=max(intervals), samples=len(intervals),
                                  confident=confident,
@@ -310,7 +336,9 @@ class Behaviour(BaseAnalyzer):
         confident = data.get("confident", samples >= 2)
         yield Row(_TABLE.name, {
             "capture": ctx.capture_id, "entry": data["entry"], "finding": ev.kind,
-            "subject": str(data.get("subject", "")),
+            # A respawn has no subject but its spawn, which keeps two spawns'
+            # rows from colliding on the key.
+            "subject": str(data.get("subject", data.get("guid", ""))),
             "detail": data.get("trigger"),
             "value_min": data.get("value_min"), "value_max": data.get("value_max"),
             "samples": samples, "confident": int(bool(confident)),

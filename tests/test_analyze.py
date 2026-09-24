@@ -344,6 +344,69 @@ def test_an_interval_spanning_a_death_is_not_a_repeat_delay():
     assert found["spell_repeat_delay"].data["samples"] == 1
 
 
+# One entry, several spawns: every measurement belongs to the spawn it was taken on.
+OTHER = GUID + 1
+
+
+def test_a_respawn_is_only_the_same_spawn_seen_alive_again():
+    """Keyed by entry, one Prowler dying and another ticking its health 20 s
+    later read as a 20 s respawn -- the dead one's `alive` flag was shared."""
+    events = [
+        make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=206)),
+        make_event("object_create", 11.0, guid=OTHER, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=231)),
+        make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
+        make_event("object_values", 120.0, guid=OTHER, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=231)),
+        make_event("object_create", 130.0, guid=OTHER, entry=ENTRY),
+        make_event("object_create", 400.0, guid=GUID, entry=ENTRY),
+    ]
+    respawns = [ev.data for ev in run_analyzer(Behaviour(), events) if ev.kind == "respawn_timer"]
+    assert [(r["guid"], r["value_min"]) for r in respawns] == [(GUID, 300.0)]
+
+
+def test_two_spawns_respawn_rows_do_not_share_a_key():
+    """capture_behaviour's key has no guid; a respawn's subject is its spawn."""
+    from tortoise_capture.core.contracts import SqlContext
+    events = [ev for guid in (GUID, OTHER) for ev in (
+        make_event("object_create", 10.0, guid=guid, entry=ENTRY),
+        make_event("party_kill", 50.0, guid=guid, entry=ENTRY),
+        make_event("object_create", 350.0, guid=guid, entry=ENTRY),
+    )]
+    behaviour = Behaviour()
+    rows = [row for ev in run_analyzer(behaviour, events) if ev.kind == "respawn_timer"
+            for row in behaviour.sql_rows(ev, SqlContext(capture_id="test"))]
+    keys = {tuple(row.values[k] for k in ("capture", "entry", "finding", "subject"))
+            for row in rows}
+    assert len(rows) == 2 and len(keys) == 2
+
+
+def test_each_spawn_starts_its_own_fight_and_casts_its_own_repeats():
+    """Two spawns pulled one after the other are two fresh engagements, and one
+    spawn's cast followed by the other's is no repeat delay at all."""
+    events = [
+        make_event("ai_reaction", 10.0, guid=GUID, entry=ENTRY, reaction=2),
+        make_event("spell_go", 12.0, guid=GUID, entry=ENTRY, spell_id=1449),
+        make_event("ai_reaction", 50.0, guid=OTHER, entry=ENTRY, reaction=2),
+        make_event("spell_go", 53.0, guid=OTHER, entry=ENTRY, spell_id=1449),
+    ]
+    found = findings_by_kind(run_analyzer(Behaviour(), events))
+    delay = found["spell_initial_delay"].data
+    assert (delay["value_min"], delay["value_max"], delay["samples"]) == (2.0, 3.0, 2)
+    assert "spell_repeat_delay" not in found
+
+
+def test_a_line_is_matched_against_its_own_speakers_triggers():
+    """A spawn speaking the moment a neighbour dies has not said a death line."""
+    events = [
+        make_event("party_kill", 90.0, guid=GUID, entry=ENTRY),
+        make_event("monster_say", 90.0, guid=OTHER, entry=ENTRY, message=AGGRO_TEXT),
+    ]
+    kinds = {ev.kind for ev in run_analyzer(Behaviour(), events)}
+    assert "text_untriggered" in kinds and "text_trigger" not in kinds
+
+
 # --------------------------------------------------------------------------
 # sound attribution: SMSG_PLAY_SOUND has no sender, only timestamp coincidence
 # --------------------------------------------------------------------------

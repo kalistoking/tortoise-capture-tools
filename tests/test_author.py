@@ -362,7 +362,7 @@ def _spawn_events():
         _create(12.9, -9177.9, -1026.8, o=0.59),          # mid-patrol first sighting
         make_event("party_kill", 90.3, guid=GUID, entry=ENTRY),
         _create(389.8, -9129.66, -1098.79, 73.66, -2.3216900825500488),   # the respawn
-        make_event("respawn_timer", 999.0, entry=ENTRY, value_min=299.534, value_max=299.534,
+        make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY, value_min=299.534, value_max=299.534,
                    samples=1, confident=False),
         make_event("patrol_route", 999.0, guid=GUID, entry=ENTRY, count=2, closes_loop=True),
         make_event("patrol_waypoint", 999.0, guid=GUID, entry=ENTRY, point=1,
@@ -406,7 +406,7 @@ def test_multiple_respawn_samples_give_a_genuine_min_max_range():
     two-sample range down to one number, or claim "observed once" when it
     was not. Real capture numbers: 299.217s and 300.022s."""
     events = _spawn_events() + [
-        make_event("respawn_timer", 999.0, entry=ENTRY,
+        make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY,
                    value_min=299.217, value_max=300.022, samples=2, confident=True),
     ]
     rows, _ = author_rows(Spawn(), events, ENTRY)
@@ -488,6 +488,31 @@ def test_two_spawns_of_one_entry_are_two_rows_not_one_mixed_row():
     assert set(creatures) == {SPAWN_GUID, SPAWN_GUID + 1}
     assert creatures[SPAWN_GUID]["position_x"] == 100.0
     assert creatures[SPAWN_GUID + 1]["position_x"] == 300.0
+
+
+def test_a_respawn_timer_is_authored_only_on_the_spawn_it_was_measured_on():
+    """spawntimesecs is a column of the spawn's own row, and one entry-wide
+    timer landed on every spawn of that entry, dead or not."""
+    other = GUID + 1
+    events = [
+        _create(10.0, 100.0, 200.0),
+        make_event("object_create", 11.0, guid=other, entry=ENTRY,
+                   movement={"movement_info": {"pos": (300.0, 400.0, 70.0, 2.0)}}),
+        make_event("party_kill", 50.0, guid=GUID, entry=ENTRY),
+        make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY,
+                   value_min=299.217, value_max=300.022, samples=2, confident=True),
+    ]
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
+    creatures = {r.values["guid"]: r.values for r in rows if r.table == "creature"}
+    assert creatures[SPAWN_GUID]["spawntimesecsmin"] == 299
+    assert "spawntimesecsmin" not in creatures[SPAWN_GUID + 1]
+    assert any(f"spawn {SPAWN_GUID + 1}" in gap and "never died" in gap for gap in gaps)
+
+
+def test_a_spawn_that_died_and_never_came_back_says_so():
+    events = [_create(10.0, 100.0, 200.0), make_event("party_kill", 50.0, guid=GUID, entry=ENTRY)]
+    _, gaps = author_rows(Spawn(), events, ENTRY)
+    assert any("spawntimesecsmin/max" in gap and "not seen alive again" in gap for gap in gaps)
 
 
 def test_a_wanderer_is_authored_as_a_random_mover():

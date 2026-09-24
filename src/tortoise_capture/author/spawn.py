@@ -26,11 +26,11 @@ sighting, flagged, because it is then wherever the creature was when the
 capture started.
 
 `spawntimesecsmin/max` is looser about this than position has to be: it reads
-`behaviour.py`'s `respawn_timer` finding, which counts a respawn from *either*
-a fresh CREATE or a VALUES block resetting HEALTH off 0 -- position genuinely
-needs the CREATE (a VALUES block carries no coordinates), but the timer only
-needs to know the creature is alive again, and a player who never lost sight
-of it never gets a fresh CREATE to say so.
+the spawn's own `respawn_timer` finding from `behaviour.py`, which counts a
+respawn from *either* a fresh CREATE or a VALUES block resetting HEALTH off 0
+-- position genuinely needs the CREATE (a VALUES block carries no
+coordinates), but the timer only needs to know the creature is alive again,
+and a player who never lost sight of it never gets a fresh CREATE to say so.
 
 **Movement is one of three answers or a gap.** A patrol that `patrol.py`
 trusts is `movement_type` 2 with its waypoints; a wanderer it recognised is
@@ -67,6 +67,7 @@ class _Spawn:
     waypoints: list[dict[str, Any]] = field(default_factory=list)
     route: dict[str, Any] | None = None       # its patrol_route finding
     wander: dict[str, Any] | None = None      # its wander_area finding
+    respawn: dict[str, Any] | None = None     # its respawn_timer finding
 
     def sighting(self) -> tuple[tuple[float, ...], bool] | None:
         """The create that followed a death, else the earliest one seen."""
@@ -84,7 +85,6 @@ class _Spawn:
 class Spawn(BaseAuthorRule):
     def __init__(self) -> None:
         self._spawns: dict[int, _Spawn] = {}
-        self._respawn: dict[str, Any] | None = None   # the respawn_timer finding's own data
         self._map_id: int | None = None
 
     # -- collect -----------------------------------------------------------
@@ -104,7 +104,8 @@ class Spawn(BaseAuthorRule):
             if ev.packet.t is not None and spawn is not None:
                 spawn.deaths.append(ev.packet.t)
         elif ev.kind == "respawn_timer":
-            self._respawn = dict(ev.data)
+            if (spawn := self._of(ev)) is not None:
+                spawn.respawn = dict(ev.data)
         elif ev.kind == "patrol_waypoint":
             if (spawn := self._of(ev)) is not None:
                 spawn.waypoints.append(dict(ev.data))
@@ -150,8 +151,8 @@ class Spawn(BaseAuthorRule):
                 provenance[axis] = DERIVED
 
         skip: set[str] = {"map"}
-        if self._respawn is not None and self._respawn.get("confident"):
-            r = self._respawn
+        if spawn.respawn is not None and spawn.respawn.get("confident"):
+            r = spawn.respawn
             min_s, max_s = int(round(r["value_min"])), int(round(r["value_max"]))
             values["spawntimesecsmin"], values["spawntimesecsmax"] = min_s, max_s
             provenance["spawntimesecsmin"] = provenance["spawntimesecsmax"] = DERIVED
@@ -258,11 +259,21 @@ class Spawn(BaseAuthorRule):
         if not any(s.deaths for _, s in seen):
             yield ("creature.spawntimesecsmin/max -- the creature never died in this capture, "
                    "so the respawn timer could not be measured")
-        elif self._respawn is not None and not self._respawn.get("confident"):
-            r = self._respawn
-            yield (f"creature.spawntimesecsmin/max -- only {r.get('samples', 1)} respawn "
-                   f"observation(s) ({r['value_min']:.3f}s); one sample cannot even split "
-                   "a min from a max, let alone bound a spread")
+        else:
+            for guid, spawn in seen:
+                table = ("creature" if len(seen) == 1
+                         else f"creature (spawn {guid & GUID_COUNTER_MASK})")
+                r = spawn.respawn
+                if not spawn.deaths:
+                    yield (f"{table}.spawntimesecsmin/max -- this spawn never died in the "
+                           "capture, so its respawn timer could not be measured")
+                elif r is None:
+                    yield (f"{table}.spawntimesecsmin/max -- it died but was not seen alive "
+                           "again before the capture ended")
+                elif not r.get("confident"):
+                    yield (f"{table}.spawntimesecsmin/max -- only {r.get('samples', 1)} "
+                           f"respawn observation(s) ({r['value_min']:.3f}s); one sample cannot "
+                           "even split a min from a max, let alone bound a spread")
         for guid, spawn in seen:
             # Named per spawn only when there is more than one to tell apart.
             table = ("creature_movement" if len(seen) == 1
