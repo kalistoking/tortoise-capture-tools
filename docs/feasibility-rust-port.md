@@ -215,6 +215,17 @@ as throwaway work. It is the most port-hostile kind of code to write twice,
 and — as of 2026-09-20 — `trt` already renders this tool's authored output
 without one.
 
+### 2026-09-26: trigger (a) reached, and not acted on
+
+Opcode work stopped when what the test captures still leave undecoded no longer
+filled any gap an authored migration reports, and W1 was closed — trigger (a).
+The decision taken on it was **not to port yet**. The decoder had settled, but
+the work had moved to `analyze/` and `author/`: confidence gates, per-spawn
+measurement, checks against a live database — iterative, judgement-laden code
+that benefits most from Python's loop and that a port would take last. By then
+the code had grown to 8,459 source and 4,044 test lines, a third more than
+this document measured. Trigger (b) stands.
+
 ## If it happens, the order that de-risks it
 
 1. **`tct-core` crate first, decoders last.** `ByteReader`, header crypto,
