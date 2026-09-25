@@ -100,11 +100,14 @@ class StubWorld:
     """A world database stand-in: answers from a dict, records nothing."""
 
     def __init__(self, columns: dict | None = None, displays: dict | None = None,
-                schema: dict | None = None, items: dict | None = None):
+                schema: dict | None = None, items: dict | None = None,
+                keys: dict | None = None, existing: dict | None = None):
         self._columns = columns or {}      # (table, column) -> stored value as string
         self._displays = displays or {}    # display id -> item entry, or a list of them
         self._schema = schema or {}        # table -> {column: default}; empty = no schema-fill
         self._items = items or {}          # item entry -> (class, subclass, inventory_type)
+        self._keys = keys or {}            # table -> the column a row is found by
+        self._existing = existing or {}    # table -> {key value, as text} already stored
 
     def column(self, table: str, column: str, where: str):
         return self._columns.get((table, column))
@@ -122,7 +125,12 @@ class StubWorld:
         return [(entry, *self._items.get(entry, columns)) for entry in entries]
 
     def row_exists(self, table: str, where: str) -> bool:
-        return False
+        import re
+        match = re.fullmatch(r"`(\w+)` = (.+)", where)
+        return bool(match) and match.group(2) in self._existing.get(table, ())
+
+    def key_column(self, table: str):
+        return self._keys.get(table)
 
     def describe(self, table: str) -> dict:
         return self._schema.get(table, {})

@@ -63,6 +63,8 @@ class World:
     # that attribute points at is not, so a plain dict works as a cache here.
     _schema_cache: dict[str, dict[str, Any]] = field(default_factory=dict, init=False,
                                                       repr=False, compare=False)
+    _describe_cache: dict[str, list[list[str]]] = field(default_factory=dict, init=False,
+                                                         repr=False, compare=False)
 
     # -- plumbing ----------------------------------------------------------
 
@@ -111,16 +113,27 @@ class World:
         absent from the result, and stays a gap.
         """
         if table not in self._schema_cache:
+            # DESCRIBE columns: Field, Type, Null, Key, Default, Extra.
+            defaults = {r[0]: _coerce(r[4] if len(r) > 4 else None)
+                        for r in self._described(table)}
+            self._schema_cache[table] = {c: d for c, d in defaults.items() if d is not None}
+        return self._schema_cache[table]
+
+    def key_column(self, table: str) -> str | None:
+        """The column a row of `table` is found by: the first of its primary
+        key, or its first column where it has none. None if DESCRIBE failed."""
+        rows = self._described(table)
+        primary = [r[0] for r in rows if len(r) > 3 and r[3] == "PRI"]
+        return (primary or [r[0] for r in rows] or [None])[0]
+
+    def _described(self, table: str) -> list[list[str]]:
+        if table not in self._describe_cache:
             try:
-                rows = self.query(f"DESCRIBE `{table}`")
+                self._describe_cache[table] = self.query(f"DESCRIBE `{table}`")
             except WorldError as exc:
                 _logger.warning("could not describe %s: %s", table, exc)
-                self._schema_cache[table] = {}
-            else:
-                # DESCRIBE columns: Field, Type, Null, Key, Default, Extra.
-                defaults = {r[0]: _coerce(r[4] if len(r) > 4 else None) for r in rows}
-                self._schema_cache[table] = {c: d for c, d in defaults.items() if d is not None}
-        return self._schema_cache[table]
+                self._describe_cache[table] = []
+        return self._describe_cache[table]
 
     def row_exists(self, table: str, where: str) -> bool:
         return (self.scalar(f"SELECT 1 FROM `{table}` WHERE {where} LIMIT 1")) is not None

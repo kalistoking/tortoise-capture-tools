@@ -24,6 +24,7 @@ from .core import pipeline, registry as registry_mod
 from .core.contracts import AuthorContext, DecodeContext, Tables
 from .core.dispatch import Filters, Runner
 from . import dbc, world as world_db
+from .author import existing
 from .emit import jsonl as jsonl_emit
 from .emit.author_json import AuthorJsonWriter, author_json_name
 from .emit.migration import MigrationWriter, migration_name
@@ -347,8 +348,11 @@ def cmd_author(args, cfg: RunConfig) -> int:
                                displays=displays, fields=tables.fields)
     for rule in rules:
         try:
-            writer.add(rule.rows(author_ctx))
+            # Rows first: a rule can learn what to report while producing them.
+            proposed, held = existing.only_new(rule.rows(author_ctx), world)
+            writer.add(proposed)
             writer.add_gaps(rule.gaps(author_ctx))
+            writer.add_gaps(held)
         except Exception as exc:
             _logger.error("authoring rule %s failed: %s: %s",
                           rule.id, type(exc).__name__, exc)

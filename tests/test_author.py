@@ -9,6 +9,7 @@ from pathlib import Path
 
 from support import StubWorld, author_rows, make_event, make_packet
 from tortoise_capture.author.dialogue import EVENT_T_AGGRO, EVENT_T_DEATH, Dialogue
+from tortoise_capture.author.existing import only_new
 from tortoise_capture.author.equipment import (
     DISPLAY_FIELD, INFO_FIELD, Equipment, unpack_item_info,
 )
@@ -998,6 +999,52 @@ def test_unused_slots_are_widened_to_match_the_table_shape():
     rows, _ = author_rows(Spells(), _spell_events(), ENTRY, world=world)
     assert rows[0].values["spellId_2"] == 0
     assert rows[0].provenance["spellId_2"] == CONVENTION
+
+
+# --------------------------------------------------------------------------
+# rows the database already holds (D3, the director's option (a))
+# --------------------------------------------------------------------------
+
+def _spawn_and_path(guid, points=2):
+    return [AuthoredRow(table="creature", values={"guid": guid, "id": ENTRY})] + [
+        AuthoredRow(table="creature_movement", values={"id": guid, "point": p})
+        for p in range(1, points + 1)]
+
+
+_KEYS = {"creature": "guid", "creature_movement": "id"}
+
+
+def test_rows_the_database_already_holds_are_reported_not_proposed():
+    """Re-authoring creatures the database already has: 316 of 351 creature
+    rows collided on their key, and the migration failed on the first. Only
+    what is new is proposed; the rest is named for a human."""
+    world = StubWorld(keys=_KEYS, existing={"creature": {"81182"}, "creature_movement": {"81182"}})
+    kept, gaps = only_new(_spawn_and_path(81182) + _spawn_and_path(99999), world)
+    assert [(r.table, r.values.get("guid", r.values.get("id"))) for r in kept] == [
+        ("creature", 99999), ("creature_movement", 99999), ("creature_movement", 99999)]
+    assert any(gap.startswith("creature --") and "81182" in gap for gap in gaps)
+    assert any(gap.startswith("creature_movement --") and "81182" in gap for gap in gaps)
+
+
+def test_a_path_the_database_has_any_point_of_is_left_whole():
+    """Points 1-2 stored and a capture that saw 3: proposing point 3 alone
+    would splice it onto a route it was never measured against."""
+    world = StubWorld(keys=_KEYS, existing={"creature_movement": {"81182"}})
+    kept, _ = only_new(_spawn_and_path(81182, points=3), world)
+    assert [r.table for r in kept] == ["creature"]
+
+
+def test_an_update_is_never_filtered_as_existing():
+    world = StubWorld(keys={"creature_template": "entry"},
+                      existing={"creature_template": {str(ENTRY)}})
+    row = AuthoredRow(table="creature_template", values={"dmg_min": 1.0},
+                      statement="update", where={"entry": ENTRY})
+    assert only_new([row], world) == ([row], [])
+
+
+def test_without_a_database_every_row_is_proposed():
+    rows = _spawn_and_path(81182)
+    assert only_new(rows, None) == (rows, [])
 
 
 # --------------------------------------------------------------------------
