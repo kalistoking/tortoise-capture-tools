@@ -12,6 +12,7 @@ from support import (
 from tortoise_capture.modules.ai_reaction import AiReaction
 from tortoise_capture.modules.compressed import CompressedMoves, CompressedUpdateObject
 from tortoise_capture.modules.creature_query import CreatureQuery
+from tortoise_capture.modules.gameobject_query import GameObjectQuery
 from tortoise_capture.modules.messagechat import MessageChat
 from tortoise_capture.modules.monster_move import MonsterMove, unpack_offset
 from tortoise_capture.modules.party_kill import PartyKill
@@ -180,6 +181,48 @@ def test_creature_query_response():
 def test_creature_query_unknown_entry_has_no_body():
     body = struct.pack("<I", ENTRY | 0x80000000)
     assert list(CreatureQuery().decode(make_packet(0x61, body), make_ctx())) == []
+
+
+GO_ENTRY = 179697       # a chest: data0 = lockId, data1 = lootId
+
+
+def _gameobject_query_body(entry=GO_ENTRY, type_=3, display_id=259, name="Arena Treasure Chest",
+                           data=(57, 18000, 0, 1)):
+    padded = list(data) + [0] * (24 - len(data))
+    return (struct.pack("<3I", entry, type_, display_id) + name.encode() + b"\x00"
+            + b"\x00" * 4 + struct.pack("<24I", *padded))
+
+
+def test_gameobject_query_response():
+    body = _gameobject_query_body()
+    ev = decode_one(GameObjectQuery(), make_packet(0x5F, body), make_ctx())
+    assert ev.kind == "gameobject_query" and ev.data["entry"] == GO_ENTRY
+    assert ev.data["name"] == "Arena Treasure Chest"
+    assert ev.data["type"] == 3 and ev.data["display_id"] == 259
+    assert ev.data["data"][:4] == [57, 18000, 0, 1] and len(ev.data["data"]) == 24
+
+
+def test_gameobject_query_unknown_entry_has_no_body():
+    body = struct.pack("<I", GO_ENTRY | 0x80000000)
+    assert list(GameObjectQuery().decode(make_packet(0x5F, body), make_ctx())) == []
+
+
+def test_gameobject_query_text_drops_the_unused_tail_of_data():
+    ev = decode_one(GameObjectQuery(), make_packet(0x5F, _gameobject_query_body()), make_ctx())
+    mod = GameObjectQuery()
+    text = mod.text_templates["gameobject_query"].format_map(mod.text_fields(ev))
+    assert "data=[57, 18000, 0, 1]" in text and "'Arena Treasure Chest'" in text
+
+
+def test_gameobject_query_sql_row_flattens_data_into_columns():
+    from tortoise_capture.core.contracts import SqlContext
+    ev = decode_one(GameObjectQuery(), make_packet(0x5F, _gameobject_query_body()), make_ctx())
+    (row,) = GameObjectQuery().sql_rows(ev, SqlContext(capture_id="test"))
+    assert row.table == "capture_gameobject_template"
+    assert row.values["data0"] == 57 and row.values["data1"] == 18000 and row.values["data23"] == 0
+    assert "data" not in row.values
+    columns = {c.name for c in GameObjectQuery.sql_tables[0].columns}
+    assert set(row.values) == columns
 
 
 # --------------------------------------------------------------------------
