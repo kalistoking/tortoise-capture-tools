@@ -78,7 +78,19 @@ _STATS = {
     "UNIT_FIELD_MINRANGEDDAMAGE": "ranged_dmg_min",
     "UNIT_FIELD_MAXRANGEDDAMAGE": "ranged_dmg_max",
     "UNIT_FIELD_RANGED_ATTACK_POWER": "ranged_attack_power",
+    # The template's identity, 334 of 334 spawns in the test captures exact.
+    "UNIT_FIELD_FACTIONTEMPLATE": "faction",
+    "UNIT_FIELD_BASEATTACKTIME": "base_attack_time",
+    "UNIT_FIELD_RANGEDATTACKTIME": "ranged_attack_time",
 }
+
+# SMSG_CREATURE_QUERY_RESPONSE key -> creature_template column; 20 of 20
+# responses in the test captures answer exactly the template's.
+_QUERIED = {"type": "type", "rank": "rank", "beast_family": "beast_family",
+            "type_flags": "type_flags"}
+# Text the server answers in the client's own language (QueryHandler.cpp), so a
+# name the database holds otherwise may be a translation, not a rename.
+_QUERIED_TEXT = ("name", "subname")
 
 # Broadcast per spawn, a template's own business: checked, never proposed.
 # The BASE_ fields are SelectLevel's own output, which auras never touch.
@@ -125,6 +137,7 @@ class Stats(BaseAuthorRule):
     def __init__(self) -> None:
         self._fields: dict[str, int] = {}
         self._speeds: dict[str, float] = {}                 # column -> first CREATE's speed
+        self._query: dict[str, Any] | None = None           # the creature query's answer
         self._spawns: dict[int, dict[str, int]] = {}       # guid -> its own first CREATE
         self._disagreed: dict[str, set[tuple[int, int]]] = {}  # name -> (first, later)
         self._saw_spells = False
@@ -162,6 +175,8 @@ class Stats(BaseAuthorRule):
                     self._disagreed.setdefault(column, set()).add((first[column], speeds[index]))
         elif ev.kind == "spell_go":
             self._saw_spells = True
+        elif ev.kind == "creature_query" and self._query is None:
+            self._query = dict(ev.data)
 
     def _typed(self, name: str) -> Any:
         value = fv.decode(name, self._fields[name])
@@ -263,6 +278,36 @@ class Stats(BaseAuthorRule):
             else:
                 values[column], provenance[column] = observed, DERIVED
 
+        if self._fields:
+            # A CREATE omits every zero field, so an absent one is a 0 read, not a gap.
+            npc_flags = self._fields.get("UNIT_NPC_FLAGS", 0)
+            stored = self._stored_int(ctx, "npc_flags")
+            if stored is None or stored == npc_flags:
+                values["npc_flags"] = npc_flags
+                provenance["npc_flags"] = WIRE if stored is None else CONFIRMED
+                if stored is not None:
+                    confirmed.append("npc_flags")
+
+        for key, column in _QUERIED.items():
+            if self._query is None or self._query.get(key) is None:
+                continue
+            observed = int(self._query[key])
+            stored = self._confirmed_value(ctx, column, observed)
+            values[column] = observed if stored is None else stored
+            provenance[column] = WIRE if stored is None else CONFIRMED
+            if stored is not None:
+                confirmed.append(column)
+        for column in _QUERIED_TEXT:
+            if self._query is None or self._query.get(column) is None:
+                continue
+            observed = self._query[column]
+            stored = self._stored_text(ctx, column)
+            if stored is None or stored == observed:
+                values[column] = observed
+                provenance[column] = WIRE if stored is None else CONFIRMED
+                if stored is not None:
+                    confirmed.append(column)
+
         if "UNIT_FIELD_BYTES_0" in self._fields:
             unit_class = fv.bytes_0(self._fields["UNIT_FIELD_BYTES_0"])["class"]
             stored = self._confirmed_value(ctx, "unit_class", unit_class)
@@ -316,6 +361,20 @@ class Stats(BaseAuthorRule):
                    "configured to compare against")
         else:
             yield from self._checked(ctx)
+        if self._fields:
+            stored = self._stored_int(ctx, "npc_flags")
+            wire = self._fields.get("UNIT_NPC_FLAGS", 0)
+            if stored is not None and stored != wire:
+                yield (f"creature_template.npc_flags -- the database has {stored}, the wire "
+                       f"{wire}; a script can set or clear these at runtime (Chicken's quest "
+                       "flag is one), so the capture cannot say which is the template's")
+        for column in _QUERIED_TEXT:
+            observed = (self._query or {}).get(column)
+            stored = self._stored_text(ctx, column)
+            if observed is not None and stored is not None and stored != observed:
+                yield (f"creature_template.{column} -- the query answered {observed!r}, the "
+                       f"database has {stored!r}; the server answers in the client's own "
+                       "language, so it is not proposed as a rename")
         if self._saw_spells and (own := self._own_spell_list(ctx)) not in (None, ctx.entry):
             yield (f"creature_template.spell_list_id -- the template already points at spell "
                    f"list {own}; the spells this capture saw are proposed as creature_spells "
@@ -330,6 +389,18 @@ class Stats(BaseAuthorRule):
                    f"{name} as {_shown(laters)} where its first said {_shown(firsts)}; "
                    "the first sighting was used, but a creature whose stats move between "
                    "sightings was not in its authored state in at least one of them")
+
+    def _stored_int(self, ctx: AuthorContext, column: str) -> int | None:
+        if ctx.world is None:
+            return None
+        stored = ctx.world.numeric_column("creature_template", column, f"entry = {ctx.entry}")
+        return None if stored is None else int(stored)
+
+    def _stored_text(self, ctx: AuthorContext, column: str) -> str | None:
+        if ctx.world is None:
+            return None
+        stored = ctx.world.column("creature_template", column, f"entry = {ctx.entry}")
+        return None if stored is None else ("" if stored == "NULL" else stored)
 
     def _own_spell_list(self, ctx: AuthorContext) -> int | None:
         """The spell list the template already points at, if any."""

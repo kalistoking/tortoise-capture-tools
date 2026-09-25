@@ -376,6 +376,66 @@ def test_a_spawn_created_slowed_is_reported():
     assert any("speed_run" in gap for gap in gaps)
 
 
+def _identity_events():
+    return [
+        make_event("creature_query", 12.8, entry=ENTRY, name="Ralthas", subname="",
+                   type_flags=0, type=7, beast_family=0, rank=0),
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_ATTACK_POWER=44, UNIT_FIELD_FACTIONTEMPLATE=17,
+            UNIT_FIELD_BASEATTACKTIME=2000, UNIT_FIELD_RANGEDATTACKTIME=1900)),
+    ]
+
+
+def test_faction_and_attack_times_are_read_off_the_create():
+    """334 of 334 spawns in the three captures broadcast exactly the template's."""
+    rows, _ = author_rows(Stats(), _identity_events(), ENTRY)
+    values, provenance = rows[0].values, rows[0].provenance
+    assert (values["faction"], values["base_attack_time"], values["ranged_attack_time"]) == (
+        17, 2000, 1900)
+    assert provenance["faction"] == WIRE
+
+
+def test_the_query_response_names_the_template():
+    """20 of 20 responses in the captures answer exactly the template's."""
+    rows, _ = author_rows(Stats(), _identity_events(), ENTRY)
+    values = rows[0].values
+    assert (values["name"], values["subname"], values["type"], values["rank"],
+            values["beast_family"], values["type_flags"]) == ("Ralthas", "", 7, 0, 0, 0)
+
+
+def test_identity_the_database_already_holds_is_confirmed():
+    world = StubWorld(columns={("creature_template", "faction"): "17",
+                               ("creature_template", "name"): "Ralthas",
+                               ("creature_template", "type"): "7"})
+    rows, _ = author_rows(Stats(), _identity_events(), ENTRY, world=world)
+    provenance = rows[0].provenance
+    assert provenance["faction"] == provenance["name"] == provenance["type"] == CONFIRMED
+
+
+def test_a_name_the_database_holds_otherwise_is_not_renamed():
+    """The server answers a query in the client's own language (QueryHandler.cpp),
+    so a name that differs may be a translation rather than a rename."""
+    world = StubWorld(columns={("creature_template", "name"): "Ralthas der Verräter"})
+    rows, gaps = author_rows(Stats(), _identity_events(), ENTRY, world=world)
+    assert "name" not in rows[0].values
+    assert any("creature_template.name" in gap for gap in gaps)
+
+
+def test_npc_flags_absent_from_the_create_are_a_zero():
+    """A CREATE omits every zero field."""
+    rows, _ = author_rows(Stats(), _identity_events(), ENTRY)
+    assert rows[0].values["npc_flags"] == 0 and rows[0].provenance["npc_flags"] == WIRE
+
+
+def test_npc_flags_the_database_contradicts_are_left_to_a_human():
+    """Chicken (620) is a quest giver, npc_flags 2, in the database, and 0 on
+    the wire: a script sets the flag at runtime. The capture cannot say which."""
+    world = StubWorld(columns={("creature_template", "npc_flags"): "2"})
+    rows, gaps = author_rows(Stats(), _identity_events(), ENTRY, world=world)
+    assert "npc_flags" not in rows[0].values
+    assert any("creature_template.npc_flags" in gap and "2" in gap for gap in gaps)
+
+
 def _casting():
     return _stats_events() + [make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=12544)]
 
