@@ -216,35 +216,11 @@ def _address(text: str) -> Endpoint | None:
 def plan(path: Path, logon: Endpoint, world: Endpoint | None) -> SlimPlan:
     """Decides what to keep. `world` None means "read it from the realm list"."""
     data, records = read_records(path)
-
-    # The logon server's replies, one stream per client connection.
-    replies: dict[tuple, list[tuple[int, bytes]]] = defaultdict(list)
-    for r in records:
-        if r.tcp and logon.matches(r.tcp[0], r.tcp[1]) and r.tcp[6] > r.tcp[5]:
-            replies[(r.tcp[2], r.tcp[3])].append((r.tcp[4], data[r.tcp[5]:r.tcp[6]]))
-    realms = []
-    for segments in replies.values():
-        stream = b"".join(dict(sorted(segments)).values())    # one copy per sequence number
-        for listing in realm_lists(stream):
-            realms.extend(listing)
-
+    realms = _realms(data, records, logon)
     source = "as named"
     if world is None:
         source = "from the realm list"
-        listed = [e for e in (_address(a) for _, a in realms) if e is not None]
-        if not listed:
-            raise SlimError(f"{path}: no realm list from a logon server at {logon} (the capture "
-                            "may begin after the logon) and no world port was named -- name "
-                            "it with --port, TCT_PORT or [capture] port")
-        talked = [e for e in dict.fromkeys(listed)
-                  if any(r.tcp and e.matches(r.tcp[2], r.tcp[3]) for r in records)]
-        if not talked:
-            raise SlimError(f"{path}: the realm list names {', '.join(map(str, listed))}, but "
-                            "no client in the capture talks to it -- name the world port")
-        if len(talked) > 1:
-            raise SlimError(f"{path}: clients talk to more than one listed realm "
-                            f"({', '.join(map(str, talked))}) -- name the one to keep")
-        world = talked[0]
+        world = _listed_world(path, records, realms, logon)
 
     out = SlimPlan(source=Path(path), data=data, records=records, logon=logon, world=world,
                    world_server=None, realms=realms, world_source=source)
@@ -282,6 +258,49 @@ def plan(path: Path, logon: Endpoint, world: Endpoint | None) -> SlimPlan:
             out.dropped_bytes += r.size
             out.dropped_other += r.tcp is None
     return out
+
+
+def _realms(data: bytes, records: list[_Record], logon: Endpoint) -> list[tuple[str, str]]:
+    """Every realm the logon server listed, one reply stream per client."""
+    replies: dict[tuple, list[tuple[int, bytes]]] = defaultdict(list)
+    for r in records:
+        if r.tcp and logon.matches(r.tcp[0], r.tcp[1]) and r.tcp[6] > r.tcp[5]:
+            replies[(r.tcp[2], r.tcp[3])].append((r.tcp[4], data[r.tcp[5]:r.tcp[6]]))
+    realms = []
+    for segments in replies.values():
+        stream = b"".join(dict(sorted(segments)).values())    # one copy per sequence number
+        for listing in realm_lists(stream):
+            realms.extend(listing)
+    return realms
+
+
+def _listed_world(path: Path, records: list[_Record], realms: list[tuple[str, str]],
+                  logon: Endpoint) -> Endpoint:
+    """The one listed realm a client in the capture talked to."""
+    listed = [e for e in (_address(a) for _, a in realms) if e is not None]
+    if not listed:
+        raise SlimError(f"{path}: no realm list from a logon server at {logon} (the capture "
+                        "may begin after the logon) and no world port was named -- name "
+                        "it with --port, TCT_PORT or [capture] port")
+    talked = [e for e in dict.fromkeys(listed)
+              if any(r.tcp and e.matches(r.tcp[2], r.tcp[3]) for r in records)]
+    if not talked:
+        raise SlimError(f"{path}: the realm list names {', '.join(map(str, listed))}, but "
+                        "no client in the capture talks to it -- name the world port")
+    if len(talked) > 1:
+        raise SlimError(f"{path}: clients talk to more than one listed realm "
+                        f"({', '.join(map(str, talked))}) -- name the one to keep")
+    return talked[0]
+
+
+def world_server(path: Path, logon: Endpoint) -> tuple[str, int]:
+    """The world server the capture's own realm list sends its client to."""
+    data, records = read_records(path)
+    world = _listed_world(path, records, _realms(data, records, logon), logon)
+    for r in records:
+        if r.tcp and r.tcp[6] > r.tcp[5] and world.matches(r.tcp[2], r.tcp[3]):
+            return r.tcp[2], r.tcp[3]
+    raise SlimError(f"{path}: no client talks to a world server at {world}")
 
 
 def write(p: SlimPlan, out: Path) -> None:

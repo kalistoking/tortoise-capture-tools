@@ -148,7 +148,7 @@ def _packet_source(args, cfg: RunConfig, registry, ctx):
     source = Path(args.source)
     if source.suffix.lower() == ".jsonl":
         return jsonl_emit.read_packets(source), source.stem
-    session = pcap.read_session(source, cfg.server_ip, cfg.port)
+    session = pcap.read_session(source, *_world(cfg, source))
     key = _session_key(session, args.session_key)
     if key is None:
         return None, source.stem
@@ -166,6 +166,19 @@ def _named_world(cfg: RunConfig) -> slim.Endpoint | None:
     if "port" not in cfg.named:
         return None
     return slim.Endpoint(cfg.server_ip if "server_ip" in cfg.named else None, cfg.port)
+
+
+def _world(cfg: RunConfig, capture: Path) -> tuple[str, int]:
+    """The world server to decode: as named; else as the capture's own realm
+    list names it, so a server off 8090 needs no --port; else the default."""
+    if "port" in cfg.named:
+        return cfg.server_ip, cfg.port
+    try:
+        return slim.world_server(capture, _logon(cfg))
+    except slim.SlimError as exc:
+        _logger.debug("world server not read from the capture (%s); using %s:%d",
+                      exc, cfg.server_ip, cfg.port)
+        return cfg.server_ip, cfg.port
 
 
 def _decoded(session, key, registry, ctx) -> list[tuple]:
@@ -228,7 +241,7 @@ def _slim_beside(capture: Path, session, key, cfg: RunConfig, registry, ctx, arg
 # --------------------------------------------------------------------------
 
 def cmd_key(args, cfg: RunConfig) -> int:
-    session = pcap.read_session(Path(args.capture), cfg.server_ip, cfg.port)
+    session = pcap.read_session(Path(args.capture), *_world(cfg, Path(args.capture)))
     key = crypt.recover_session_key(session.c2s.segments)
     if key is None:
         return EXIT_WITH_ERRORS
@@ -241,7 +254,7 @@ def cmd_dump(args, cfg: RunConfig) -> int:
     registry = registry_mod.load(tables)
     ctx = _context(tables, cfg)
 
-    session = pcap.read_session(Path(args.capture), cfg.server_ip, cfg.port)
+    session = pcap.read_session(Path(args.capture), *_world(cfg, Path(args.capture)))
     key = _session_key(session, args.session_key)
     if key is None:
         return EXIT_WITH_ERRORS

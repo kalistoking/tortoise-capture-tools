@@ -127,9 +127,10 @@ tct slim capture.pcap                  # write capture.wow.pcap beside it, verif
 tct slim capture.pcap --replace        # ...and replace the original with it
 ```
 
-The world server's address is read from the realm list the logon server sends
-(port 3724), so no port has to be given; a capture that begins after the logon
-has no realm list, and then the world port must be named. A port given in the
+Every command reads the world server's address from the realm list the logon
+server sends (port 3724), so no port has to be given for a server off 8090. A
+capture that begins after the logon has no realm list: `tct slim` then needs the
+world port named, and the other commands fall back to 8090. A port given in the
 config file, the environment or a flag always wins over a detected one:
 `--port` / `TCT_PORT` / `[capture] port` for the world server,
 `--logon-port` / `TCT_LOGON_PORT` / `[capture] logon_port` for the logon one.
