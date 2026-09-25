@@ -49,6 +49,22 @@ def test_literals_quote_and_escape_per_dialect():
     assert literal(b"\x01\x02", "mysql") == "0x0102"
 
 
+def test_a_guid_past_two_to_the_63_survives_sqlite_exactly():
+    """SQLite has no unsigned 64-bit integer: a creature's guid, 0xF130...,
+    overflowed into a REAL, neighbouring guids rounded to one value, and
+    INSERT OR IGNORE dropped a third of capture_unit_field as "duplicates".
+    Written as its two's-complement value it is stored exactly."""
+    import sqlite3
+    guids = (0xF13000F4AB2787EA, 0xF13000F4AB2787EB)
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE t (guid BIGINT UNSIGNED NOT NULL, PRIMARY KEY (guid))")
+    for guid in guids:
+        db.execute(f"INSERT OR IGNORE INTO t (guid) VALUES ({literal(guid, 'sqlite')})")
+    stored = sorted(g & 0xFFFFFFFFFFFFFFFF for (g,) in db.execute("SELECT guid FROM t"))
+    assert stored == sorted(guids)
+    assert literal(guids[0], "mysql") == str(guids[0])          # MySQL holds it as it is
+
+
 def test_ddl_carries_the_primary_key():
     ddl = create_table(MANAGED, "mysql")
     assert "CREATE TABLE IF NOT EXISTS `capture_demo`" in ddl

@@ -33,6 +33,9 @@ _INSERT_FORMS = {
 }
 
 
+_INT64_MAX = (1 << 63) - 1
+
+
 def literal(value: Any, dialect: str) -> str:
     """One SQL literal. The only place a value becomes text."""
     if value is None:
@@ -40,6 +43,12 @@ def literal(value: Any, dialect: str) -> str:
     if isinstance(value, bool):
         return "1" if value else "0"
     if isinstance(value, int):
+        # SQLite's integers are signed 64-bit, and a guid past 2^63 -- every
+        # creature's, 0xF130... -- would overflow into a lossy REAL. Its
+        # two's-complement value is stored exactly; `& 0xFFFF_FFFF_FFFF_FFFF`
+        # reads it back.
+        if dialect == "sqlite" and value > _INT64_MAX:
+            value -= 1 << 64
         return str(value)
     if isinstance(value, float):
         return repr(value)
