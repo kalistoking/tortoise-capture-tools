@@ -39,6 +39,7 @@ dist/
 
 # --- editors / os -------------------------------------------------------
 .vscode/
+.vs/
 .idea/
 Thumbs.db
 desktop.ini
