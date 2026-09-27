@@ -66,10 +66,17 @@ COINCIDENCE_WINDOW = 1.0
 # Below this many observed repeat intervals, the spread is not a measurement.
 MIN_INTERVALS_FOR_CONFIDENCE = 5
 
-# A respawn timer is typically fixed, not randomised, so two independent
-# gaps already cross-validate each other -- one gap cannot even split a
-# single value into a min and a max, let alone measure a spread.
+# A spawn draws its timer once, when it loads (Creature.cpp:1748), and every
+# death reuses the draw -- unless spawn_flags re-draw it +-10% at each death or
+# dynamic respawn cuts it (Creature.cpp:1966-1976). One gap cannot tell those
+# apart; a second that fits the same whole second can.
 MIN_RESPAWNS_FOR_CONFIDENCE = 2
+
+# The respawn is armed at time(nullptr) + delay, in whole seconds from the
+# death (Creature.cpp:1978), and checked on a map update (Creature.cpp:727,
+# every 50 ms: mangosd.conf.dist MapUpdateInterval) whose CREATE still has to
+# reach the client. So a gap falls in (delay - 1, delay + slack).
+RESPAWN_SLACK = 0.5
 
 _TRIGGERS = {"ai_reaction": "aggro", "party_kill": "death"}
 
@@ -98,6 +105,13 @@ def _health_of(ev: Event) -> int | None:
         if f.get("name") == "UNIT_FIELD_HEALTH":
             return f["raw"]
     return None
+
+
+def _timer_seconds(gaps: list[float]) -> int | None:
+    """The one whole-second timer every gap fits, or None when none or two do."""
+    low, high = max(gaps) - RESPAWN_SLACK, min(gaps) + 1
+    fits = range(math.floor(low) + 1, math.ceil(high))
+    return fits[0] if len(fits) == 1 else None
 
 
 @dataclass
@@ -225,12 +239,15 @@ class Behaviour(BaseAnalyzer):
             if after:
                 gaps.append(min(after) - death)
         if gaps:
-            confident = len(gaps) >= MIN_RESPAWNS_FOR_CONFIDENCE
+            seconds = _timer_seconds(gaps)
+            confident = len(gaps) >= MIN_RESPAWNS_FOR_CONFIDENCE and seconds is not None
+            caveat = ("" if confident else
+                      f" -- too few to tell a fixed timer (want {MIN_RESPAWNS_FOR_CONFIDENCE}+)"
+                      if len(gaps) < MIN_RESPAWNS_FOR_CONFIDENCE else
+                      " -- no one whole second fits every gap")
             yield self.event(c.last_packet, "respawn_timer", entry=c.entry, guid=c.guid,
                              value_min=min(gaps), value_max=max(gaps), samples=len(gaps),
-                             confident=confident,
-                             caveat="" if confident else
-                                    f" -- too few to bound (want {MIN_RESPAWNS_FOR_CONFIDENCE}+)")
+                             seconds=seconds, confident=confident, caveat=caveat)
 
     def _text_triggers(self, entry: int, spawns: list[_Creature], last: Packet,
                        sound_for: dict[tuple[int, str], int]) -> Iterator[Event]:

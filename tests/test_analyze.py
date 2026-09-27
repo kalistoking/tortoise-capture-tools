@@ -305,6 +305,26 @@ def test_respawn_is_also_detected_from_a_health_reset_with_no_fresh_create():
     assert math.isclose(respawn["value_min"], 299.217, abs_tol=0.01)
     assert math.isclose(respawn["value_max"], 300.022, abs_tol=0.01)
     assert respawn["confident"] is True
+    # Armed in whole seconds from the death (Creature.cpp:1978): each gap is
+    # in (timer - 1, timer + slack), and 300 is the one second both fit.
+    assert respawn["seconds"] == 300
+
+
+def test_respawn_gaps_no_one_whole_second_explains_are_not_a_timer():
+    """spawn_flags' random respawn re-draws the delay at each death, +-10%
+    (Creature.cpp:1974): gaps a whole second apart and more are not one timer."""
+    events = [
+        make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+        make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
+        make_event("object_values", 400.1, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+        make_event("party_kill", 500.0, guid=GUID, entry=ENTRY),
+        make_event("object_values", 828.4, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+    ]
+    respawn = findings_by_kind(run_analyzer(Behaviour(), events))["respawn_timer"].data
+    assert respawn["seconds"] is None and respawn["confident"] is False
 
 
 def test_a_health_update_while_already_alive_is_not_mistaken_for_a_respawn():

@@ -167,19 +167,18 @@ class Spawn(BaseAuthorRule):
         skip: set[str] = {"map"}
         if spawn.respawn is not None and spawn.respawn.get("confident"):
             r = spawn.respawn
-            min_s, max_s = int(round(r["value_min"])), int(round(r["value_max"]))
-            values["spawntimesecsmin"], values["spawntimesecsmax"] = min_s, max_s
+            values["spawntimesecsmin"] = values["spawntimesecsmax"] = r["seconds"]
             provenance["spawntimesecsmin"] = provenance["spawntimesecsmax"] = DERIVED
-            notes.append(f"respawn {min_s}-{max_s}s from {r['samples']} observation(s) of the "
+            notes.append(f"respawn {r['seconds']}s: {r['samples']} observation(s) of the "
                          f"death-to-next-sighting gap ({r['value_min']:.3f}"
-                         f"-{r['value_max']:.3f}s) -- a spread this tight against an "
-                         "authored single value is plausibly measurement noise around a "
-                         "fixed timer, not genuine randomisation; worth a human's judgement")
+                         f"-{r['value_max']:.3f}s), counted in whole seconds from the death, "
+                         f"all fit {r['seconds']} and no other -- one draw of this spawn's "
+                         "timer, which it draws once when it loads (Creature.cpp:1748), so a "
+                         "range the row holds cannot be seen from it; min = max is right for "
+                         "a fixed timer, as 95% of creature rows are")
         else:
-            # None seen at all, or only one sample -- a single gap cannot
-            # even split a min from a max, the same refusal creature_spells
-            # already applies to delayRepeatMin/Max from one interval.
-            # Left out of `values` entirely; see gaps().
+            # None seen, one sample, or samples no one timer explains --
+            # left out of `values` entirely; see gaps().
             skip.add("spawntimesecsmin")
             skip.add("spawntimesecsmax")
         if spawn.patrols():
@@ -295,10 +294,15 @@ class Spawn(BaseAuthorRule):
                 elif r is None:
                     yield (f"{table}.spawntimesecsmin/max -- it died but was not seen alive "
                            "again before the capture ended")
+                elif r.get("samples", 1) < 2:
+                    yield (f"{table}.spawntimesecsmin/max -- only one sample of the respawn "
+                           f"({r['value_min']:.3f}s), which cannot tell a fixed timer from one "
+                           "drawn again at each death")
                 elif not r.get("confident"):
-                    yield (f"{table}.spawntimesecsmin/max -- only {r.get('samples', 1)} "
-                           f"respawn observation(s) ({r['value_min']:.3f}s); one sample cannot "
-                           "even split a min from a max, let alone bound a spread")
+                    yield (f"{table}.spawntimesecsmin/max -- {r['samples']} respawns took "
+                           f"{r['value_min']:.3f}-{r['value_max']:.3f}s, more apart than timing "
+                           "in whole seconds explains: its timer is drawn again at each death "
+                           "or cut by dynamic respawn, so it is not authored")
         for guid, spawn in seen:
             # Named per spawn only when there is more than one to tell apart.
             table = ("creature_movement" if len(seen) == 1

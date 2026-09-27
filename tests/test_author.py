@@ -618,22 +618,31 @@ def test_a_single_respawn_sample_does_not_bound_spawntimesecs():
     assert any("spawntimesecsmin/max" in gap and "one sample" in gap for gap in gaps)
 
 
-def test_multiple_respawn_samples_give_a_genuine_min_max_range():
-    """A player who never loses sight of the creature gets no fresh CREATE on
-    respawn, only a VALUES health reset -- behaviour.py's respawn_timer
-    already handles that; this checks spawn.py doesn't collapse a real
-    two-sample range down to one number, or claim "observed once" when it
-    was not. Real capture numbers: 299.217s and 300.022s."""
+def test_a_spawns_respawns_give_one_timer_not_a_range():
+    """The server draws a spawn's timer once, when it loads (Creature.cpp:1748),
+    and every death reuses it: two gaps of one spawn measure one draw, not
+    the range it came from. 299.217 s and 300.022 s were authored 299-300,
+    a range the row never held, for a timer of 300."""
     events = _spawn_events() + [
-        make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY,
-                   value_min=299.217, value_max=300.022, samples=2, confident=True),
+        make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY, value_min=299.217,
+                   value_max=300.022, samples=2, confident=True, seconds=300),
     ]
     rows, _ = author_rows(Spawn(), events, ENTRY)
     creature = next(r for r in rows if r.table == "creature")
-    assert creature.values["spawntimesecsmin"] == 299
-    assert creature.values["spawntimesecsmax"] == 300
-    assert any("2 observation" in note for note in creature.notes)
-    assert not any("observed once" in note for note in creature.notes)
+    assert creature.values["spawntimesecsmin"] == creature.values["spawntimesecsmax"] == 300
+    assert creature.provenance["spawntimesecsmin"] == DERIVED
+    assert any("2 observation" in note and "Creature.cpp:1748" in note for note in creature.notes)
+
+
+def test_respawns_no_one_timer_explains_are_a_gap():
+    events = _spawn_events() + [
+        make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY, value_min=300.1,
+                   value_max=328.4, samples=2, confident=False, seconds=None),
+    ]
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert "spawntimesecsmin" not in creature.values
+    assert any("spawntimesecsmin/max" in gap and "whole second" in gap for gap in gaps)
 
 
 def test_without_a_death_the_position_is_emitted_but_flagged():
@@ -759,11 +768,11 @@ def test_a_respawn_timer_is_authored_only_on_the_spawn_it_was_measured_on():
                    movement={"movement_info": {"pos": (300.0, 400.0, 70.0, 2.0)}}),
         make_event("party_kill", 50.0, guid=GUID, entry=ENTRY),
         make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY,
-                   value_min=299.217, value_max=300.022, samples=2, confident=True),
+                   value_min=299.217, value_max=300.022, samples=2, confident=True, seconds=300),
     ]
     rows, gaps = author_rows(Spawn(), events, ENTRY)
     creatures = {r.values["guid"]: r.values for r in rows if r.table == "creature"}
-    assert creatures[SPAWN_GUID]["spawntimesecsmin"] == 299
+    assert creatures[SPAWN_GUID]["spawntimesecsmin"] == 300
     assert "spawntimesecsmin" not in creatures[SPAWN_GUID + 1]
     assert any(f"spawn {SPAWN_GUID + 1}" in gap and "never died" in gap for gap in gaps)
 
