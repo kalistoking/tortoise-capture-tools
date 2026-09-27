@@ -106,6 +106,34 @@ def test_a_corpse_in_view_does_not_pin_the_numbering():
     assert (round(first["position_x"]), round(first["position_y"])) == SQUARE[0][:2]
 
 
+def test_a_route_that_turns_back_is_refused_not_cut_short():
+    """A guard pacing A-B-C-B leaves B for C and for A as often. Following each
+    point's commonest successor walked B, C and home, dropped A, and still
+    called the route confident."""
+    events, t = [], 1.0
+    for i in range(40):
+        x, y, z = SQUARE[(0, 1, 2, 1)[i % 4]]
+        events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(x, y, z)))
+        t += 1.0
+    route = findings_by_kind(run_analyzer(Patrol(), events))["patrol_route"]
+    assert route.data["confident"] is False and route.data["refused_because"] == "branching"
+
+
+def test_a_point_the_observer_sometimes_missed_keeps_the_route():
+    """81265 in the Elwynn capture walks A-B-C-D-E, but 5 of 13 laps show C-E:
+    the hop to D never reached the client. The walk still takes C-D, every
+    point is on it, and the database agrees."""
+    pentagon = SQUARE + [(-10.0, 25.0, 10.0)]
+    events, t = [], 1.0
+    for lap in range(8):
+        for corner in (0, 1, 2, 4) if lap % 2 else (0, 1, 2, 3, 4):
+            x, y, z = pentagon[corner]
+            events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(x, y, z)))
+            t += 1.0
+    route = findings_by_kind(run_analyzer(Patrol(), events))["patrol_route"]
+    assert route.data["confident"] is True and route.data["count"] == 5
+
+
 def test_combat_detours_do_not_enter_the_route():
     """Positions visited once while fighting are not part of the patrol."""
     events = _hops(laps=2.5)

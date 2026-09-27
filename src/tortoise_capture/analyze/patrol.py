@@ -159,6 +159,7 @@ class _Route:
         self.last_packet: Packet | None = None
         self.engagements: list[float] = []          # aggro-trigger timestamps (ai_reaction)
         self.deaths: list[float] = []                # party_kill timestamps
+        self.closes_elsewhere = False               # walk() came round to a non-start point
 
     def add_hop(self, point: tuple[float, float, float], t: float) -> None:
         self.hop_times.append(t)
@@ -225,6 +226,23 @@ class _Route:
             return None
         return sum(max(c.values()) for c in revisited) / total
 
+    def drops_points(self, order: list[int]) -> bool:
+        """Whether the walk left out a point the creature kept coming back to,
+        or turned back to a point other than its start.
+
+        walk() follows each point's commonest successor, so a route that
+        repeats a point (A-B-A-C) or turns back (A-B-C-B) loses whatever lies
+        down the other way. A point the observer only sometimes missed (C-E
+        for C-D-E) does not: the walk still takes C-D, and every point is on
+        it. Measured on the three test captures: the 11 routes this refuses
+        all had fewer points than the database, and the 3 with missed points
+        it keeps (81231, 81262, 81265) match its count.
+        """
+        walked = set(order)
+        return self.closes_elsewhere or any(
+            len(members) >= 2 for index, members in enumerate(self.clusters)
+            if index not in walked)
+
     def centre(self, index: int) -> tuple[float, float, float]:
         """Mean of every observation of a waypoint -- one lap's noise averaged out."""
         members = self.clusters[index]
@@ -251,6 +269,10 @@ class _Route:
             seen.add(node)
             order.append(node)
             node = edges[node].most_common(1)[0][0] if edges[node] else None
+        # Coming round to another point is a turn only if the last point never
+        # went on to the start: 81262 walks G-H-A, but most laps missed H.
+        self.closes_elsewhere = (node is not None and node != anchor
+                                 and anchor not in edges[order[-1]])
         self.returns_to_start = bool(order and edges[order[-1]]
                                      and edges[order[-1]].most_common(1)[0][0] == anchor)
         return order
@@ -348,6 +370,8 @@ class Patrol(BaseAnalyzer):
                 refused = "unrevisited"     # e.g. a long route seen for under a lap
             elif ordered < MIN_TRANSITION_ORDER:
                 refused = "unordered"
+            elif route.drops_points(order):
+                refused = "branching"
             else:
                 refused = None
             confident = refused is None

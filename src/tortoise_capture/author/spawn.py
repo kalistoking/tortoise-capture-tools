@@ -333,6 +333,9 @@ _WITHHELD_NOTE = {
     "combat": ("a route was reconstructed but withheld: most of its hops happened during "
                "combat, so it may be re-engagement repositioning rather than a real "
                "patrol -- see gaps"),
+    "branching": ("a route was reconstructed but withheld: some point is left for two "
+                  "different next points, as a route that turns back (A-B-C-B) or forks is, "
+                  "and following one of them would drop the rest -- see gaps"),
     None: "a route was reconstructed but withheld as untrustworthy -- see gaps",
 }
 _WITHHELD_NOTE.update({k: _WITHHELD_NOTE[None] for k in ("short", "unrevisited", "unordered")})
@@ -347,6 +350,9 @@ _REFUSED_GAP = {
               "proposed until the creature has been watched for longer"),
     "unrevisited": ("a route of {hops} hop(s) never left any point twice -- a long route "
                     "watched for less than a lap cannot yet show whether it keeps an order"),
+    "branching": ("a route was reconstructed, but some point is left for two different "
+                  "next points: it turns back (A-B-C-B) or forks, and one successor per "
+                  "point cannot number it -- author the points in walking order by hand"),
     None: "a route was reconstructed but not trusted enough to propose",
 }
 _REFUSED_GAP["unordered"] = _REFUSED_GAP[None]

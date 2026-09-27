@@ -700,6 +700,16 @@ def test_a_withheld_route_says_its_schema_zero_is_a_placeholder():
     assert any(gap.startswith("creature.movement_type") and "placeholder" in gap for gap in gaps)
 
 
+def test_a_route_that_turns_back_is_left_to_a_human_with_the_reason():
+    events = [ev for ev in _spawn_events() if ev.kind != "patrol_route"] + [
+        make_event("patrol_route", 999.0, guid=GUID, entry=ENTRY, count=2,
+                   closes_loop=True, confident=False, refused_because="branching"),
+    ]
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
+    assert not any(r.table == "creature_movement" for r in rows)
+    assert any("creature_movement" in gap and "turns back" in gap for gap in gaps)
+
+
 def test_a_creature_that_moved_without_a_route_is_not_called_stationary():
     events = [_create(12.9, 100.0, 200.0)] + [
         make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(100.0 + t, 200.0, 70.0))
