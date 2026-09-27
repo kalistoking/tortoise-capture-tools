@@ -433,6 +433,18 @@ def test_a_name_the_database_holds_otherwise_is_not_renamed():
     assert any("creature_template.name" in gap for gap in gaps)
 
 
+def test_an_empty_subname_over_a_stored_null_is_left_alone():
+    """A query answers '' for a NULL subname; restating '' is no no-op there,
+    since it would turn NULL into '', and neither is it a rename."""
+    world = StubWorld(columns={("creature_template", "subname"): "NULL"})
+    rows, gaps = author_rows(Stats(), _identity_events(), ENTRY, world=world)
+    assert "subname" not in rows[0].values
+    assert not any("subname" in gap for gap in gaps)
+    world = StubWorld(columns={("creature_template", "subname"): ""})
+    rows, _ = author_rows(Stats(), _identity_events(), ENTRY, world=world)
+    assert rows[0].provenance["subname"] == CONFIRMED
+
+
 def test_npc_flags_absent_from_the_create_are_a_zero():
     """A CREATE omits every zero field."""
     rows, _ = author_rows(Stats(), _identity_events(), ENTRY)
@@ -1405,6 +1417,22 @@ def _fake_world(responses: dict[str, list[list[str]]]):
             return []
 
     return FakeWorld(client="unused"), calls
+
+
+def test_an_empty_string_in_the_database_is_a_value_not_an_absence():
+    """`-N -B` prints a lone empty column as an empty line. Dropping it read
+    subname '' as "no row", so a query's '' was never confirmed and a
+    rename from '' went out without its gap."""
+    import subprocess
+    from tortoise_capture import world as world_mod
+
+    original = world_mod.subprocess.run
+    world_mod.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, "\n", "")
+    try:
+        stored = world_mod.World(client="unused").column("creature_template", "subname", "entry = 1")
+    finally:
+        world_mod.subprocess.run = original
+    assert stored == ""
 
 
 def test_describe_coerces_types_and_treats_null_as_no_default():

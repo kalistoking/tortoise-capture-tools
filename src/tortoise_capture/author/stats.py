@@ -302,6 +302,8 @@ class Stats(BaseAuthorRule):
                 continue
             observed = self._query[column]
             stored = self._stored_text(ctx, column)
+            if observed == "" and self._stored_null(ctx, column):
+                continue            # '' is how the query says NULL; restating it is a change
             if stored is None or stored == observed:
                 values[column] = observed
                 provenance[column] = WIRE if stored is None else CONFIRMED
@@ -407,6 +409,10 @@ class Stats(BaseAuthorRule):
             return None
         stored = ctx.world.column("creature_template", column, f"entry = {ctx.entry}")
         return None if stored is None else ("" if stored == "NULL" else stored)
+
+    def _stored_null(self, ctx: AuthorContext, column: str) -> bool:
+        return (ctx.world is not None and
+                ctx.world.column("creature_template", column, f"entry = {ctx.entry}") == "NULL")
 
     def _runs_eventai(self, ctx: AuthorContext) -> bool:
         return self._stored_text(ctx, "ai_name") == "EventAI"

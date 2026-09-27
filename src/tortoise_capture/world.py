@@ -83,7 +83,8 @@ class World:
             raise WorldError(f"could not run {self.client}: {exc}") from exc
         if done.returncode != 0:
             raise WorldError(done.stderr.strip() or f"{self.client} exited {done.returncode}")
-        return [line.split("\t") for line in done.stdout.splitlines() if line]
+        # An empty line is a row too: one empty column, as subname '' prints.
+        return [line.split("\t") for line in done.stdout.splitlines()]
 
     def scalar(self, sql: str) -> str | None:
         rows = self.query(sql)
