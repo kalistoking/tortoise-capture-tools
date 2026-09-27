@@ -41,7 +41,7 @@ from __future__ import annotations
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
-from ..core.contracts import CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event
+from ..core.contracts import CONVENTION, DERIVED, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event
 from ..core.registry import author_rule
 
 MAX_SLOTS = 8            # creature_spells has spellId_1 .. spellId_8
@@ -75,8 +75,13 @@ class Spells(BaseAuthorRule):
         # how long the capture happened to run.
         spells = sorted(self._casts)[:MAX_SLOTS]
 
-        values: dict[str, Any] = {"entry": ctx.entry, "name": self._name or str(ctx.entry)}
-        provenance: dict[str, str] = {"entry": WIRE, "name": WIRE}
+        name, source = self._name, WIRE
+        if not name and ctx.world is not None:
+            name, source = ctx.world.column("creature_template", "name", f"entry = {ctx.entry}"), LOOKUP
+        if not name:
+            name, source = str(ctx.entry), CONVENTION       # a label: ObjectMgr.cpp:1755 never loads it
+        values: dict[str, Any] = {"entry": ctx.entry, "name": name}
+        provenance: dict[str, str] = {"entry": WIRE, "name": source}
         notes: list[str] = []
         skip: set[str] = set()          # columns fill_schema_defaults must never touch
 

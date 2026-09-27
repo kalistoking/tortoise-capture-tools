@@ -1000,6 +1000,17 @@ def test_spells_emits_what_it_saw_cast():
     assert row.provenance["probability_1"] == CONVENTION
 
 
+def test_a_spell_list_named_without_a_query_says_where_the_name_came_from():
+    """Ralthas's capture never queried 62635, and its list was named '62635'
+    with the provenance of a name read off the wire."""
+    events = [e for e in _spell_events() if e.kind != "creature_query"]
+    world = StubWorld(columns={("creature_template", "name"): "Ralthas"})
+    rows, _ = author_rows(Spells(), events, ENTRY, world=world)
+    assert rows[0].values["name"] == "Ralthas" and rows[0].provenance["name"] == LOOKUP
+    rows, _ = author_rows(Spells(), events, ENTRY)
+    assert rows[0].values["name"] == str(ENTRY) and rows[0].provenance["name"] == CONVENTION
+
+
 def test_slot_order_does_not_depend_on_how_often_a_spell_happened_to_fire():
     """creature_spells is positional, so the slot a spell lands in is content.
 
