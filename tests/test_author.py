@@ -909,6 +909,29 @@ def test_the_display_id_resolves_to_an_item_entry():
     assert gaps == []
 
 
+def _equip_world(equipment_id):
+    columns = {("item_template", "class"): "2", ("item_template", "subclass"): "10",
+               ("item_template", "inventory_type"): "17"}
+    if equipment_id is not None:
+        columns[("creature_template", "equipment_id")] = equipment_id
+    return StubWorld(displays={5010: 5276}, columns=columns)
+
+
+def test_the_equipment_row_is_keyed_where_the_template_points():
+    """The server equips what creature_template.equipment_id names
+    (Creature.cpp:414-417), so the row's entry is a convention to be pointed
+    at -- 5,077 templates in the live database point at their own entry, 1,545
+    elsewhere and 7,787 nowhere. A row the template does not name is never
+    used, and nothing said so."""
+    rows, gaps = author_rows(Equipment(), _equip_events(), ENTRY, world=_equip_world(str(ENTRY)))
+    assert rows[0].provenance["entry"] == CONVENTION and gaps == []
+    for elsewhere in ("0", "4242"):
+        rows, gaps = author_rows(Equipment(), _equip_events(), ENTRY,
+                                 world=_equip_world(elsewhere))
+        assert rows and any(gap.startswith("creature_template.equipment_id") and elsewhere in gap
+                            for gap in gaps)
+
+
 def test_a_lookup_the_packed_info_contradicts_is_withheld():
     """Two independent paths to the item; disagreement means the lookup is wrong."""
     world = StubWorld(displays={5010: 5276}, columns={

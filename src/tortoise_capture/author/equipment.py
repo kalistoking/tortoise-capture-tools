@@ -33,7 +33,7 @@ from __future__ import annotations
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
-from ..core.contracts import LOOKUP, WIRE, AuthorContext, AuthoredRow, Event
+from ..core.contracts import CONVENTION, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event
 from ..core.registry import author_rule
 
 DISPLAY_FIELD = "UNIT_VIRTUAL_ITEM_DISPLAY"
@@ -96,8 +96,10 @@ class Equipment(BaseAuthorRule):
                                 f"{slots[0][1]} could not be resolved to an item")
             return
 
+        # Keyed by the creature's entry, where most templates point their
+        # equipment_id; gaps() says when this one does not.
         values: dict[str, Any] = {"entry": ctx.entry}
-        provenance = {"entry": WIRE}
+        provenance = {"entry": CONVENTION}
         notes: list[str] = []
         skip = []
         if slots[0][0] != 1:
@@ -166,6 +168,15 @@ class Equipment(BaseAuthorRule):
                           f"inventory type ({named}) -- not guessing which")
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
+        if ctx.world is not None and self._slots(ctx) and not self._unresolved:
+            # The server equips what the template names, unless the spawn's
+            # creature_addon or a game event names its own (Creature.cpp:410-419).
+            stored = ctx.world.column("creature_template", "equipment_id", f"entry = {ctx.entry}")
+            if stored is not None and stored != str(ctx.entry):
+                yield (f"creature_template.equipment_id -- the template names {stored}, not "
+                       f"{ctx.entry}, so the creature_equip_template {ctx.entry} proposed here "
+                       "is used only once it is pointed at; what was held may also come from "
+                       "the spawn's creature_addon or a game event -- decide by hand")
         for unresolved in self._unresolved_extra:
             yield f"creature_equip_template.{unresolved}"
         if self._unresolved:
