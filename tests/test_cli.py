@@ -102,9 +102,9 @@ def test_checking_a_slim_copy_reports_nothing_the_run_would_count_as_an_error():
     assert seen.count == 0 and len(files) == 2
 
 
-def _world_of(content, named=frozenset(), port=8090):
+def _world_of(content, named=frozenset(), port=8090, server_ip="127.0.0.1"):
     cfg = SimpleNamespace(logon_ip=None, logon_port=slim.LOGON_PORT, named=named,
-                          server_ip="127.0.0.1", port=port)
+                          server_ip=server_ip, port=port)
     with tempfile.TemporaryDirectory() as tmp:
         capture = Path(tmp) / "capture.pcap"
         capture.write_bytes(content)
@@ -119,6 +119,14 @@ def test_a_capture_is_decoded_on_the_world_server_its_realm_list_names():
 def test_a_named_port_still_wins_over_the_realm_list():
     content = _session(world_port=8085, listed="127.0.0.1:8085")
     assert _world_of(content, named=frozenset({"port"}), port=9000) == ("127.0.0.1", 9000)
+
+
+def test_a_named_address_alone_still_wins_over_the_realm_list():
+    """slim.py promises that a named endpoint always wins; the address alone
+    was dropped in favour of whatever the realm list named."""
+    content = _session(world_port=8085, listed="127.0.0.1:8085")
+    assert _world_of(content, named=frozenset({"server_ip"}), server_ip="10.0.0.5")[0] == "10.0.0.5"
+    assert _world_of(content, named=frozenset({"server_ip"})) == ("127.0.0.1", 8085)
 
 
 def test_a_capture_without_a_realm_list_falls_back_to_the_default():

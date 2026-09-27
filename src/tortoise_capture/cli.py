@@ -167,7 +167,13 @@ def _named_world(cfg: RunConfig) -> slim.Endpoint | None:
     default port is not a name, and must not win over what the capture says."""
     if "port" not in cfg.named:
         return None
-    return slim.Endpoint(cfg.server_ip if "server_ip" in cfg.named else None, cfg.port)
+    return slim.Endpoint(_named_address(cfg), cfg.port)
+
+
+def _named_address(cfg: RunConfig) -> str | None:
+    """The world address as named: with no port named, it picks among the
+    realms the realm list names rather than giving way to them."""
+    return cfg.server_ip if "server_ip" in cfg.named else None
 
 
 def _world(cfg: RunConfig, capture: Path) -> tuple[str, int]:
@@ -176,7 +182,7 @@ def _world(cfg: RunConfig, capture: Path) -> tuple[str, int]:
     if "port" in cfg.named:
         return cfg.server_ip, cfg.port
     try:
-        return slim.world_server(capture, _logon(cfg))
+        return slim.world_server(capture, _logon(cfg), _named_address(cfg))
     except slim.SlimError as exc:
         _logger.debug("world server not read from the capture (%s); using %s:%d",
                       exc, cfg.server_ip, cfg.port)
@@ -388,7 +394,7 @@ def cmd_author(args, cfg: RunConfig) -> int:
 def cmd_slim(args, cfg: RunConfig) -> int:
     capture = Path(args.capture)
     try:
-        plan = slim.plan(capture, _logon(cfg), _named_world(cfg))
+        plan = slim.plan(capture, _logon(cfg), _named_world(cfg), _named_address(cfg))
     except slim.SlimError as exc:
         _logger.error("%s", exc)
         return EXIT_WITH_ERRORS

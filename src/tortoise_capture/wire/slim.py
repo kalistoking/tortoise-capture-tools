@@ -213,14 +213,16 @@ def _address(text: str) -> Endpoint | None:
     return Endpoint(host, int(port)) if host and port.isdigit() else None
 
 
-def plan(path: Path, logon: Endpoint, world: Endpoint | None) -> SlimPlan:
-    """Decides what to keep. `world` None means "read it from the realm list"."""
+def plan(path: Path, logon: Endpoint, world: Endpoint | None,
+         address: str | None = None) -> SlimPlan:
+    """Decides what to keep. `world` None means "read it from the realm list",
+    from the realms at `address` alone when one is named."""
     data, records = read_records(path)
     realms = _realms(data, records, logon)
     source = "as named"
     if world is None:
         source = "from the realm list"
-        world = _listed_world(path, records, realms, logon)
+        world = _listed_world(path, records, realms, logon, address)
 
     out = SlimPlan(source=Path(path), data=data, records=records, logon=logon, world=world,
                    world_server=None, realms=realms, world_source=source)
@@ -275,9 +277,11 @@ def _realms(data: bytes, records: list[_Record], logon: Endpoint) -> list[tuple[
 
 
 def _listed_world(path: Path, records: list[_Record], realms: list[tuple[str, str]],
-                  logon: Endpoint) -> Endpoint:
-    """The one listed realm a client in the capture talked to."""
-    listed = [e for e in (_address(a) for _, a in realms) if e is not None]
+                  logon: Endpoint, address: str | None = None) -> Endpoint:
+    """The one listed realm a client in the capture talked to -- at `address`,
+    when the address alone was named."""
+    listed = [e for e in (_address(a) for _, a in realms)
+              if e is not None and address in (None, e.ip)]
     if not listed:
         raise SlimError(f"{path}: no realm list from a logon server at {logon} (the capture "
                         "may begin after the logon) and no world port was named -- name "
@@ -293,10 +297,10 @@ def _listed_world(path: Path, records: list[_Record], realms: list[tuple[str, st
     return talked[0]
 
 
-def world_server(path: Path, logon: Endpoint) -> tuple[str, int]:
+def world_server(path: Path, logon: Endpoint, address: str | None = None) -> tuple[str, int]:
     """The world server the capture's own realm list sends its client to."""
     data, records = read_records(path)
-    world = _listed_world(path, records, _realms(data, records, logon), logon)
+    world = _listed_world(path, records, _realms(data, records, logon), logon, address)
     for r in records:
         if r.tcp and r.tcp[6] > r.tcp[5] and world.matches(r.tcp[2], r.tcp[3]):
             return r.tcp[2], r.tcp[3]
