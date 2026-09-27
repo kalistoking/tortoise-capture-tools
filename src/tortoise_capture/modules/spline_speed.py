@@ -3,8 +3,11 @@
     speed:  packGUID unit ; float speed      (MovementPacketSender.cpp:118-131)
     mode:   packGUID unit                    (Unit.cpp:11487)
 
-The spline forms are the ones for units the server moves (MovementPacketSender
-.cpp:25); a player-controlled unit gets the FORCE_/MSG_MOVE_ forms instead. The
+The spline forms are meant for units the server moves (MovementPacketSender
+.cpp:25), and a player-controlled unit mostly gets the FORCE_/MSG_MOVE_ forms --
+but not always: its observers get the spline form while its spline still runs
+(MovementPacketSender.cpp:116-122), and a server-driven move restores its walk
+mode with one (MoveSplineInit.cpp:188-190). So any guid is decoded. The
 float is the speed itself, `rate x baseMoveSpeed` -- Ralthas broadcasts 8.0 run,
 7.0 x a `speed_run` of 1.14286.
 

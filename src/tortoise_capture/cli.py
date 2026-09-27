@@ -50,8 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", help=f"config file (default: ./{CONFIG_NAME}); env TCT_CONFIG")
     common.add_argument("--repo", help="tortoise-wow checkout (opcode and field tables); env TCT_REPO")
-    common.add_argument("--port", type=int, help="world server port of the capture (default 8090)")
-    common.add_argument("--server-ip", help="server address in the capture (default 127.0.0.1)")
+    common.add_argument("--port", type=int, help="world server port of the capture (default: "
+                        "the one its realm list names, else 8090)")
+    common.add_argument("--server-ip", help="world server address in the capture (default: the "
+                        "one its realm list names, else 127.0.0.1)")
     common.add_argument("--logon-port", type=int,
                         help="logon server port of the capture (default 3724); env TCT_LOGON_PORT")
     common.add_argument("--logon-ip", help="logon server address (default: any); env TCT_LOGON_IP")

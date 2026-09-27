@@ -45,8 +45,9 @@ def literal(value: Any, dialect: str) -> str:
     if isinstance(value, int):
         # SQLite's integers are signed 64-bit, and a guid past 2^63 -- every
         # creature's, 0xF130... -- would overflow into a lossy REAL. Its
-        # two's-complement value is stored exactly; `& 0xFFFF_FFFF_FFFF_FFFF`
-        # reads it back.
+        # two's-complement value is stored exactly. Read back, it is negative:
+        # `& 0xFFFF_FFFF_FFFF_FFFF` recovers the guid in Python, but not inside
+        # SQLite, whose integers stay signed -- there `printf('%x', v)` shows it.
         if dialect == "sqlite" and value > _INT64_MAX:
             value -= 1 << 64
         return str(value)

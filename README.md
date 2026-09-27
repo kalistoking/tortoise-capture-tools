@@ -101,10 +101,10 @@ architecture here.
 pip install -e .
 
 # 1. recover the session key from the capture
-tct key capture.pcap --port 8090
+tct key capture.pcap
 
 # 2. decrypt and frame the whole session into records
-tct dump capture.pcap --port 8090 --repo /path/to/tortoise-wow
+tct dump capture.pcap --repo /path/to/tortoise-wow
 
 # 3. run every registered opcode module over those records
 tct decode capture.jsonl --entry <creature_template.entry> --format text,sql
@@ -152,7 +152,6 @@ groups — and every key is optional.
 ```toml
 [capture]
 repo = "/path/to/tortoise-wow"
-port = 8090
 
 [log]
 level = "info"          # console: error | warn | info | debug
