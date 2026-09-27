@@ -12,11 +12,12 @@
 # from it at runtime, never hardcoded. Use forward slashes on any OS,
 # including Windows (e.g. "C:/path/to/tortoise-wow").
 repo = "/path/to/tortoise-wow"
-port = 8090                     # this fork's WorldServerPort
-server_ip = "127.0.0.1"
-# The logon server, whose realm list names the world server. Setting `port`
-# above (here, in TCT_PORT or with --port) overrides the address the realm list
-# gives -- leave it out to have `tct slim` read it from the capture instead.
+# The world server. Left out, it is read from the logon server's realm list in
+# the capture, falling back to 127.0.0.1:8090 (this fork's WorldServerPort).
+# Setting `port` (here, in TCT_PORT or with --port) overrides the realm list.
+# port = 8090
+# server_ip = "127.0.0.1"
+# The logon server, whose realm list names the world server.
 # logon_port = 3724
 # logon_ip = "127.0.0.1"        # default: any address
 

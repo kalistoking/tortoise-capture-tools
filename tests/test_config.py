@@ -206,3 +206,15 @@ def test_a_module_level_overrides_the_console_level_for_that_module_only():
 def test_errors_and_warnings_are_counted_separately():
     _capture_logs("info")
     assert _log.error_count() == 1 and _log.warning_count() == 1
+
+
+def test_the_example_config_leaves_the_world_server_to_the_realm_list():
+    """The README says to copy it and that no port has to be given; a copy that
+    named 8090 and 127.0.0.1 turned the realm-list detection off unasked."""
+    example = (Path(__file__).parent.parent / "tct.example.toml").read_text(encoding="utf-8")
+
+    def body(tmp):
+        (tmp / CONFIG_NAME).write_text(example, encoding="utf-8")
+        return RunConfig.resolve(Args())
+
+    assert not {"port", "server_ip"} & _in_dir(body).named
