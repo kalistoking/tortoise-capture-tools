@@ -1195,6 +1195,31 @@ def test_a_path_the_database_has_any_point_of_is_left_whole():
     assert [r.table for r in kept] == ["creature"]
 
 
+def test_a_path_is_held_with_the_creature_it_belongs_to():
+    """The database's creature 81182 keeps its own movement_type; a path
+    proposed for it alone would bolt waypoints onto a row the capture was
+    never compared with."""
+    world = StubWorld(keys=_KEYS, existing={"creature": {"81182"}})
+    kept, gaps = only_new(_spawn_and_path(81182), world)
+    assert kept == []
+    assert any(gap.startswith("creature_movement --") and "81182" in gap for gap in gaps)
+
+
+def test_a_script_is_held_with_the_text_it_would_speak():
+    """broadcast_text 713500 already stored is some line, not necessarily the
+    one heard; a script proposed to say it, and the event running that
+    script, would speak whatever the database holds there."""
+    rows = [AuthoredRow(table="broadcast_text", values={"entry": 713500}),
+            AuthoredRow(table="creature_ai_scripts", values={"id": 713500, "dataint": 713500}),
+            AuthoredRow(table="creature_ai_events", values={"id": 713500, "action1_script": 713500})]
+    world = StubWorld(keys={"broadcast_text": "entry", "creature_ai_scripts": "id",
+                            "creature_ai_events": "id"},
+                      existing={"broadcast_text": {"713500"}})
+    kept, gaps = only_new(rows, world)
+    assert kept == []
+    assert any(gap.startswith("creature_ai_events --") for gap in gaps)
+
+
 def test_an_update_is_never_filtered_as_existing():
     world = StubWorld(keys={"creature_template": "entry"},
                       existing={"creature_template": {str(ENTRY)}})
