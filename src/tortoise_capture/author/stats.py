@@ -122,14 +122,15 @@ def _f32(value: float) -> float:
     return struct.unpack("<f", struct.pack("<f", value))[0]
 
 
-def _at_level(level: int, levels: tuple[int, int], stored: tuple[int, int]) -> int:
+def _at_level(level: int, levels: tuple[int, int], stored: tuple[int, int],
+              rescued: bool = False) -> int:
     """SelectLevel's health or mana for a spawn at `level`, in its float32
-    arithmetic -- at rate 1, the two share one formula."""
+    arithmetic -- at rate 1, the two share one formula, but for health's
+    rescue: 0 becomes 1 when the template asked for any (Creature.cpp:1600)."""
     (lo, hi), (least, most) = levels, stored
-    if lo == hi:
-        return least
-    rellevel = _f32((level - lo) / (hi - lo))
-    return least + int(_f32(rellevel * (most - least)))
+    rellevel = _f32((level - lo) / (hi - lo)) if lo != hi else 0.0
+    value = least + int(_f32(rellevel * (most - least)))
+    return 1 if rescued and not value and most else value
 
 
 @author_rule(id="stats", table="creature_template", order=50)
@@ -144,11 +145,13 @@ class Stats(BaseAuthorRule):
 
     def handle(self, ev: Event, mod: Any = None) -> None:
         if ev.kind == "object_create":
-            # First CREATE wins: a creature's static stats never change after
-            # it is created, and later blocks only carry what moved. That holds
-            # only if the first sighting caught the creature unmodified, which
-            # nothing here can guarantee -- so a later CREATE that disagrees is
-            # kept and reported rather than dropped on the floor.
+            # The first value seen wins, field by field: a creature's static
+            # stats never change after it is created, and later blocks only
+            # carry what moved. So a field the first CREATE left out (a 0)
+            # takes the first later CREATE's value. That holds only if the
+            # sighting caught the creature unmodified, which nothing here can
+            # guarantee -- so a later CREATE that disagrees is kept and
+            # reported rather than dropped on the floor.
             #
             # "Later" means the same spawn's: each spawn rolls its own level
             # from the template's range (Creature::SelectLevel), so two spawns
@@ -395,8 +398,9 @@ class Stats(BaseAuthorRule):
             laters = sorted({later for _, later in pairs})
             yield (f"creature_template.{column} -- a later CREATE of the same spawn broadcast "
                    f"{name} as {_shown(laters)} where its first said {_shown(firsts)}; "
-                   "the first sighting was used, but a creature whose stats move between "
-                   "sightings was not in its authored state in at least one of them")
+                   "the first value seen for the entry was used, but a creature whose stats "
+                   "move between sightings was not in its authored state in at least one "
+                   "of them")
 
     def _stored_int(self, ctx: AuthorContext, column: str) -> int | None:
         if ctx.world is None:
@@ -451,9 +455,11 @@ class Stats(BaseAuthorRule):
             stored = self._stored_range(ctx, columns)
             if stored is None:
                 continue
-            off = sorted({(spawn["UNIT_FIELD_LEVEL"], spawn[name]) for spawn in spawns
-                          if name in spawn
-                          and spawn[name] != _at_level(spawn["UNIT_FIELD_LEVEL"], levels, stored)})
+            # Absent is 0: a CREATE omits every zero field.
+            off = sorted({(spawn["UNIT_FIELD_LEVEL"], spawn.get(name, 0)) for spawn in spawns
+                          if spawn.get(name, 0) != _at_level(
+                              spawn["UNIT_FIELD_LEVEL"], levels, stored,
+                              rescued=name == "UNIT_FIELD_BASE_HEALTH")})
             if off:
                 seen = ", ".join(f"{value} at level {level}" for level, value in off)
                 yield (f"creature_template.{columns[0]}/{columns[1]} -- spawns broadcast "

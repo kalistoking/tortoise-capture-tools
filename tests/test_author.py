@@ -317,6 +317,25 @@ def test_health_off_the_template_at_its_level_is_reported_not_proposed():
     assert not any("mana" in gap for gap in gaps)
 
 
+def test_mana_a_create_leaves_out_is_checked_as_the_zero_it_is():
+    """A CREATE omits every zero field, so a spawn carrying no BASE_MANA
+    broadcast 0 -- against a template giving it 350 at level 9."""
+    world = StubWorld(columns=_WIZARD_TEMPLATE)
+    event = make_event("object_create", 21.9, guid=GUID + 9, entry=ENTRY, fields=_fields(
+        UNIT_FIELD_LEVEL=9, UNIT_FIELD_BASE_HEALTH=186, UNIT_FIELD_ATTACK_POWER=44))
+    _, gaps = author_rows(Stats(), [event], ENTRY, world=world)
+    assert any("mana_min" in gap and "0 at level 9" in gap for gap in gaps)
+
+
+def test_health_that_rounds_to_zero_is_rescued_as_the_server_does():
+    """SelectLevel gives 1 health to a template asking for some that rounds to
+    0 (Creature.cpp:1600): a 0-5 template at its lowest level broadcasts 1."""
+    world = StubWorld(columns={**_WIZARD_TEMPLATE, ("creature_template", "health_min"): "0",
+                               ("creature_template", "health_max"): "5"})
+    _, gaps = author_rows(Stats(), [_wizard(9, 1, 350)], ENTRY, world=world)
+    assert not any("health" in gap for gap in gaps)
+
+
 def test_agreeing_sightings_say_nothing():
     events = _stats_events() + _stats_events()
     _, gaps = author_rows(Stats(), events, ENTRY)
