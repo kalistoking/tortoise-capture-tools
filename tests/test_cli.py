@@ -76,6 +76,32 @@ def test_a_slim_copy_that_decodes_differently_is_dropped_without_failing_the_run
     assert files == ["capture.pcap"] and errors == 0
 
 
+def test_checking_a_slim_copy_reports_nothing_the_run_would_count_as_an_error():
+    """The check decodes both captures again and recovers both keys, only to
+    compare them; with --session-key given for a capture no key comes out of,
+    that logged the recovery's errors twice and failed a run that had worked."""
+    def recover(_):
+        cli.crypt._logger.error("recovered only 3/40 session key bytes")
+        return None
+
+    def decoded(*_):
+        cli.pipeline._logger.error("framing desync")
+        return ["the same"]
+
+    seen = _Errors()
+    root = logging.getLogger(cli._log.ROOT)
+    root.addHandler(seen)
+    try:
+        _, files = _slim_beside_a_capture({
+            (cli.pcap, "read_session"): lambda *_: _SESSION,
+            (cli.crypt, "recover_session_key"): recover,
+            (cli, "_decoded"): decoded,
+        })
+    finally:
+        root.removeHandler(seen)
+    assert seen.count == 0 and len(files) == 2
+
+
 def _world_of(content, named=frozenset(), port=8090):
     cfg = SimpleNamespace(logon_ip=None, logon_port=slim.LOGON_PORT, named=named,
                           server_ip="127.0.0.1", port=port)

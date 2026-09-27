@@ -28,6 +28,7 @@ instead of aborting the run.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import logging
 import sys
@@ -195,3 +196,15 @@ def error_count() -> int:
 
 def warning_count() -> int:
     return _counter.warnings
+
+
+@contextlib.contextmanager
+def muted():
+    """Nothing logged inside reaches a handler or the counts: for work that
+    repeats what the run already reported, only to compare the results."""
+    previous = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(previous)

@@ -196,9 +196,14 @@ def _write_verified(plan: slim.SlimPlan, out: Path, session, key, registry, ctx,
     slim.write(plan, partial)
     try:
         copy = pcap.read_session(partial, *plan.world_server)
-        same_key = (crypt.recover_session_key(copy.c2s.segments)
-                    == crypt.recover_session_key(session.c2s.segments))
-        original, slimmed = _decoded(session, key, registry, ctx), _decoded(copy, key, registry, ctx)
+        # Muted: this decodes the original a second time only to compare, and
+        # recovers keys that --session-key may have made unrecoverable -- the
+        # run reported all of it once already, and `failed` says what differs.
+        with _log.muted():
+            same_key = (crypt.recover_session_key(copy.c2s.segments)
+                        == crypt.recover_session_key(session.c2s.segments))
+            original = _decoded(session, key, registry, ctx)
+            slimmed = _decoded(copy, key, registry, ctx)
         if not same_key or original != slimmed:
             failed("the slim copy of %s does not decode as the original does "
                    "(%d packet record(s) against %d); not kept",
