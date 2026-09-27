@@ -154,6 +154,7 @@ class _Route:
         self.clusters: list[list[tuple[float, float, float]]] = []
         self.labels: list[int] = []
         self.hop_times: list[float] = []            # packet time per hop, parallel to labels
+        self.hop_points: list[tuple[float, float, float]] = []   # destination per hop, too
         self.creates: list[tuple[float, tuple[float, float, float]]] = []   # (t, position)
         self.entry: int | None = None
         self.last_packet: Packet | None = None
@@ -163,6 +164,7 @@ class _Route:
 
     def add_hop(self, point: tuple[float, float, float], t: float) -> None:
         self.hop_times.append(t)
+        self.hop_points.append(point)
         for index, members in enumerate(self.clusters):
             if math.dist(members[0][:2], point[:2]) <= CLUSTER_TOLERANCE:
                 members.append(point)
@@ -183,16 +185,20 @@ class _Route:
         """
         if not self.hop_times:
             return 0.0
+        return sum(map(self._in_combat, self.hop_times)) / len(self.hop_times)
+
+    def calm_hops(self) -> list[tuple[float, float, float]]:
+        """The destinations of hops made outside any fight: a chase goes
+        wherever its target does, and says nothing about the wander area."""
+        return [p for p, t in zip(self.hop_points, self.hop_times) if not self._in_combat(t)]
+
+    def _in_combat(self, t: float) -> bool:
         deaths = sorted(self.deaths)
-        windows = []
-        for start in sorted(self.engagements):
+        for start in self.engagements:
             after = [d for d in deaths if d > start]
-            windows.append((start, min(after) if after else math.inf))
-        if not windows:
-            return 0.0
-        in_combat = sum(1 for t in self.hop_times
-                        if any(start <= t <= end for start, end in windows))
-        return in_combat / len(self.hop_times)
+            if start <= t <= (min(after) if after else math.inf):
+                return True
+        return False
 
     def single_visit_fraction(self, order: list[int]) -> float:
         """Share of the walked waypoints that were only ever seen once.
@@ -387,7 +393,7 @@ class Patrol(BaseAnalyzer):
                              transition_order=ordered, confident=confident,
                              refused_because=refused)
             if refused == "unordered":
-                points = [p for members in route.clusters for p in members]
+                points = route.calm_hops()
                 (cx, cy), radius = enclosing_circle((p[0], p[1]) for p in points)
                 # The centre is a 2-D answer; its Z is the destination nearest to
                 # it, a real ground sample rather than an average that could hang

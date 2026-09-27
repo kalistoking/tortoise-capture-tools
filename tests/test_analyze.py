@@ -212,6 +212,20 @@ def test_a_confined_wander_is_reported_as_the_area_it_wanders():
     assert math.isclose(area["radius"], math.hypot(3.0, 1.5), abs_tol=0.01)
 
 
+def test_a_chase_does_not_widen_the_wander_area():
+    """A wanderer that chases someone off for a few hops is still a wanderer
+    -- under half its hops were in combat -- but the circle was drawn round
+    every hop, and a 5 yd wander came out as 19 yd."""
+    events = _confined_wander() + [make_event("ai_reaction", 48.5, guid=GUID, entry=ENTRY,
+                                              reaction=2)]
+    for i in range(6):
+        events.append(make_event("move_linear", 49.0 + i, guid=GUID, entry=ENTRY,
+                                 dest=(10.0 + 4 * i, 12.0, 10.0)))
+    area = findings_by_kind(run_analyzer(Patrol(), events))["wander_area"].data
+    assert math.isclose(area["radius"], math.hypot(3.0, 1.5), abs_tol=0.01)
+    assert math.isclose(area["position_x"], 3.0, abs_tol=0.01)
+
+
 def test_a_patrol_is_not_reported_as_a_wander_area():
     found = findings_by_kind(run_analyzer(Patrol(), _hops(laps=10)))
     assert "wander_area" not in found
