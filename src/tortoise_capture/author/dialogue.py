@@ -100,9 +100,13 @@ class Dialogue(BaseAuthorRule):
             text_id = self.authored_id(ctx.entry, n)
             chat_type = _CHAT_TYPES.get(said.get("chat_type"), 0)
 
-            bt_values = {"entry": text_id, "male_text": message, "female_text": message,
+            # male_text only: a speaker's line is female_text for a female one
+            # but male_text whenever female_text is empty (Object.cpp:3027 ->
+            # ObjectMgr.h:162), so leaving it empty reproduces what was heard
+            # -- a copy there would claim a text the wire never carried.
+            bt_values = {"entry": text_id, "male_text": message,
                         "chat_type": chat_type, "language_id": said.get("language", 0)}
-            bt_provenance = {"entry": CONVENTION, "male_text": WIRE, "female_text": WIRE,
+            bt_provenance = {"entry": CONVENTION, "male_text": WIRE,
                              "chat_type": WIRE, "language_id": WIRE}
             bt_notes = []
             if message in self._sounds:

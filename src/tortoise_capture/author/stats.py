@@ -321,9 +321,10 @@ class Stats(BaseAuthorRule):
 
         # spell_list_id points a creature at its creature_spells row, so it
         # only belongs here when there is one to point at -- and never over a
-        # list the template already has (see gaps()).
+        # list the template already has, nor onto one running EventAI, whose
+        # events may cast the same spells (see gaps()).
         own = self._own_spell_list(ctx) if self._saw_spells else None
-        if self._saw_spells and own in (None, ctx.entry):
+        if self._saw_spells and (own == ctx.entry or own is None and not self._runs_eventai(ctx)):
             values["spell_list_id"] = ctx.entry
             provenance["spell_list_id"] = CONFIRMED if own else CONVENTION
             if own:
@@ -375,6 +376,11 @@ class Stats(BaseAuthorRule):
                 yield (f"creature_template.{column} -- the query answered {observed!r}, the "
                        f"database has {stored!r}; the server answers in the client's own "
                        "language, so it is not proposed as a rename")
+        if self._saw_spells and self._own_spell_list(ctx) is None and self._runs_eventai(ctx):
+            yield (f"creature_template.spell_list_id -- the template runs EventAI with no spell "
+                   f"list; the spells this capture saw are proposed as creature_spells "
+                   f"{ctx.entry}, but if its events already cast them, pointing it there casts "
+                   "them twice -- choose one by hand")
         if self._saw_spells and (own := self._own_spell_list(ctx)) not in (None, ctx.entry):
             yield (f"creature_template.spell_list_id -- the template already points at spell "
                    f"list {own}; the spells this capture saw are proposed as creature_spells "
@@ -401,6 +407,9 @@ class Stats(BaseAuthorRule):
             return None
         stored = ctx.world.column("creature_template", column, f"entry = {ctx.entry}")
         return None if stored is None else ("" if stored == "NULL" else stored)
+
+    def _runs_eventai(self, ctx: AuthorContext) -> bool:
+        return self._stored_text(ctx, "ai_name") == "EventAI"
 
     def _own_spell_list(self, ctx: AuthorContext) -> int | None:
         """The spell list the template already points at, if any."""

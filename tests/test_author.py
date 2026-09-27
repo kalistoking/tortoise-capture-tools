@@ -139,6 +139,18 @@ def test_an_unattributed_sound_stays_a_gap_rather_than_a_schema_zero():
     assert any("sound_id" in gap for gap in gaps)
 
 
+def test_only_the_text_that_was_spoken_is_claimed_from_the_wire():
+    """The server speaks female_text only to a female speaker, and falls back to
+    male_text when it is empty -- so the line heard is male_text for everyone
+    once female_text is left empty, as the Rakameg content authors it. Claiming
+    the same line as a female_text read off the wire claimed a text never sent."""
+    world = StubWorld(schema={"broadcast_text": {"female_text": ""}})
+    rows, _ = author_rows(Dialogue(), _dialogue_events(), ENTRY, world=world)
+    text = next(r for r in rows if r.table == "broadcast_text")
+    assert text.provenance["male_text"] == WIRE
+    assert text.values.get("female_text", "") == "" and text.provenance.get("female_text") != WIRE
+
+
 def test_an_attributed_sound_is_still_written_when_a_schema_exists():
     world = StubWorld(schema={"broadcast_text": {"sound_id": 0}})
     events = _dialogue_events() + [
@@ -459,6 +471,16 @@ def test_a_spell_list_already_at_the_convention_is_confirmed_not_reported():
     assert not any("spell_list_id" in gap for gap in gaps)
 
 
+def test_a_template_casting_through_eventai_is_not_given_a_spell_list():
+    """Glutton (8567) casts through EventAI with no spell list; pointing it at
+    one of the spells the capture saw would make it cast them twice."""
+    world = StubWorld(columns={("creature_template", "spell_list_id"): "0",
+                               ("creature_template", "ai_name"): "EventAI"})
+    rows, gaps = author_rows(Stats(), _casting(), ENTRY, world=world)
+    assert "spell_list_id" not in rows[0].values
+    assert any("spell_list_id" in gap and "EventAI" in gap for gap in gaps)
+
+
 def test_a_template_without_a_spell_list_gets_the_conventional_one():
     world = StubWorld(columns={("creature_template", "spell_list_id"): "0"})
     rows, _ = author_rows(Stats(), _casting(), ENTRY, world=world)
@@ -662,6 +684,9 @@ def test_a_creature_that_never_moved_keeps_the_schema_zero():
     creature = next(r for r in rows if r.table == "creature")
     assert creature.values["movement_type"] == 0
     assert not any(gap.startswith("creature.movement_type") for gap in gaps)
+    # All 32,150 stationary spawns in the live database carry wander_distance 0;
+    # the schema's 5 is sized for a random mover this one is not.
+    assert creature.values["wander_distance"] == 0
 
 
 def test_a_refused_route_names_the_reason_it_was_refused():

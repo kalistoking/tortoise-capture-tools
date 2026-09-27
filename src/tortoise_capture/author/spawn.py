@@ -207,6 +207,11 @@ class Spawn(BaseAuthorRule):
         elif spawn.waypoints:
             notes.append(_WITHHELD_NOTE.get((spawn.route or {}).get("refused_because"),
                                             _WITHHELD_NOTE[None]))
+        elif not spawn.moved():
+            # All 32,150 stationary spawns in the live database carry 0: the
+            # schema's 5 is sized for a random mover, as for a waypoint mover.
+            values["wander_distance"] = 0
+            provenance["wander_distance"] = CONVENTION
         if wander and not after_death:
             notes.append("position is the centre of the area it wandered, NOT a respawn -- "
                          "the capture holds no death for it; orientation is whichever way "
