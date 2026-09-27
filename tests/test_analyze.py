@@ -92,6 +92,20 @@ def test_the_respawn_pins_the_numbering_even_when_seen_again_later():
     assert (round(first["position_x"]), round(first["position_y"])) == SQUARE[0][:2]
 
 
+def test_a_corpse_in_view_does_not_pin_the_numbering():
+    """Where the corpse lies is where the creature died, not where it spawns."""
+    x, y, z = SQUARE[2]
+    corpse = make_event("object_create", 25.0, guid=GUID, entry=ENTRY,
+                        movement={"movement_info": {"pos": (x, y, z, 0.0)}},
+                        fields=[{"index": 0, "name": "UNIT_FIELD_MAXHEALTH", "raw": 342}])
+    events = ([_sighted(0.5, 3)] + _hops(laps=2.5)
+              + [make_event("party_kill", 20.0, guid=GUID, entry=ENTRY),
+                 corpse, _sighted(30.0, 0)])
+    points = [ev for ev in run_analyzer(Patrol(), events) if ev.kind == "patrol_waypoint"]
+    first = points[0].data
+    assert (round(first["position_x"]), round(first["position_y"])) == SQUARE[0][:2]
+
+
 def test_combat_detours_do_not_enter_the_route():
     """Positions visited once while fighting are not part of the patrol."""
     events = _hops(laps=2.5)
@@ -247,6 +261,24 @@ def test_respawn_timer_is_the_death_to_create_gap():
 
 def _fields(**named):
     return [{"index": i, "name": name, "raw": raw} for i, (name, raw) in enumerate(named.items())]
+
+
+def test_a_corpse_coming_into_view_is_not_the_respawn():
+    """A CREATE omits zero fields, so one carrying MAXHEALTH but no HEALTH is
+    a corpse -- sent to a player who walks back into range while it still
+    lies there (Creature.cpp:2231). Taken as "alive again", it made a 300 s
+    timer read 20 s."""
+    events = [
+        make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342, UNIT_FIELD_MAXHEALTH=342)),
+        make_event("party_kill", 20.0, guid=GUID, entry=ENTRY),
+        make_event("object_create", 40.0, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_MAXHEALTH=342)),
+        make_event("object_create", 320.0, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342, UNIT_FIELD_MAXHEALTH=342)),
+    ]
+    respawn = findings_by_kind(run_analyzer(Behaviour(), events))["respawn_timer"].data
+    assert math.isclose(respawn["value_min"], 300.0)
 
 
 def test_respawn_is_also_detected_from_a_health_reset_with_no_fresh_create():

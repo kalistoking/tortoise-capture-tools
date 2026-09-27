@@ -54,7 +54,7 @@ from typing import Iterator
 
 from ..core.base import BaseAnalyzer
 from ..core.contracts import (
-    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec,
+    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec, is_corpse,
 )
 from ..core.registry import analyzer
 
@@ -164,6 +164,8 @@ class Behaviour(BaseAnalyzer):
             creature.texts[ev.data["message"]].append(t)
         elif ev.kind == "spell_go":
             creature.spells[ev.data["spell_id"]].append(t)
+        elif ev.kind == "object_create" and is_corpse(ev):
+            creature.alive = False
         elif ev.kind == "object_create":
             creature.creates.append(t)
             creature.alive = True

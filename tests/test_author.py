@@ -584,6 +584,29 @@ def test_the_spawn_position_is_taken_from_the_respawn_not_first_sighting():
     assert creature.values["movement_type"] == 2
 
 
+def test_a_corpse_is_not_where_the_spawn_stands():
+    """The corpse a player walks back to lies where the creature died; only
+    the CREATE that brings it back alive stands at its spawn point."""
+    corpse = make_event("object_create", 120.0, guid=GUID, entry=ENTRY,
+                        movement={"movement_info": {"pos": (-9170.0, -1030.0, 70.0, 0.0)}},
+                        fields=[{"index": 0, "name": "UNIT_FIELD_MAXHEALTH", "raw": 342}])
+    events = _spawn_events()
+    events.insert(2, corpse)
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert abs(creature.values["position_x"] - (-9129.66)) < 0.01
+
+
+def test_a_spawn_seen_only_as_a_corpse_is_reported_not_placed():
+    corpse = make_event("object_create", 120.0, guid=GUID, entry=ENTRY,
+                        movement={"movement_info": {"pos": (-9170.0, -1030.0, 70.0, 0.0)}},
+                        fields=[{"index": 0, "name": "UNIT_FIELD_MAXHEALTH", "raw": 342}])
+    rows, gaps = author_rows(Spawn(), [corpse], ENTRY)
+    assert not any(r.table == "creature" for r in rows)
+    assert any("corpse" in gap for gap in gaps)
+    assert not any("no CREATE block" in gap for gap in gaps)
+
+
 def test_a_single_respawn_sample_does_not_bound_spawntimesecs():
     """One sample cannot split a min from a max -- the same refusal
     creature_spells already applies to delayRepeatMin/Max from one interval

@@ -43,7 +43,8 @@ from typing import Any, Iterator, Mapping
 
 from ..core.base import BaseAnalyzer
 from ..core.contracts import (
-    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec, spawn_sighting,
+    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec, is_corpse,
+    spawn_sighting,
 )
 from ..core.registry import analyzer
 
@@ -306,7 +307,7 @@ class Patrol(BaseAnalyzer):
             # only the respawn one is; the first sighting catches it mid-route.
             # spawn_sighting() tells them apart once the deaths are known too.
             position = (ev.data.get("movement") or {}).get("movement_info", {}).get("pos")
-            if position and ev.packet.t is not None:
+            if position and ev.packet.t is not None and not is_corpse(ev):
                 route = self._routes.setdefault(guid, _Route())
                 route.entry = ev.data.get("entry")
                 route.creates.append((ev.packet.t, tuple(position[:3])))

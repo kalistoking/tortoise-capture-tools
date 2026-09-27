@@ -193,6 +193,15 @@ CONVENTION = "convention"    # fixed by the authoring convention, not observed
 CONFIRMED = "confirmed"      # matches the wire, restated as the DB's own value -- a safe no-op
 
 
+def is_corpse(ev: Event) -> bool:
+    """A unit CREATE omits its zero fields, HEALTH among them: one carrying
+    MAXHEALTH but no HEALTH is a corpse, sent to a player who comes back in
+    range while it still lies there (Creature.cpp:2231). It lies where the
+    creature died -- no sign of it alive, nor of where it spawns."""
+    names = {f.get("name") for f in ev.data.get("fields", ())}
+    return "UNIT_FIELD_MAXHEALTH" in names and "UNIT_FIELD_HEALTH" not in names
+
+
 def spawn_sighting(creates: Iterable[tuple[float, Any]],
                    deaths: Iterable[float]) -> tuple[Any, bool] | None:
     """Which CREATE stands for the spawn: (what it carried, after a death?).

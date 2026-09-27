@@ -56,7 +56,7 @@ from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
 from ..core.contracts import (
-    CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, spawn_sighting,
+    CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, is_corpse, spawn_sighting,
 )
 from ..core.registry import author_rule
 
@@ -76,6 +76,7 @@ class _Spawn:
     wander: dict[str, Any] | None = None      # its wander_area finding
     respawn: dict[str, Any] | None = None     # its respawn_timer finding
     hops: int = 0                             # linear moves broadcast, any kind
+    corpses: int = 0                          # CREATEs of it lying dead
 
     def sighting(self) -> tuple[tuple[float, ...], bool] | None:
         """The create that followed a death, else the earliest one seen."""
@@ -105,7 +106,9 @@ class Spawn(BaseAuthorRule):
         if ev.kind == "object_create":
             position = (ev.data.get("movement") or {}).get("movement_info", {}).get("pos")
             spawn = self._of(ev)
-            if position and ev.packet.t is not None and spawn is not None:
+            if spawn is not None and is_corpse(ev):
+                spawn.corpses += 1
+            elif position and ev.packet.t is not None and spawn is not None:
                 spawn.creates.append((ev.packet.t, tuple(position)))
         elif ev.kind == "party_kill":
             spawn = self._of(ev)
@@ -265,9 +268,15 @@ class Spawn(BaseAuthorRule):
                               provenance=close_provenance, notes=tuple(close_notes))
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
+        only_dead = [guid for guid, s in sorted(self._spawns.items()) if s.corpses and not s.creates]
+        if only_dead:
+            yield (f"creature -- {len(only_dead)} spawn(s) seen only as a corpse, which lies "
+                   "where it died: no spawn point to author (guid "
+                   f"{', '.join(str(g & GUID_COUNTER_MASK) for g in only_dead)})")
         seen = self._seen()
         if not seen:
-            yield "creature -- no CREATE block for this entry, so no spawn position was seen"
+            if not only_dead:
+                yield "creature -- no CREATE block for this entry, so no spawn position was seen"
             return
         if self._map_id is None:
             yield ("creature.map -- no SMSG_LOGIN_VERIFY_WORLD or SMSG_NEW_WORLD in this "
