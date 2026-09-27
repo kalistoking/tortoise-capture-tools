@@ -115,3 +115,15 @@ def test_an_ordinary_event_for_a_different_entry_is_still_dropped():
     runner = Runner(_registry(Good()), make_ctx(), [sink], Filters(entry=999))
     runner.run([make_packet(OPCODE, b"")])
     assert sink.events == []
+
+
+def test_every_run_gets_its_own_analyzers_and_authoring_rules():
+    """Both hold what one capture showed until they report it. One instance per
+    process meant a second run in the same process -- an API, a test, a batch
+    over many creatures -- began with everything the first had seen: authoring
+    66 creatures in one process gave each the stats and routes of all before it."""
+    from tortoise_capture.core import registry as registry_mod
+    for registry in (registry_mod.load_analyzers(), registry_mod.load_author_rules()):
+        first, second = registry.all(), registry.all()
+        assert first and all(a is not b for a, b in zip(first, second))
+        assert [type(a) for a in first] == [type(b) for b in second]

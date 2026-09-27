@@ -129,18 +129,21 @@ class AnalyzerRegistry:
     """
 
     def __init__(self) -> None:
-        self._regs: dict[str, tuple[int, Any]] = {}
+        self._regs: dict[str, tuple[int, type]] = {}
 
-    def add(self, id: str, order: int, instance: Any) -> None:
+    def add(self, id: str, order: int, cls: type) -> None:
         if id in self._regs:
             raise ValueError(f"duplicate analyzer id {id!r}")
-        self._regs[id] = (order, instance)
+        self._regs[id] = (order, cls)
 
     def discover(self, package: str = ANALYZE_PACKAGE) -> int:
         return _import_submodules(package, _logger)
 
     def all(self) -> list[Any]:
-        return [inst for _, (order, inst) in sorted(self._regs.items(), key=lambda kv: (kv[1][0], kv[0]))]
+        """Fresh instances, in order. Both kinds hold what one capture showed
+        until they report it, so a run must never inherit another's."""
+        return [cls() for _, (order, cls) in sorted(self._regs.items(),
+                                                     key=lambda kv: (kv[1][0], kv[0]))]
 
     def __len__(self) -> int:
         return len(self._regs)
@@ -178,7 +181,7 @@ def analyzer(*, id: str, order: int = 100):
     def decorate(cls):
         cls.id = id
         cls.order = order
-        ANALYZERS.add(id, order, cls())
+        ANALYZERS.add(id, order, cls)
         return cls
 
     return decorate
@@ -204,7 +207,7 @@ def author_rule(*, id: str, table: str, order: int = 100):
         cls.id = id
         cls.table = table
         cls.order = order
-        AUTHOR_RULES.add(id, order, cls())
+        AUTHOR_RULES.add(id, order, cls)
         return cls
 
     return decorate
