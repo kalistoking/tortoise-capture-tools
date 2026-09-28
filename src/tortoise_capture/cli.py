@@ -113,10 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_slim = sub.add_parser("slim", parents=[common],
                             help="keep only the WoW conversation of a capture, beside it")
     p_slim.add_argument("capture")
-    p_slim.add_argument("--out", help="output capture (default: <capture stem>.wow<suffix>, beside it)")
-    p_slim.add_argument("--replace", action="store_true",
-                        help="replace the original with the verified slim copy -- it is the only "
-                             "copy of a session that cannot be recorded again")
+    # One or the other: --replace writes beside the capture, then over it.
+    slim_to = p_slim.add_mutually_exclusive_group()
+    slim_to.add_argument("--out", help="output capture (default: <capture stem>.wow<suffix>, "
+                                       "beside it)")
+    slim_to.add_argument("--replace", action="store_true",
+                         help="replace the original with the verified slim copy -- it is the "
+                              "only copy of a session that cannot be recorded again")
     p_slim.add_argument("--session-key", help="hex key, skips recovery")
 
     p_ops = sub.add_parser("opcodes", parents=[common], help="opcode table and coverage")
@@ -404,7 +407,7 @@ def cmd_slim(args, cfg: RunConfig) -> int:
         _logger.info("%s holds nothing but the WoW conversation; nothing to drop", capture)
         return EXIT_OK
 
-    out = slim.slim_name(capture) if args.replace or not args.out else Path(args.out)
+    out = Path(args.out) if args.out else slim.slim_name(capture)
     if out.exists():
         _logger.error("%s already exists and is not overwritten", out)
         return EXIT_WITH_ERRORS

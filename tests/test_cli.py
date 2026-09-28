@@ -131,3 +131,13 @@ def test_a_named_address_alone_still_wins_over_the_realm_list():
 
 def test_a_capture_without_a_realm_list_falls_back_to_the_default():
     assert _world_of(_session(with_logon=False)) == ("127.0.0.1", 8090)
+
+
+def test_slim_refuses_an_out_path_it_would_not_write_to():
+    """--replace writes beside the capture and then over it; an --out given
+    with it was dropped without a word."""
+    try:
+        cli.build_parser().parse_args(["slim", "capture.pcap", "--replace", "--out", "x.pcap"])
+    except SystemExit:
+        return
+    raise AssertionError("--out and --replace together must be refused")
