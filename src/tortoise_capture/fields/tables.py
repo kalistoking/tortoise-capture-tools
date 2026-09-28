@@ -31,6 +31,9 @@ _ENUM_RE = r"enum\s+{name}\s*\{{(.*?)\}};"
 _MEMBER_RE = re.compile(r"(\w+)\s*(?:=\s*([^,]+))?\s*,")
 _LITERAL_RE = re.compile(r"^(0x[0-9A-Fa-f]+|\d+)$")
 
+# Part of the cache's stamp: a cache written by an older parser holds its names.
+_PARSER_VERSION = 2
+
 
 @dataclass(frozen=True, slots=True)
 class FieldTable:
@@ -72,14 +75,25 @@ def _evaluate(text: str, enums: tuple[str, ...]) -> tuple[dict[str, int], dict[i
                 value = 0
                 for term in expr.split("+"):
                     term = term.strip()
-                    value += int(term, 0) if _LITERAL_RE.match(term) else env.get(term, 0)
+                    if _LITERAL_RE.match(term):
+                        value += int(term, 0)
+                    elif term in env:
+                        value += env[term]
+                    else:
+                        # Read as 0, it would shift every index after it unseen.
+                        _logger.error("%s: %s = %s names %s, which the header does not "
+                                      "define; the field indices after it are unreliable",
+                                      FIELDS_FILE, symbol, expr.strip(), term)
             else:
                 value = current + 1
             env[symbol] = value
             current = value
-            # First name declared for an index wins; array continuation slots
-            # (second half of a GUID, AURA elements) stay unnamed, which is fine.
-            by_index.setdefault(value, symbol)
+            # First name declared for an index wins -- but a section's _END marker
+            # shares its index with the next section's first field (OBJECT_END and
+            # UNIT_FIELD_CHARM are both 6), and the field is what the slot holds.
+            # Array continuation slots (a GUID's second half) stay unnamed.
+            if value not in by_index or by_index[value].endswith("_END"):
+                by_index[value] = symbol
     return env, by_index
 
 
@@ -95,7 +109,7 @@ def load(repo: Path | None, cache_dir: Path | None = None) -> FieldTable:
         _logger.warning("%s not found; update fields stay numeric-only", path)
         return FieldTable()
 
-    stamp = [path.stat().st_size, path.stat().st_mtime]
+    stamp = [path.stat().st_size, path.stat().st_mtime, _PARSER_VERSION]
     cache = (cache_dir / "updatefields.json") if cache_dir else None
     if cache and cache.exists():
         try:

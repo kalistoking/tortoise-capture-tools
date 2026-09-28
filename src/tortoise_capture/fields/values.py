@@ -22,10 +22,17 @@ FLOAT_FIELDS = frozenset({
     "UNIT_FIELD_MINOFFHANDDAMAGE", "UNIT_FIELD_MAXOFFHANDDAMAGE",
     "UNIT_FIELD_MINRANGEDDAMAGE", "UNIT_FIELD_MAXRANGEDDAMAGE",
     "UNIT_FIELD_ATTACK_POWER_MULTIPLIER", "UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER",
+    "UNIT_MOD_CAST_SPEED",                             # Object.cpp:782-787, sent as a float
+    *(f"UNIT_FIELD_POWER_COST_MULTIPLIER{s}" for s in ("", "_01", "_02", "_03", "_04",
+                                                        "_05", "_06")),   # SpellAuras.cpp:5491
 })
 
 SIGNED_FIELDS = frozenset({
     "UNIT_FIELD_ATTACK_POWER", "UNIT_FIELD_RANGED_ATTACK_POWER",
+    # int32 slots, one per school: armor then the resistances (Unit.h:416-439),
+    # and the flat power cost modifier (SpellAuras.cpp:5502).
+    *(f"UNIT_FIELD_{field}{s}" for field in ("RESISTANCES", "POWER_COST_MODIFIER")
+      for s in ("", "_01", "_02", "_03", "_04", "_05", "_06")),
 })
 
 # A signed int16 pair (positive mod, negative mod) packed into one slot.
