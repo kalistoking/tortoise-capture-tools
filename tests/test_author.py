@@ -653,6 +653,18 @@ def test_a_gameobject_sharing_the_entry_is_not_a_creature():
     assert not rows
 
 
+def test_a_creature_a_spell_summoned_is_reported_not_spawned():
+    """A spell's summon carries its caster in UNIT_FIELD_CREATEDBY
+    (SpellEffects.cpp:2206); it despawns, and has no row to be authored."""
+    summoned = make_event("object_create", 5.0, guid=GUID + 1, entry=ENTRY,
+                          movement={"movement_info": {"pos": (1.0, 2.0, 3.0, 0.0)}},
+                          fields=_fields(UNIT_FIELD_CREATEDBY=0x2A, UNIT_FIELD_HEALTH=10,
+                                         UNIT_FIELD_MAXHEALTH=10))
+    rows, gaps = author_rows(Spawn(), _spawn_events() + [summoned], ENTRY)
+    assert [r.values["guid"] for r in rows if r.table == "creature"] == [SPAWN_GUID]
+    assert any("summon" in gap and str((GUID + 1) & 0xFFFFFF) in gap for gap in gaps)
+
+
 def test_a_single_respawn_sample_does_not_bound_spawntimesecs():
     """One sample cannot split a min from a max -- the same refusal
     creature_spells already applies to delayRepeatMin/Max from one interval

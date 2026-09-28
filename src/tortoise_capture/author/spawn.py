@@ -65,6 +65,12 @@ MOVEMENT_TYPE_RANDOM = 1        # MovementGeneratorType: wanders within wander_d
 MOVEMENT_TYPE_WAYPOINT = 2      # MovementGeneratorType: follows creature_movement
 GUID_COUNTER_MASK = 0xFFFFFF    # ObjectGuid low bits: the spawn's database id
 
+# Set only on what a spell or an owner makes -- spell summons, pets, totems
+# (SpellEffects.cpp:2199-2206, :2668-2673, Pet.cpp:285, Totem.cpp:162-163) --
+# never on a spawn. A script's summon (WorldObject::SummonCreature,
+# Object.cpp:2190) sets neither, and still passes for a spawn.
+_SUMMONER = {"UNIT_FIELD_CREATEDBY", "UNIT_FIELD_SUMMONEDBY"}
+
 
 @dataclass
 class _Spawn:
@@ -78,6 +84,7 @@ class _Spawn:
     respawn: dict[str, Any] | None = None     # its respawn_timer finding
     hops: int = 0                             # linear moves broadcast, any kind
     corpses: int = 0                          # CREATEs of it lying dead
+    summoned: bool = False                    # a CREATE named whoever summoned it
 
     def sighting(self) -> tuple[tuple[float, ...], bool] | None:
         """The create that followed a death, else the earliest one seen."""
@@ -107,6 +114,8 @@ class Spawn(BaseAuthorRule):
         if ev.kind == "object_create":
             position = (ev.data.get("movement") or {}).get("movement_info", {}).get("pos")
             spawn = self._of(ev)
+            if spawn is not None and _SUMMONER & {f.get("name") for f in ev.data.get("fields", ())}:
+                spawn.summoned = True
             if spawn is not None and is_corpse(ev):
                 spawn.corpses += 1
             elif position and ev.packet.t is not None and spawn is not None:
@@ -138,7 +147,8 @@ class Spawn(BaseAuthorRule):
 
     def _seen(self) -> list[tuple[int, _Spawn]]:
         """Spawns the capture saw a position for, in guid order."""
-        return [(guid, s) for guid, s in sorted(self._spawns.items()) if s.creates]
+        return [(guid, s) for guid, s in sorted(self._spawns.items())
+                if s.creates and not s.summoned]
 
     # -- emit --------------------------------------------------------------
 
@@ -268,6 +278,11 @@ class Spawn(BaseAuthorRule):
                               provenance=close_provenance, notes=tuple(close_notes))
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
+        summoned = [guid for guid, s in sorted(self._spawns.items()) if s.summoned]
+        if summoned:
+            yield (f"creature -- {len(summoned)} summon(s), not proposed: a CREATE named "
+                   "who summoned them, so they despawn rather than respawn (guid "
+                   f"{', '.join(str(g & GUID_COUNTER_MASK) for g in summoned)})")
         only_dead = [guid for guid, s in sorted(self._spawns.items()) if s.corpses and not s.creates]
         if only_dead:
             yield (f"creature -- {len(only_dead)} spawn(s) seen only as a corpse, which lies "
