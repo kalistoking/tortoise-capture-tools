@@ -13,6 +13,8 @@ import enum
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
+from .reader import HIGHGUID_UNIT, guid_high
+
 if TYPE_CHECKING:  # type-only: core must not import the wire/fields layers at runtime
     import logging
 
@@ -191,6 +193,13 @@ DERIVED = "derived"          # inferred by correlation or reconstruction
 LOOKUP = "lookup"            # resolved against the world database
 CONVENTION = "convention"    # fixed by the authoring convention, not observed
 CONFIRMED = "confirmed"      # matches the wire, restated as the DB's own value -- a safe no-op
+
+
+def is_creature(guid: int | None) -> bool:
+    """A creature's own guid, the type a spawn row is. --entry keeps any guid
+    bearing the number (dispatch.py), and gameobject entries are numbered
+    apart from creature ones, so one number can name one of each."""
+    return guid is not None and guid_high(guid) == HIGHGUID_UNIT
 
 
 def is_corpse(ev: Event) -> bool:

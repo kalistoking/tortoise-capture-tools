@@ -33,7 +33,9 @@ from __future__ import annotations
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
-from ..core.contracts import CONVENTION, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event
+from ..core.contracts import (
+    CONVENTION, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event, is_creature,
+)
 from ..core.registry import author_rule
 
 DISPLAY_FIELD = "UNIT_VIRTUAL_ITEM_DISPLAY"
@@ -59,6 +61,7 @@ class Equipment(BaseAuthorRule):
     def handle(self, ev: Event, mod: Any = None) -> None:
         # First CREATE wins, as for every template column; later ones carry the same.
         if (ev.kind != "object_create" or self._raw is not None
+                or not is_creature(ev.data.get("guid"))
                 or not ev.data.get("named_ok", True) or not ev.data.get("fields")):
             return
         self._raw = {f["index"]: f["raw"] for f in ev.data["fields"]}

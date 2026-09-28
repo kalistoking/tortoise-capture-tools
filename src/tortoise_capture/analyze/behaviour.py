@@ -54,7 +54,7 @@ from typing import Iterator
 
 from ..core.base import BaseAnalyzer
 from ..core.contracts import (
-    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec, is_corpse,
+    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec, is_corpse, is_creature,
 )
 from ..core.registry import analyzer
 
@@ -163,7 +163,7 @@ class Behaviour(BaseAnalyzer):
             return
 
         entry = ev.data.get("entry")
-        if entry is None:
+        if entry is None or ("guid" in ev.data and not is_creature(ev.data["guid"])):
             return
         guid = ev.data.get("guid") or 0
         creature = self._seen.setdefault((entry, guid), _Creature(entry=entry, guid=guid))

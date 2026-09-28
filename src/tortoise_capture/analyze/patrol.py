@@ -44,7 +44,7 @@ from typing import Any, Iterator, Mapping
 from ..core.base import BaseAnalyzer
 from ..core.contracts import (
     Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec, is_corpse,
-    spawn_sighting,
+    is_creature, spawn_sighting,
 )
 from ..core.registry import analyzer
 
@@ -320,7 +320,7 @@ class Patrol(BaseAnalyzer):
 
     def feed(self, ev: Event) -> None:
         guid = ev.data.get("guid")
-        if guid is None:
+        if not is_creature(guid):
             return
 
         if ev.kind == "move_linear":

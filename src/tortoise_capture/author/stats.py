@@ -57,7 +57,7 @@ from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
 from ..core.contracts import (
-    CONFIRMED, CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event,
+    CONFIRMED, CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, is_creature,
 )
 from ..core.registry import author_rule
 from ..fields import values as fv
@@ -144,7 +144,7 @@ class Stats(BaseAuthorRule):
         self._saw_spells = False
 
     def handle(self, ev: Event, mod: Any = None) -> None:
-        if ev.kind == "object_create":
+        if ev.kind == "object_create" and is_creature(ev.data.get("guid")):
             # The first value seen wins, field by field: a creature's static
             # stats never change after it is created, and later blocks only
             # carry what moved. So a field the first CREATE left out (a 0)

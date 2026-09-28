@@ -56,7 +56,8 @@ from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
 from ..core.contracts import (
-    CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, is_corpse, spawn_sighting,
+    CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, is_corpse, is_creature,
+    spawn_sighting,
 )
 from ..core.registry import author_rule
 
@@ -100,7 +101,7 @@ class Spawn(BaseAuthorRule):
 
     def _of(self, ev: Event) -> _Spawn | None:
         guid = ev.data.get("guid")
-        return None if guid is None else self._spawns.setdefault(guid, _Spawn())
+        return self._spawns.setdefault(guid, _Spawn()) if is_creature(guid) else None
 
     def handle(self, ev: Event, mod: Any = None) -> None:
         if ev.kind == "object_create":

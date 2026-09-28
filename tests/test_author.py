@@ -7,7 +7,7 @@ import struct
 import tempfile
 from pathlib import Path
 
-from support import StubWorld, author_rows, make_event, make_packet
+from support import StubWorld, author_rows, make_event, make_guid, make_packet
 from tortoise_capture.author.dialogue import EVENT_T_AGGRO, EVENT_T_DEATH, Dialogue
 from tortoise_capture.author.existing import only_new
 from tortoise_capture.author.equipment import (
@@ -636,6 +636,21 @@ def test_a_spawn_seen_only_as_a_corpse_is_reported_not_placed():
     assert not any(r.table == "creature" for r in rows)
     assert any("corpse" in gap for gap in gaps)
     assert not any("no CREATE block" in gap for gap in gaps)
+
+
+_GAMEOBJECT = make_guid(ENTRY, 7, high=0xF110)
+
+
+def test_a_gameobject_sharing_the_entry_is_not_a_creature():
+    """--entry keeps every guid bearing the number, and gameobject entries are
+    numbered apart from creature ones, so the same number can name one of each."""
+    thing = make_event("object_create", 5.0, guid=_GAMEOBJECT, entry=ENTRY,
+                       movement={"movement_info": {"pos": (1.0, 2.0, 3.0, 0.0)}},
+                       fields=_fields(OBJECT_FIELD_SCALE_X=0x40000000))
+    rows, _ = author_rows(Spawn(), _spawn_events() + [thing], ENTRY)
+    assert [r.values["guid"] for r in rows if r.table == "creature"] == [SPAWN_GUID]
+    rows, _ = author_rows(Stats(), [thing], ENTRY)
+    assert not rows
 
 
 def test_a_single_respawn_sample_does_not_bound_spawntimesecs():
