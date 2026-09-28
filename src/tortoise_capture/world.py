@@ -132,7 +132,9 @@ class World:
             try:
                 self._describe_cache[table] = self.query(f"DESCRIBE `{table}`")
             except WorldError as exc:
-                _logger.warning("could not describe %s: %s", table, exc)
+                # Without its columns the existing-row check and the schema defaults
+                # pass this table by: that must fail the run, not just warn.
+                _logger.error("could not describe %s: %s", table, exc)
                 self._describe_cache[table] = []
         return self._describe_cache[table]
 

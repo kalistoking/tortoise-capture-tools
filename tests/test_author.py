@@ -1738,6 +1738,33 @@ def test_an_empty_string_in_the_database_is_a_value_not_an_absence():
     assert stored == ""
 
 
+def test_a_table_the_database_would_not_describe_is_an_error():
+    """A failed DESCRIBE left key_column None, so the existing-row check let every
+    row of that table through as an INSERT, and schema defaults went unfilled
+    -- with only a warning, which the exit code ignores."""
+    import logging
+    from tortoise_capture.world import World, WorldError
+    from tortoise_capture import world as world_mod
+
+    class Refusing(World):
+        def query(self, sql):
+            raise WorldError("access denied")
+
+    seen = []
+
+    class Catch(logging.Handler):
+        def emit(self, record):
+            seen.append(record)
+
+    handler = Catch(logging.ERROR)
+    world_mod._logger.addHandler(handler)
+    try:
+        assert Refusing(client="unused").key_column("creature") is None
+    finally:
+        world_mod._logger.removeHandler(handler)
+    assert seen
+
+
 def test_describe_coerces_types_and_treats_null_as_no_default():
     world, _ = _fake_world({"creature_template": [
         ["entry", "int", "NO", "PRI", "0", ""],
