@@ -65,3 +65,62 @@ def test_every_other_connection_to_the_world_port_is_named_not_dropped_unseen():
         pcap._logger.removeHandler(handler)
     assert client == ("10.0.0.2", 50000)
     assert any("50007" in message for message in seen)
+
+
+
+def test_a_message_whose_body_the_capture_never_saw_is_not_decoded():
+    """A gap wholly inside one message's body is zero-filled, and the framing
+    stays aligned -- so the message went on to its decoder with zeros for
+    bytes, and came out as confidently wrong values. It is dropped, and said."""
+    import logging
+    import struct
+
+    from tortoise_capture.core.contracts import Direction
+    from tortoise_capture.wire import framing
+
+    key = bytes(range(40))
+    i = j = 0
+
+    def encrypt(header: bytes) -> bytes:
+        nonlocal i, j
+        out = bytearray()
+        for plain in header:
+            cipher = ((plain ^ key[i % len(key)]) + j) & 0xFF
+            i += 1
+            j = cipher
+            out.append(cipher)
+        return bytes(out)
+
+    def message(opcode, body):
+        return encrypt(struct.pack(">H", len(body) + 2) + struct.pack("<H", opcode)) + body
+
+    data = (struct.pack(">H", 6) + struct.pack("<H", framing.SMSG_AUTH_CHALLENGE) + b"seed"
+            + message(0x96, b"A" * 40) + message(0x97, b"B" * 4))
+    body_start = 8 + 4
+    stream = pcap.Stream(data, ((0, 0.0),), gaps=((body_start + 10, body_start + 30),))
+
+    class Table:
+        max_opcode = 0x400
+
+        def name(self, opcode):
+            return None
+
+    seen = []
+
+    class Catch(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    handler = Catch(logging.ERROR)
+    framing._logger.addHandler(handler)
+    try:
+        packets = list(framing.walk(stream, Direction.S2C, key, Table(), 0.0))
+    finally:
+        framing._logger.removeHandler(handler)
+    assert [p.opcode for p in packets] == [framing.SMSG_AUTH_CHALLENGE, 0x97]
+    assert any("20 byte" in message for message in seen)
+
+
+def test_the_reassembly_says_where_it_filled_a_gap():
+    segments = [(1000, SENT[:200], 0.0), (1300, SENT[300:], 1.0)]
+    assert pcap._reassemble(segments, CLIENT, SERVER).gaps == ((200, 300),)

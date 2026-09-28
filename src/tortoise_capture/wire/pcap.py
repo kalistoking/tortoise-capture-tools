@@ -26,6 +26,7 @@ class Stream:
     data: bytes
     breakpoints: tuple[tuple[int, float], ...] = ()   # (buffer offset, capture time)
     segments: tuple[bytes, ...] = ()                  # in order, for key recovery
+    gaps: tuple[tuple[int, int], ...] = ()            # [start, end) zero-filled, never seen
     _offsets: list[int] = field(default_factory=list, init=False, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -38,6 +39,10 @@ class Stream:
         idx = bisect.bisect_right(self._offsets, pos) - 1
         idx = max(0, min(idx, len(self.breakpoints) - 1))
         return round(self.breakpoints[idx][1] - t0, 3)
+
+    def unseen(self, start: int, end: int) -> int:
+        """How many bytes of [start, end) the capture never saw."""
+        return sum(max(0, min(end, b) - max(start, a)) for a, b in self.gaps)
 
     def __len__(self) -> int:
         return len(self.data)
@@ -85,12 +90,14 @@ def _reassemble(segments: list[tuple[int, bytes, float]], src: tuple[str, int],
     buf = bytearray()
     breakpoints: list[tuple[int, float]] = []
     kept: list[bytes] = []
+    gaps: list[tuple[int, int]] = []
     start = ordered[0][0]
     end = start                                   # the stream holds [start, end)
     for offset, data, ts in ordered:
         if offset > end:
             _logger.warning("gap in %s:%d -> %s:%d stream: %d bytes missing at offset %d",
                             src[0], src[1], dst[0], dst[1], offset - end, end - start)
+            gaps.append((len(buf), len(buf) + offset - end))
             buf.extend(b"\x00" * (offset - end))
             end = offset
         fresh = data[end - offset:]               # only what is past the end so far
@@ -100,7 +107,7 @@ def _reassemble(segments: list[tuple[int, bytes, float]], src: tuple[str, int],
             buf.extend(fresh)
             end += len(fresh)
 
-    return Stream(bytes(buf), tuple(breakpoints), tuple(kept))
+    return Stream(bytes(buf), tuple(breakpoints), tuple(kept), tuple(gaps))
 
 
 def _world_client(senders: list[tuple[str, int]], server_ip: str,

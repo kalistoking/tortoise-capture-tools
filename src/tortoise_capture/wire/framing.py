@@ -101,8 +101,17 @@ def walk(stream: Stream, direction: Direction, key: bytes, table: OpcodeTable,
                           direction, pos, size, opcode, seq)
             return
 
-        yield Packet(seq=seq, t=stream.time_at(pos, t0), direction=direction, opcode=opcode,
-                     name=table.name(opcode), body=data[pos + hdr_len:pos + hdr_len + body_len])
+        # A gap inside one body keeps the framing aligned, so nothing else
+        # notices: its zeros would decode as the server's values.
+        missing = stream.unseen(pos, pos + hdr_len + body_len)
+        if missing:
+            _logger.error("%s packet %d (opcode 0x%X) at offset %d holds %d byte(s) the capture "
+                          "never saw, filled with zeros -- not decoded",
+                          direction, seq, opcode, pos, missing)
+        else:
+            yield Packet(seq=seq, t=stream.time_at(pos, t0), direction=direction, opcode=opcode,
+                         name=table.name(opcode),
+                         body=data[pos + hdr_len:pos + hdr_len + body_len])
         seq += 1
         pos += hdr_len + body_len
 
