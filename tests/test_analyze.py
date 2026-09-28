@@ -699,3 +699,13 @@ def test_the_analyzers_take_a_creature_guid_only():
              make_event("object_create", 400.0, guid=pet, entry=ENTRY,
                         fields=_fields(UNIT_FIELD_HEALTH=342))]
     assert "respawn_timer" not in findings_by_kind(run_analyzer(Behaviour(), lives))
+
+
+
+def test_a_move_on_a_transport_is_no_hop_of_a_route():
+    """SMSG_MONSTER_MOVE_TRANSPORT carries coordinates on the boat, not in the
+    world (MoveSplineInit.cpp:82-83); taken as world ones they made a route of
+    a deck."""
+    moves = [make_event("move_linear", float(i), guid=GUID, entry=ENTRY, transport=0xF12,
+                        dest=SQUARE[i % 4]) for i in range(40)]
+    assert not findings_by_kind(run_analyzer(Patrol(), moves))

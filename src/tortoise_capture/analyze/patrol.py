@@ -370,7 +370,9 @@ class Patrol(BaseAnalyzer):
             return
 
         if ev.kind == "move_linear":
-            if ev.packet.t is None:
+            # A move on a transport is in the boat's own coordinates
+            # (MoveSplineInit.cpp:82-83), not the world's a route is walked in.
+            if ev.packet.t is None or ev.data.get("transport"):
                 return
             route = self._routes.setdefault(guid, _Route())
             route.entry = ev.data.get("entry")

@@ -66,6 +66,14 @@ def unpack_offset(packed: int) -> tuple[float, float, float]:
     return x * 0.25, y * 0.25, z * 0.25
 
 
+
+def _read_to_the_end(r: ByteReader, pkt: Packet, ctx: DecodeContext) -> None:
+    """A move with bytes left over was read short, its points with it; every
+    move in the captures so far reads to the last byte."""
+    if not r.eof:
+        ctx.log.error("%s: %d byte(s) left unread -- the move was misread",
+                      pkt.describe(), r.remaining)
+
 @module(id="monster_move", opcodes=("SMSG_MONSTER_MOVE", "SMSG_MONSTER_MOVE_TRANSPORT"), order=70)
 class MonsterMove(BaseModule):
     text_section = "SMSG_MONSTER_MOVE / _TRANSPORT (movement)"
@@ -99,6 +107,7 @@ class MonsterMove(BaseModule):
                       common.get("entry"), move_type, spline_id)
 
         if move_type == MOVE_STOP:
+            _read_to_the_end(r, pkt, ctx)
             yield self.event(pkt, "move_stop", **common, points=[start])
             return
         if move_type == MOVE_FACING_SPOT:
@@ -114,6 +123,7 @@ class MonsterMove(BaseModule):
         if flags & SPLINEFLAG_CATMULLROM:
             count = r.u32("count")
             points = [r.vec3(f"point{i}") for i in range(count)]
+            _read_to_the_end(r, pkt, ctx)
             yield self.event(pkt, "move_spline", **common, flags=flags, duration_ms=duration,
                              cyclic=bool(flags & SPLINEFLAG_CYCLIC), points=points)
             return
@@ -126,6 +136,7 @@ class MonsterMove(BaseModule):
             ox, oy, oz = unpack_offset(r.u32(f"offset{i}"))
             points.append((dest[0] - ox, dest[1] - oy, dest[2] - oz))
         points.append(dest)
+        _read_to_the_end(r, pkt, ctx)
         yield self.event(pkt, "move_linear", **common, flags=flags, duration_ms=duration,
                          dest=dest, points=points)
 

@@ -235,6 +235,11 @@ class UpdateObject(BaseModule):
                 # unknown block, so stop this message rather than guess.
                 raise WireError(f"unsupported update block type {update_type} "
                                 f"(block {index + 1}/{block_count})")
+        if not r.eof:
+            # Every block read and bytes left over: one of them was read short,
+            # and its values with it. All captures so far read to the last byte.
+            ctx.log.error("%s: %d byte(s) left after %d block(s) -- a block was misread",
+                          pkt.describe(), r.remaining, block_count)
 
     def _field_event(self, pkt: Packet, ctx: DecodeContext, kind: str, guid: int,
                      fields: Mapping[int, int], scope: str = "entry", **extra: Any) -> Event:

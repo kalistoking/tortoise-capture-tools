@@ -1204,3 +1204,41 @@ def test_a_walk_or_run_mode_switch_carries_only_the_unit():
                            (0x30D, "SMSG_SPLINE_MOVE_SET_RUN_MODE", "run")):
         ev = decode_one(SplineSpeed(), make_packet(op, pack_guid(GUID), name), make_ctx())
         assert ev.kind == "move_mode" and ev.data["mode"] == mode and ev.data["entry"] == ENTRY
+
+
+
+def _errors_of(body_to_events):
+    """Runs a decode and returns what it logged at error level."""
+    import logging
+
+    seen = []
+
+    class Catch(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    ctx = make_ctx()
+    handler = Catch(logging.ERROR)
+    ctx.log.addHandler(handler)
+    try:
+        list(body_to_events(ctx))
+    finally:
+        ctx.log.removeHandler(handler)
+    return seen
+
+
+def test_bytes_left_after_a_monster_move_are_reported():
+    """Every move in the captures reads to its last byte; one that does not
+    has had its layout misread, and its values with it."""
+    body = (_move_head() + bytes([0]) + struct.pack("<III", 0, 3200, 1)
+            + struct.pack("<3f", 10.0, 20.0, 30.0) + b"\x00")
+    errors = _errors_of(lambda ctx: MonsterMove().decode(
+        make_packet(0xDD, body, "SMSG_MONSTER_MOVE"), ctx))
+    assert any("1 byte" in message for message in errors)
+
+
+def test_bytes_left_after_an_update_object_are_reported():
+    body = struct.pack("<IB", 1, 0) + bytes([4]) + struct.pack("<I", 0) + b"\x00\x00"
+    errors = _errors_of(lambda ctx: UpdateObject().decode(
+        make_packet(0xA9, body, "SMSG_UPDATE_OBJECT"), ctx))
+    assert any("2 byte" in message for message in errors)
