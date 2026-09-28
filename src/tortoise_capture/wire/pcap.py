@@ -103,6 +103,19 @@ def _reassemble(segments: list[tuple[int, bytes, float]], src: tuple[str, int],
     return Stream(bytes(buf), tuple(breakpoints), tuple(kept))
 
 
+def _world_client(senders: list[tuple[str, int]], server_ip: str,
+                  port: int) -> tuple[str, int] | None:
+    """The first client to send to the world server; the others are named, not
+    dropped unseen -- a reconnect, or a session still closing when the
+    capture began, is a conversation this run does not decode."""
+    clients = list(dict.fromkeys(senders))
+    if len(clients) > 1:
+        _logger.warning("%d more connection(s) to %s:%d carry payload and are not decoded: "
+                        "%s -- only the first, %s:%d, is", len(clients) - 1, server_ip, port,
+                        ", ".join(f"{ip}:{sport}" for ip, sport in clients[1:]), *clients[0])
+    return clients[0] if clients else None
+
+
 def read_session(path: Path, server_ip: str, port: int) -> CaptureSession:
     """Reads a capture and reassembles the one world session it contains."""
     from scapy.all import IP, Raw, TCP, rdpcap  # noqa: PLC0415
@@ -110,11 +123,10 @@ def read_session(path: Path, server_ip: str, port: int) -> CaptureSession:
     _logger.info("reading %s", path)
     packets = rdpcap(str(path))
 
-    client = None
-    for p in packets:
-        if TCP in p and IP in p and Raw in p and p[TCP].dport == port and p[IP].dst == server_ip:
-            client = (p[IP].src, p[TCP].sport)
-            break
+    client = _world_client([(p[IP].src, p[TCP].sport) for p in packets
+                            if TCP in p and IP in p and Raw in p
+                            and p[TCP].dport == port and p[IP].dst == server_ip],
+                           server_ip, port)
     if client is None:
         raise FileNotFoundError(f"no client->server payload to {server_ip}:{port} in {path}")
 

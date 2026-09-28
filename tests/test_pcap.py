@@ -42,3 +42,26 @@ def test_a_sequence_number_that_wraps_past_2_32_carries_on():
 def test_a_real_gap_is_still_filled_and_reported():
     data = _stream([(0, 200), (300, 212)])
     assert len(data) == len(SENT) and data[200:300] == b"\x00" * 100
+
+
+def test_every_other_connection_to_the_world_port_is_named_not_dropped_unseen():
+    """The first client to send to the world port was decoded and every other
+    connection to it ignored without a word -- a reconnect after a disconnect,
+    or a session that was still closing when the capture began."""
+    import logging
+
+    seen = []
+
+    class Catch(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    handler = Catch(logging.WARNING)
+    pcap._logger.addHandler(handler)
+    try:
+        client = pcap._world_client([("10.0.0.2", 50000), ("10.0.0.2", 50000),
+                                     ("10.0.0.2", 50007)], "10.0.0.1", 8090)
+    finally:
+        pcap._logger.removeHandler(handler)
+    assert client == ("10.0.0.2", 50000)
+    assert any("50007" in message for message in seen)
