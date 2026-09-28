@@ -613,3 +613,35 @@ def test_a_sound_equidistant_between_two_creatures_texts_is_attributed_to_neithe
 
 def make_guid_for(entry):
     return (0xF130 << 48) | (entry << 24) | 1
+
+
+def test_the_respawn_slack_is_half_a_second():
+    """300.8 and 300.9 s fit a timer of 301 alone -- (timer - 1, timer + 0.5)
+    -- where a slack of a whole second would let 300 in as well."""
+    events = [
+        make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+        make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
+        make_event("object_values", 400.8, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+        make_event("party_kill", 500.0, guid=GUID, entry=ENTRY),
+        make_event("object_values", 800.9, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+    ]
+    respawn = findings_by_kind(run_analyzer(Behaviour(), events))["respawn_timer"].data
+    assert respawn["seconds"] == 301
+
+
+def test_the_analyzers_take_a_creature_guid_only():
+    """A pet carries its creature's entry: its moves are no patrol, its deaths
+    and returns no respawn timer."""
+    pet = make_guid(ENTRY, 3, high=0xF140)
+    moves = [make_event("move_linear", float(i), guid=pet, entry=ENTRY,
+                        dest=SQUARE[i % 4]) for i in range(40)]
+    assert not findings_by_kind(run_analyzer(Patrol(), moves))
+    lives = [make_event("object_create", 10.0, guid=pet, entry=ENTRY,
+                        fields=_fields(UNIT_FIELD_HEALTH=342)),
+             make_event("party_kill", 100.0, guid=pet, entry=ENTRY),
+             make_event("object_create", 400.0, guid=pet, entry=ENTRY,
+                        fields=_fields(UNIT_FIELD_HEALTH=342))]
+    assert "respawn_timer" not in findings_by_kind(run_analyzer(Behaviour(), lives))
