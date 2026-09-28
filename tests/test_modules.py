@@ -202,6 +202,14 @@ def test_gameobject_query_response():
     assert ev.data["data"][:4] == [57, 18000, 0, 1] and len(ev.data["data"]) == 24
 
 
+def test_gameobject_query_reads_the_signed_data_columns_as_signed():
+    """gameobject_template.data1 and data6 are signed (24 and 79 rows hold a
+    negative); the wire carries their 32 bits, so -1 came off it as 4294967295."""
+    body = _gameobject_query_body(type_=10, data=(0, 0xFFFFFFFF, 0, 0, 0, 0, 0xFFFFFFFE))
+    ev = decode_one(GameObjectQuery(), make_packet(0x5F, body), make_ctx())
+    assert ev.data["data"][1] == -1 and ev.data["data"][6] == -2
+
+
 def test_gameobject_query_unknown_entry_has_no_body():
     body = struct.pack("<I", GO_ENTRY | 0x80000000)
     assert list(GameObjectQuery().decode(make_packet(0x5F, body), make_ctx())) == []

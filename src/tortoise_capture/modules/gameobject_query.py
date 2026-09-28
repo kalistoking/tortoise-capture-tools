@@ -28,6 +28,10 @@ from ..core.registry import module
 
 UNKNOWN_ENTRY_BIT = 0x80000000
 DATA_COUNT = 24
+# gameobject_template.data1 and data6 are signed int(11) -- 24 and 79 rows of
+# the live database hold a negative, e.g. -1 -- and the wire carries their 32
+# bits alone, so they are read as signed to hold the value the table does.
+SIGNED_DATA = (1, 6)
 
 _TABLE = TableSpec(
     name="capture_gameobject_template",
@@ -37,7 +41,8 @@ _TABLE = TableSpec(
         Column("type", "INT UNSIGNED"),
         Column("display_id", "INT UNSIGNED"),
         Column("name", "VARCHAR(100)"),
-        *(Column(f"data{i}", "INT UNSIGNED") for i in range(DATA_COUNT)),
+        *(Column(f"data{i}", "INT" if i in SIGNED_DATA else "INT UNSIGNED")
+          for i in range(DATA_COUNT)),
     ),
     key=("capture", "entry"),
     comment="identity as the server answered it; faction, flags and size come from SMSG_UPDATE_OBJECT",
@@ -65,7 +70,7 @@ class GameObjectQuery(BaseModule):
         name = r.cstring("name")
         for slot in range(2, 6):
             r.cstring(f"name{slot}")          # always empty in 1.12.1
-        data = [r.u32(f"data{i}") for i in range(DATA_COUNT)]
+        data = [(r.i32 if i in SIGNED_DATA else r.u32)(f"data{i}") for i in range(DATA_COUNT)]
         yield self.event(pkt, "gameobject_query", entry=entry, name=name, type=type_,
                          display_id=display_id, data=data)
 
