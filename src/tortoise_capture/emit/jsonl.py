@@ -12,6 +12,7 @@ Event record:  {"seq","t","dir","module","kind","data"}
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Iterator, TextIO
 
@@ -30,6 +31,18 @@ def _jsonable(value: Any) -> Any:
 def packet_record(pkt: Packet) -> dict[str, Any]:
     return {"seq": pkt.seq, "t": pkt.t, "dir": str(pkt.direction), "opcode": f"0x{pkt.opcode:X}",
             "name": pkt.name, "size": len(pkt.body), "hex": pkt.body.hex(), "via": pkt.via}
+
+
+def finite(value: Any) -> Any:
+    """`value` with NaN and infinity as None: a wire float can carry them, and
+    json.dumps would write a bare NaN token no strict JSON reader accepts."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [finite(v) for v in value]
+    return value
 
 
 def event_record(ev: Event) -> dict[str, Any]:
@@ -76,7 +89,7 @@ class EventSink:
         self.count = 0
 
     def handle(self, ev: Event, mod: Any = None) -> None:
-        self._out.write(json.dumps(event_record(ev), default=_jsonable) + "\n")
+        self._out.write(json.dumps(finite(event_record(ev)), default=_jsonable) + "\n")
         self.count += 1
 
     def close(self) -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from support import make_packet
 from tortoise_capture.core.contracts import Column, Event, Row, SqlContext, TableSpec
+from tortoise_capture.emit.jsonl import EventSink
 from tortoise_capture.emit.sql import SqlSink, create_table, literal
 from tortoise_capture.emit.text import TextSink
 
@@ -38,6 +39,29 @@ class DemoModule:
 
 def _event(kind="demo", **data):
     return Event(packet=make_packet(1, b"", t=12.5), module_id="demo", kind=kind, data=data)
+
+
+def test_a_float_with_no_literal_is_written_null():
+    """A wire f32 can carry NaN or infinity; written bare, `inf` and `nan` read
+    as column names and the INSERT failed."""
+    for dialect in ("mysql", "sqlite"):
+        assert literal(float("nan"), dialect) == "NULL"
+        assert literal(float("-inf"), dialect) == "NULL"
+
+
+def test_an_event_carrying_nan_is_still_json():
+    """json.dumps writes NaN as a bare NaN token, which strict JSON refuses."""
+    import json
+
+    out = io.StringIO()
+    EventSink(out).handle(Event(packet=make_packet(0x1, b""), module_id="m", kind="k",
+                                data={"speed": float("nan"), "points": [(1.0, float("inf"))]}))
+
+    def refuse(token):
+        raise ValueError(f"not JSON: {token}")
+
+    record = json.loads(out.getvalue(), parse_constant=refuse)
+    assert record["data"]["speed"] is None and record["data"]["points"] == [[1.0, None]]
 
 
 def test_literals_quote_and_escape_per_dialect():

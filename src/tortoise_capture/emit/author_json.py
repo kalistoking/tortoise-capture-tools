@@ -16,6 +16,7 @@ from typing import Any
 from .. import log as _log
 from ..core.contracts import AuthoredRow
 from .authored import AuthoredCollector
+from .jsonl import finite
 
 _logger = _log.get_logger("emit.author_json")
 
@@ -60,7 +61,7 @@ class AuthorJsonWriter(AuthoredCollector):
             "gaps": list(self._gaps),
         }
 
-        return self._emit(json.dumps(document, indent=2) + "\n")
+        return self._emit(json.dumps(finite(document), indent=2) + "\n")
 
 
 def author_json_name(when: _dt.datetime | None = None) -> str:

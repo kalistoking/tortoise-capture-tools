@@ -16,6 +16,7 @@ this environment allows (no mysql client on PATH).
 from __future__ import annotations
 
 import datetime as _dt
+import math
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -52,7 +53,8 @@ def literal(value: Any, dialect: str) -> str:
             value -= 1 << 64
         return str(value)
     if isinstance(value, float):
-        return repr(value)
+        # NaN and infinity have no SQL literal; bare, they read as column names.
+        return repr(value) if math.isfinite(value) else "NULL"
     if isinstance(value, (bytes, bytearray)):
         return f"0x{bytes(value).hex()}" if dialect == "mysql" else f"X'{bytes(value).hex()}'"
     text = str(value).replace("'", "''")
