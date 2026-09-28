@@ -166,6 +166,21 @@ def test_a_named_address_alone_still_wins_over_the_realm_list():
     assert _world_of(content, named=frozenset({"server_ip"})) == ("127.0.0.1", 8085)
 
 
+def test_a_named_address_no_realm_is_at_is_warned_about_not_whispered():
+    """A tct.toml copied from the old example keeps server_ip uncommented; with
+    the realm elsewhere the run fell back to 127.0.0.1:8090 and said why only
+    at debug level."""
+    warned = _Errors()
+    warned.setLevel(logging.WARNING)
+    cli._logger.addHandler(warned)
+    try:
+        _world_of(_session(world_port=8085, listed="127.0.0.1:8085"),
+                  named=frozenset({"server_ip"}), server_ip="10.0.0.5")
+    finally:
+        cli._logger.removeHandler(warned)
+    assert warned.count == 1
+
+
 def test_a_capture_without_a_realm_list_falls_back_to_the_default():
     assert _world_of(_session(with_logon=False)) == ("127.0.0.1", 8090)
 

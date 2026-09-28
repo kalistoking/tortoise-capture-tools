@@ -52,9 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--config", help=f"config file (default: ./{CONFIG_NAME}); env TCT_CONFIG")
     common.add_argument("--repo", help="tortoise-wow checkout (opcode and field tables); env TCT_REPO")
     common.add_argument("--port", type=int, help="world server port of the capture (default: "
-                        "the one its realm list names, else 8090)")
+                        "the one its realm list names, else 8090; tct slim asks for one "
+                        "instead)")
     common.add_argument("--server-ip", help="world server address in the capture (default: the "
-                        "one its realm list names, else 127.0.0.1)")
+                        "one its realm list names, else 127.0.0.1 -- and 127.0.0.1 whenever "
+                        "--port is named without it)")
     common.add_argument("--logon-port", type=int,
                         help="logon server port of the capture (default 3724); env TCT_LOGON_PORT")
     common.add_argument("--logon-ip", help="logon server address (default: any); env TCT_LOGON_IP")
@@ -188,8 +190,11 @@ def _world(cfg: RunConfig, capture: Path) -> tuple[str, int]:
     try:
         return slim.world_server(capture, _logon(cfg), _named_address(cfg))
     except slim.SlimError as exc:
-        _logger.debug("world server not read from the capture (%s); using %s:%d",
-                      exc, cfg.server_ip, cfg.port)
+        # Nothing named is routine (a capture begun after the logon); a named
+        # address the realm list does not hold is the user's to hear about.
+        report = _logger.warning if _named_address(cfg) else _logger.debug
+        report("world server not read from the capture (%s); using %s:%d",
+               exc, cfg.server_ip, cfg.port)
         return cfg.server_ip, cfg.port
 
 

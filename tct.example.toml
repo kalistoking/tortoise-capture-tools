@@ -13,8 +13,10 @@
 # including Windows (e.g. "C:/path/to/tortoise-wow").
 repo = "/path/to/tortoise-wow"
 # The world server. Left out, it is read from the logon server's realm list in
-# the capture, falling back to 127.0.0.1:8090 (this fork's WorldServerPort).
-# Setting `port` (here, in TCT_PORT or with --port) overrides the realm list.
+# the capture, falling back to 127.0.0.1:8090 (this fork's WorldServerPort) --
+# except `tct slim`, which asks for it instead. Setting `port` (here, in
+# TCT_PORT or with --port) overrides the realm list, at `server_ip` if set and
+# 127.0.0.1 if not; `server_ip` alone picks the listed realm at that address.
 # port = 8090
 # server_ip = "127.0.0.1"
 # The logon server, whose realm list names the world server.
