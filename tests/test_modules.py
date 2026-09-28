@@ -1074,6 +1074,20 @@ def test_loot_response_reads_gold_and_items():
     assert ev.data["items"][1]["item_id"] == 25382 and ev.data["items"][1]["count"] == 3
 
 
+def test_every_item_of_a_loot_window_gets_its_own_sql_row():
+    """The table was keyed on (capture, seq) with a row per item, so INSERT
+    IGNORE kept the first item of a window and dropped the rest on import."""
+    from tortoise_capture.core.contracts import SqlContext
+    body = (struct.pack("<Q", GUID) + bytes([1]) + struct.pack("<IB", 250, 2)
+            + bytes([0]) + _item(item_id=5276, count=1, random_prop=0)
+            + bytes([1]) + _item(item_id=25382, count=3, random_prop=0))
+    ev = decode_one(LootResponse(), make_packet(0x160, body, "SMSG_LOOT_RESPONSE"), make_ctx())
+    rows = list(LootResponse().sql_rows(ev, SqlContext(capture_id="test")))
+    key = LootResponse.sql_tables[0].key
+    assert len({tuple(r.values[k] for k in key) for r in rows}) == len(rows) == 2
+    assert [r.values["slot"] for r in rows] == [0, 1]
+
+
 def test_loot_response_with_no_items_is_still_decoded():
     """NONE_PERMISSION's gold=0/item_count=0 (LootMgr.cpp:902-906) needs no
     special-casing -- item_count=0 just means the loop below never runs."""

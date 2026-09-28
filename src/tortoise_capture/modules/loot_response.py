@@ -68,13 +68,16 @@ _ITEM_TABLE = TableSpec(
         Column("entry", "INT UNSIGNED"),
         Column("loot_type", "TINYINT UNSIGNED"),
         Column("gold", "INT UNSIGNED"),
+        Column("slot", "TINYINT UNSIGNED", nullable=False),   # 0 with no item_id: gold alone
         Column("item_id", "INT UNSIGNED"),
         Column("count", "INT UNSIGNED"),
         Column("display_info_id", "INT UNSIGNED"),
         Column("random_property_id", "INT"),
         Column("slot_type", "TINYINT UNSIGNED"),
     ),
-    key=("capture", "seq"),
+    # A row per item: keyed on the packet alone, INSERT IGNORE kept a window's
+    # first item and dropped the rest.
+    key=("capture", "seq", "slot"),
     comment="one roll of a loot table, not a drop chance -- see module docstring",
 )
 
@@ -146,10 +149,12 @@ class LootResponse(BaseModule):
         if ev.kind == "loot_error":
             yield Row(_ERROR_TABLE.name, {**head, "error": d["error"]})
             return
-        rows = d["items"] or [{"item_id": None, "count": None, "display_info_id": None,
-                               "random_property_id": None, "slot_type": None}]
+        rows = d["items"] or [{"slot": 0, "item_id": None, "count": None,
+                               "display_info_id": None, "random_property_id": None,
+                               "slot_type": None}]
         for item in rows:
             yield Row(_ITEM_TABLE.name, {**head, "loot_type": d["loot_type"], "gold": d["gold"],
+                                         "slot": item["slot"],
                                          "item_id": item["item_id"], "count": item["count"],
                                          "display_info_id": item["display_info_id"],
                                          "random_property_id": item["random_property_id"],
