@@ -275,10 +275,12 @@ class _Route:
             seen.add(node)
             order.append(node)
             node = edges[node].most_common(1)[0][0] if edges[node] else None
-        # Coming round to another point is a turn only if the last point never
-        # went on to the start: 81262 walks G-H-A, but most laps missed H.
+        # Coming round to another point is a turn unless the last point went on
+        # to the start more than once: 81262 walks G-H-A, most laps missing H,
+        # but G went on to H three times; one stray step (a respawn setting off
+        # for point 1) is not a loop.
         self.closes_elsewhere = (node is not None and node != anchor
-                                 and anchor not in edges[order[-1]])
+                                 and edges[order[-1]][anchor] < 2)
         self.returns_to_start = bool(order and edges[order[-1]]
                                      and edges[order[-1]].most_common(1)[0][0] == anchor)
         return order

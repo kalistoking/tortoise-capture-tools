@@ -119,6 +119,21 @@ def test_a_route_that_turns_back_is_refused_not_cut_short():
     assert route.data["confident"] is False and route.data["refused_because"] == "branching"
 
 
+def test_one_stray_step_to_the_start_does_not_close_a_route_that_turns_back():
+    """A-B-C-D-C-B, first seen at A, with one D-A step (a respawn that set off
+    for A): that single edge made the turned-back walk A-B-C-D count as a loop
+    closing at A, and the creature would walk D-A for ever."""
+    line = SQUARE + [(0.0, 20.0, 10.0)]
+    events, t = [_sighted(0.5, 0)], 1.0
+    for lap in range(8):
+        for corner in (0, 1, 2, 3, 0) if lap == 4 else (0, 1, 2, 3, 2, 1):
+            x, y, z = line[corner]
+            events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(x, y, z)))
+            t += 1.0
+    route = findings_by_kind(run_analyzer(Patrol(), events))["patrol_route"]
+    assert route.data["confident"] is False
+
+
 def test_a_point_the_observer_sometimes_missed_keeps_the_route():
     """81265 in the Elwynn capture walks A-B-C-D-E, but 5 of 13 laps show C-E:
     the hop to D never reached the client. The walk still takes C-D, every
