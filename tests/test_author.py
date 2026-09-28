@@ -464,6 +464,35 @@ def test_an_empty_subname_over_a_stored_null_is_left_alone():
     assert rows[0].provenance["subname"] == CONFIRMED
 
 
+def _flagged(npc_flags):
+    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+        UNIT_FIELD_ATTACK_POWER=44, UNIT_NPC_FLAGS=npc_flags))]
+
+
+def test_npc_flags_the_server_hid_from_the_viewer_are_not_a_contradiction():
+    """Each viewer gets its own npc_flags (Object.cpp:565-612): TRAINER is hidden
+    from other classes, STABLEMASTER from non-hunters, FLIGHTMASTER while it has
+    a quest for the viewer, and ITEMRESTORE goes out as VENDOR. A trainer seen
+    by a mage, or an item-restoring vendor, was reported as the database being
+    wrong."""
+    for stored, wire in ((0x11, 0x01), (0x2001, 0x0001), (0x40000000, 0x4)):
+        world = StubWorld(columns={("creature_template", "npc_flags"): str(stored)})
+        rows, gaps = author_rows(Stats(), _flagged(wire), ENTRY, world=world)
+        assert rows[0].values["npc_flags"] == stored and rows[0].provenance["npc_flags"] == CONFIRMED
+        assert not any("npc_flags" in gap for gap in gaps)
+
+
+def test_npc_flags_the_viewer_could_see_still_disagree():
+    world = StubWorld(columns={("creature_template", "npc_flags"): "1"})
+    rows, gaps = author_rows(Stats(), _flagged(3), ENTRY, world=world)
+    assert "npc_flags" not in rows[0].values and any("npc_flags" in gap for gap in gaps)
+
+
+def test_npc_flags_read_without_a_database_say_what_a_viewer_is_not_shown():
+    rows, _ = author_rows(Stats(), _flagged(0x1), ENTRY)
+    assert any("TRAINER" in note and "Object.cpp" in note for note in rows[0].notes)
+
+
 def test_npc_flags_absent_from_the_create_are_a_zero():
     """A CREATE omits every zero field."""
     rows, _ = author_rows(Stats(), _identity_events(), ENTRY)

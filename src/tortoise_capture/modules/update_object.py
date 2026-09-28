@@ -17,8 +17,9 @@ Block layouts (ObjectUpdateType), all from Object.cpp:
 CREATE blocks carry the full field snapshot -- that is where mindamage,
 maxdamage, attack_power, scale and bytes_0 appear, once, at first sighting.
 VALUES blocks carry only what changed, in practice health for a unit in
-combat. There is no per-viewer field masking in this core, so a creature's
-combat stats are broadcast to every observer.
+combat. A creature's combat stats go to every observer alike, but not all its
+fields: UNIT_NPC_FLAGS is rewritten per viewer (Object.cpp:565-612), and
+UNIT_FIELD_FLAGS and UNIT_DYNAMIC_FLAGS for a GM or by tap (:658-661).
 """
 
 from __future__ import annotations

@@ -109,6 +109,19 @@ _ROLLED = ("UNIT_FIELD_BASE_HEALTH", "UNIT_FIELD_BASE_MANA")
 _SPEEDS = {"speed_walk": (0, 2.5), "speed_run": (1, 7.0)}
 
 
+# Each viewer gets its own npc_flags (Object.cpp:565-612): TRAINER is hidden
+# from other classes, STABLEMASTER from non-hunters, FLIGHTMASTER while it has a
+# quest for the viewer, and ITEMRESTORE goes out as VENDOR (UnitDefines.h:448-463).
+_NPC_VENDOR, _NPC_ITEMRESTORE = 0x4, 0x40000000
+_NPC_HIDDEN = 0x8 | 0x10 | 0x2000             # FLIGHTMASTER, TRAINER, STABLEMASTER
+
+
+def _npc_flags_agree(stored: int, wire: int) -> bool:
+    """Whether a viewer could have been shown `wire` for a template holding `stored`."""
+    seen = (stored & ~_NPC_ITEMRESTORE) | (_NPC_VENDOR if stored & _NPC_ITEMRESTORE else 0)
+    return (wire & ~_NPC_HIDDEN) == (seen & ~_NPC_HIDDEN) and not (wire & _NPC_HIDDEN & ~seen)
+
+
 def _shown(values: list) -> str:
     return ", ".join(f"{v:g}" if isinstance(v, float) else str(v) for v in values)
 
@@ -281,15 +294,21 @@ class Stats(BaseAuthorRule):
             else:
                 values[column], provenance[column] = observed, DERIVED
 
+        npc_note = None
         if self._fields:
             # A CREATE omits every zero field, so an absent one is a 0 read, not a gap.
             npc_flags = self._fields.get("UNIT_NPC_FLAGS", 0)
             stored = self._stored_int(ctx, "npc_flags")
-            if stored is None or stored == npc_flags:
-                values["npc_flags"] = npc_flags
-                provenance["npc_flags"] = WIRE if stored is None else CONFIRMED
-                if stored is not None:
-                    confirmed.append("npc_flags")
+            if stored is None:
+                values["npc_flags"], provenance["npc_flags"] = npc_flags, WIRE
+                npc_note = ("npc_flags as the recording player was shown them: the server "
+                            "hides TRAINER from other classes, STABLEMASTER from non-hunters "
+                            "and FLIGHTMASTER while it has a quest for the viewer, and shows "
+                            "ITEMRESTORE as VENDOR (Object.cpp:565-612) -- those bits may be "
+                            "the template's otherwise")
+            elif _npc_flags_agree(stored, npc_flags):
+                values["npc_flags"], provenance["npc_flags"] = stored, CONFIRMED
+                confirmed.append("npc_flags")
 
         for key, column in _QUERIED.items():
             if self._query is None or self._query.get(key) is None:
@@ -335,7 +354,7 @@ class Stats(BaseAuthorRule):
             if own:
                 confirmed.append("spell_list_id")
 
-        notes = []
+        notes = [npc_note] if npc_note else []
         if confirmed:
             notes.append("restated as the database's own value, a no-op -- already agreed "
                          "with the wire within drift tolerance: " + ", ".join(sorted(confirmed)))
@@ -370,7 +389,7 @@ class Stats(BaseAuthorRule):
         if self._fields:
             stored = self._stored_int(ctx, "npc_flags")
             wire = self._fields.get("UNIT_NPC_FLAGS", 0)
-            if stored is not None and stored != wire:
+            if stored is not None and not _npc_flags_agree(stored, wire):
                 yield (f"creature_template.npc_flags -- the database has {stored}, the wire "
                        f"{wire}; a script can set or clear these at runtime (Chicken's quest "
                        "flag is one), so the capture cannot say which is the template's")
