@@ -41,7 +41,9 @@ from __future__ import annotations
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
-from ..core.contracts import CONVENTION, DERIVED, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event
+from ..core.contracts import (
+    CONVENTION, DERIVED, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event, is_creature,
+)
 from ..core.registry import author_rule
 
 MAX_SLOTS = 8            # creature_spells has spellId_1 .. spellId_8
@@ -57,7 +59,7 @@ class Spells(BaseAuthorRule):
         self._name: str | None = None
 
     def handle(self, ev: Event, mod: Any = None) -> None:
-        if ev.kind == "spell_go":
+        if ev.kind == "spell_go" and is_creature(ev.data.get("guid")):
             spell = ev.data["spell_id"]
             self._casts[spell] = self._casts.get(spell, 0) + 1
         elif ev.kind == "spell_initial_delay":

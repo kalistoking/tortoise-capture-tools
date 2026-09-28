@@ -29,7 +29,9 @@ from __future__ import annotations
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
-from ..core.contracts import CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event
+from ..core.contracts import (
+    CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, is_creature,
+)
 from ..core.registry import author_rule
 
 EVENT_T_AGGRO = 4          # CreatureEventAI.h
@@ -67,6 +69,10 @@ class Dialogue(BaseAuthorRule):
 
     def handle(self, ev: Event, mod: Any = None) -> None:
         if ev.kind in ("monster_say", "monster_yell"):
+            # A sender guid of another type -- a gameobject speaking under the
+            # same number -- is not this creature; an emote carries none at all.
+            if "guid" in ev.data and not is_creature(ev.data["guid"]):
+                return
             self._said.setdefault(ev.data["message"], {
                 "chat_type": ev.data.get("chat_type"),
                 "language": ev.data.get("language"),

@@ -176,7 +176,7 @@ class Stats(BaseAuthorRule):
                     first[column] = speeds[index]
                 elif speeds[index] != first[column]:
                     self._disagreed.setdefault(column, set()).add((first[column], speeds[index]))
-        elif ev.kind == "spell_go":
+        elif ev.kind == "spell_go" and is_creature(ev.data.get("guid")):
             self._saw_spells = True
         elif ev.kind == "creature_query" and self._query is None:
             self._query = dict(ev.data)

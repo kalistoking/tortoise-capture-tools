@@ -705,6 +705,25 @@ def test_a_creature_a_spell_summoned_is_reported_not_spawned():
     assert not any("no CREATE block" in gap for gap in gaps)
 
 
+_PET = make_guid(ENTRY, 3, high=0xF140)
+
+
+def test_what_a_pet_or_gameobject_with_the_entry_casts_or_says_is_not_the_creatures():
+    """1002016 filtered CREATEs and moves by guid type, but not casts or speech:
+    a hunter's pet carrying the entry gave the template a spell list, and its
+    casts became the creature's creature_spells."""
+    cast = make_event("spell_go", 30.0, guid=_PET, entry=ENTRY, spell_id=1449)
+    said = make_event("monster_say", 31.0, guid=_GAMEOBJECT, entry=ENTRY,
+                      message="Not mine", chat_type="monster_say", language=0)
+    rows, _ = author_rows(Stats(), _identity_events() + [cast], ENTRY)
+    assert "spell_list_id" not in rows[0].values
+    rows, _ = author_rows(Spells(), [cast], ENTRY)
+    assert rows == []
+    trigger = make_event("text_trigger", 999.0, entry=ENTRY, subject="Not mine", trigger="aggro")
+    rows, _ = author_rows(Dialogue(), [said, trigger], ENTRY)
+    assert not any(r.table == "broadcast_text" for r in rows)
+
+
 def test_a_single_respawn_sample_does_not_bound_spawntimesecs():
     """One sample cannot split a min from a max -- the same refusal
     creature_spells already applies to delayRepeatMin/Max from one interval
