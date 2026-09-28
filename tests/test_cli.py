@@ -102,6 +102,43 @@ def test_checking_a_slim_copy_reports_nothing_the_run_would_count_as_an_error():
     assert seen.count == 0 and len(files) == 2
 
 
+def test_slim_itself_reports_what_the_original_decodes_with():
+    """`tct slim` decodes the original only to check its copy, so muting that
+    decode hid a damaged capture: it exited 0, and --replace went ahead."""
+    copy = SimpleNamespace(c2s=SimpleNamespace(segments=()))
+
+    def decoded(session, *_):
+        if session is _SESSION:
+            cli.pipeline._logger.error("framing desync")
+        return ["the same"]
+
+    seen = _Errors()
+    root = logging.getLogger(cli._log.ROOT)
+    with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+        capture = Path(tmp) / "capture.pcap"
+        capture.write_bytes(_session())
+        for (owner, name), value in {(cli.pcap, "read_session"): lambda *_: copy,
+                                     (cli.crypt, "recover_session_key"): lambda _: b"key",
+                                     (cli, "_decoded"): decoded}.items():
+            stack.enter_context(_replaced(owner, name, value))
+        plan = slim.plan(capture, slim.Endpoint(None, slim.LOGON_PORT), None)
+        root.addHandler(seen)
+        try:
+            cli._write_verified(plan, Path(tmp) / "capture.wow.pcap", _SESSION, b"key", None, None)
+        finally:
+            root.removeHandler(seen)
+    assert seen.count == 1
+
+
+def test_muting_ends_even_when_the_muted_work_fails():
+    try:
+        with cli._log.muted():
+            raise RuntimeError("the copy could not be read")
+    except RuntimeError:
+        pass
+    assert not logging.getLogger(cli._log.ROOT).manager.disable
+
+
 def _world_of(content, named=frozenset(), port=8090, server_ip="127.0.0.1"):
     cfg = SimpleNamespace(logon_ip=None, logon_port=slim.LOGON_PORT, named=named,
                           server_ip=server_ip, port=port)

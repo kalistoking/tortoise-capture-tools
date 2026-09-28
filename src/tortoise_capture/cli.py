@@ -14,6 +14,7 @@ section 7.1 in practice.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -198,22 +199,25 @@ def _decoded(session, key, registry, ctx) -> list[tuple]:
 
 
 def _write_verified(plan: slim.SlimPlan, out: Path, session, key, registry, ctx,
-                    failed=_logger.error) -> bool:
+                    failed=_logger.error, reported: bool = False) -> bool:
     """Writes the slim copy, and keeps it only if it decodes exactly as the
     original does: the same session key, the same packet records, times included.
     `failed` reports a copy that does not; an error unless the copy was a
-    by-product of some other command."""
+    by-product of some other command. `reported`: that command already decoded
+    the original, and said whatever it had to say about it."""
     partial = out.with_name(out.name + ".partial")
     slim.write(plan, partial)
     try:
-        copy = pcap.read_session(partial, *plan.world_server)
-        # Muted: this decodes the original a second time only to compare, and
-        # recovers keys that --session-key may have made unrecoverable -- the
-        # run reported all of it once already, and `failed` says what differs.
+        # The original's decode speaks unless it already has; the rest is muted:
+        # the copy repeats the original, and the keys are recovered only to
+        # compare -- --session-key may have made them unrecoverable. `failed`
+        # says what differs.
+        with contextlib.nullcontext() if not reported else _log.muted():
+            original = _decoded(session, key, registry, ctx)
         with _log.muted():
+            copy = pcap.read_session(partial, *plan.world_server)
             same_key = (crypt.recover_session_key(copy.c2s.segments)
                         == crypt.recover_session_key(session.c2s.segments))
-            original = _decoded(session, key, registry, ctx)
             slimmed = _decoded(copy, key, registry, ctx)
         if not same_key or original != slimmed:
             failed("the slim copy of %s does not decode as the original does "
@@ -247,7 +251,8 @@ def _slim_beside(capture: Path, session, key, cfg: RunConfig, registry, ctx, arg
     for line in slim.describe(plan):
         _logger.info("%s", line)
     try:
-        _write_verified(plan, out, session, key, registry, ctx, failed=_logger.warning)
+        _write_verified(plan, out, session, key, registry, ctx, failed=_logger.warning,
+                        reported=True)
     except OSError as exc:
         _logger.warning("slim copy not written beside %s: %s", capture, exc)
 
