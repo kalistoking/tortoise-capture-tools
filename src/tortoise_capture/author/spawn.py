@@ -133,7 +133,9 @@ class Spawn(BaseAuthorRule):
         elif ev.kind == "patrol_route":
             if (spawn := self._of(ev)) is not None:
                 spawn.route = dict(ev.data)
-        elif ev.kind == "move_linear":
+        elif ev.kind in ("move_linear", "move_spline"):
+            # A spline counts too: a flying random mover circles its spawn in
+            # one (RandomMovementGenerator.cpp:33-47), and is no stander.
             if (spawn := self._of(ev)) is not None:
                 spawn.hops += 1
         elif ev.kind == "wander_area":

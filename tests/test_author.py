@@ -788,6 +788,19 @@ def test_a_route_that_turns_back_is_left_to_a_human_with_the_reason():
     assert any("creature_movement" in gap and "turns back" in gap for gap in gaps)
 
 
+def test_a_flying_mover_is_not_called_stationary():
+    """A flying random mover circles its spawn in one Catmull-Rom spline
+    (RandomMovementGenerator.cpp:33-47), which decodes as move_spline, never
+    move_linear: counted by linear hops alone, it stood still and was given
+    the stationary wander_distance 0."""
+    events = [_create(10.0, 100.0, 200.0),
+              make_event("move_spline", 20.0, guid=GUID, entry=ENTRY, cyclic=False, n_points=11)]
+    rows, gaps = author_rows(Spawn(), events, ENTRY, world=StubWorld(schema=_MOVEMENT_SCHEMA))
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values.get("wander_distance") != 0
+    assert any(gap.startswith("creature.movement_type") and "placeholder" in gap for gap in gaps)
+
+
 def test_a_creature_that_moved_without_a_route_is_not_called_stationary():
     events = [_create(12.9, 100.0, 200.0)] + [
         make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(100.0 + t, 200.0, 70.0))
