@@ -119,6 +119,23 @@ def test_a_route_that_turns_back_is_refused_not_cut_short():
     assert route.data["confident"] is False and route.data["refused_because"] == "branching"
 
 
+def test_a_long_route_that_turns_back_is_not_a_wanderer():
+    """A-B-C-D-E-D-C-B leaves its inner points for either neighbour alike, so
+    its order is low -- 0.64 -- and it was taken for a wanderer, with a
+    "wander area" half the route wide. A wanderer's points lead to many
+    others: 4 to 15 in the Elwynn capture, where this leads to 2 at most."""
+    line = SQUARE + [(0.0, 20.0, 10.0)]
+    events, t = [], 1.0
+    for _ in range(8):
+        for corner in (0, 1, 2, 3, 4, 3, 2, 1):
+            x, y, z = line[corner]
+            events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(x, y, z)))
+            t += 1.0
+    found = findings_by_kind(run_analyzer(Patrol(), events))
+    assert found["patrol_route"].data["refused_because"] == "branching"
+    assert "wander_area" not in found
+
+
 def test_one_stray_step_to_the_start_does_not_close_a_route_that_turns_back():
     """A-B-C-D-C-B, first seen at A, with one D-A step (a respawn that set off
     for A): that single edge made the turned-back walk A-B-C-D count as a loop

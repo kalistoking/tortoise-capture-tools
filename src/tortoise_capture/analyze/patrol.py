@@ -232,6 +232,19 @@ class _Route:
             return None
         return sum(max(c.values()) for c in revisited) / total
 
+    def walks_a_line(self) -> bool:
+        """Whether every point left twice leads to at most two others, and one
+        turns: a route walked back and forth, whose inner points go either way
+        alike and so score as unordered. A wanderer's points lead to many --
+        4 to 15 in the Elwynn capture's 30."""
+        successors: dict[int, Counter] = defaultdict(Counter)
+        for a, b in zip(self.labels, self.labels[1:]):
+            if a != b:
+                successors[a][b] += 1
+        left_twice = [c for c in successors.values() if sum(c.values()) >= 2]
+        return (bool(left_twice) and all(len(c) <= 2 for c in left_twice)
+                and any(len(c) == 2 and min(c.values()) >= 2 for c in left_twice))
+
     def drops_points(self, order: list[int]) -> bool:
         """Whether the walk left out a point the creature kept coming back to,
         or turned back to a point other than its start.
@@ -377,7 +390,7 @@ class Patrol(BaseAnalyzer):
             elif ordered is None:
                 refused = "unrevisited"     # e.g. a long route seen for under a lap
             elif ordered < MIN_TRANSITION_ORDER:
-                refused = "unordered"
+                refused = "branching" if route.walks_a_line() else "unordered"
             elif route.drops_points(order):
                 refused = "branching"
             else:
