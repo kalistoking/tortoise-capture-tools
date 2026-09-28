@@ -85,6 +85,7 @@ class _Spawn:
     hops: int = 0                             # linear moves broadcast, any kind
     corpses: list[tuple[float, tuple[float, ...]]] = field(default_factory=list)  # lying dead
     summoned: bool = False                    # a CREATE named whoever summoned it
+    map: int | None = None                    # the session's map when it was first seen
 
     def sighting(self) -> tuple[tuple[float, ...], bool] | None:
         """The create that followed a death, else the earliest one seen --
@@ -127,6 +128,10 @@ class Spawn(BaseAuthorRule):
         if ev.kind == "object_create":
             position = (ev.data.get("movement") or {}).get("movement_info", {}).get("pos")
             spawn = self._of(ev)
+            if spawn is not None and spawn.map is None and not (spawn.creates or spawn.corpses):
+                # The map it stood on is the session's at the time, not the one
+                # the capture ends on -- a dungeon entered later is not its map.
+                spawn.map = self._map_id
             if spawn is not None and _SUMMONER & {f.get("name") for f in ev.data.get("fields", ())}:
                 spawn.summoned = True
             if spawn is not None and is_corpse(ev):
@@ -259,12 +264,12 @@ class Spawn(BaseAuthorRule):
         notes.append("position_z is ground-snapped by the server at runtime and tracks "
                      "the terrain, not the authored value")
 
-        if self._map_id is not None:
-            values["map"] = self._map_id
+        if spawn.map is not None:
+            values["map"] = spawn.map
             provenance["map"] = WIRE
-            notes.append(f"map {self._map_id} from the observing player's own "
-                         "SMSG_LOGIN_VERIFY_WORLD/SMSG_NEW_WORLD, not from anything "
-                         "the creature itself broadcasts")
+            notes.append(f"map {spawn.map} from the observing player's own "
+                         "SMSG_LOGIN_VERIFY_WORLD/SMSG_NEW_WORLD in force when it was seen, "
+                         "not from anything the creature itself broadcasts")
         # map is never schema-filled when it is still unknown: its
         # default (0) is a real place (Eastern Kingdoms), not neutral
         # boilerplate, and guessing it would be worse than a named gap.
@@ -335,6 +340,9 @@ class Spawn(BaseAuthorRule):
         if self._map_id is None:
             yield ("creature.map -- no SMSG_LOGIN_VERIFY_WORLD or SMSG_NEW_WORLD in this "
                    "capture; a capture that starts after login never carries one")
+        elif any(s.map is None for _, s in seen):
+            yield ("creature.map -- seen before the capture's first SMSG_LOGIN_VERIFY_WORLD "
+                   "or SMSG_NEW_WORLD, so the map it stood on is not known")
         if not any(s.deaths for _, s in seen):
             yield ("creature.spawntimesecsmin/max -- the creature never died in this capture, "
                    "so the respawn timer could not be measured")

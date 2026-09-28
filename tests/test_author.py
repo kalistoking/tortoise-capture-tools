@@ -1017,7 +1017,7 @@ def test_the_map_id_is_reported_as_missing_when_no_transfer_was_seen():
 
 
 def test_the_map_id_comes_from_a_world_transfer_event_when_one_was_seen():
-    events = _spawn_events() + [make_event("world_transfer", 1.0, map_id=0, source="login")]
+    events = [make_event("world_transfer", 1.0, map_id=0, source="login")] + _spawn_events()
     rows, gaps = author_rows(Spawn(), events, ENTRY)
     creature = next(r for r in rows if r.table == "creature")
     assert creature.values["map"] == 0
@@ -1028,13 +1028,30 @@ def test_the_map_id_comes_from_a_world_transfer_event_when_one_was_seen():
 def test_the_last_world_transfer_wins_over_an_earlier_one():
     """A capture with a teleport mid-session should trust the map the
     creature was actually observed on, not wherever the player started."""
-    events = _spawn_events() + [
+    events = [
         make_event("world_transfer", 1.0, map_id=0, source="login"),
         make_event("world_transfer", 5.0, map_id=1, source="teleport"),
-    ]
+    ] + _spawn_events()
     rows, _ = author_rows(Spawn(), events, ENTRY)
     creature = next(r for r in rows if r.table == "creature")
     assert creature.values["map"] == 1
+
+
+def test_the_map_is_the_one_the_creature_was_seen_on_not_the_last_one_entered():
+    """A creature seen outside, before the player went into a dungeon, got the
+    dungeon's map -- the last world transfer of the capture -- labelled wire."""
+    events = [make_event("world_transfer", 1.0, map_id=0, source="login")] + _spawn_events() + [
+        make_event("world_transfer", 900.0, map_id=36, source="new_world")]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["map"] == 0
+
+
+def test_a_creature_seen_before_any_transfer_has_no_map_to_claim():
+    events = _spawn_events() + [make_event("world_transfer", 900.0, map_id=36, source="new_world")]
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert "map" not in creature.values and any("creature.map" in gap for gap in gaps)
 
 
 def test_map_is_never_schema_filled_even_when_a_default_is_offered():
