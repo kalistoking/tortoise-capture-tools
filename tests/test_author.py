@@ -1753,6 +1753,29 @@ def _fake_world(responses: dict[str, list[list[str]]]):
     return FakeWorld(client="unused"), calls
 
 
+def test_the_database_is_read_as_the_wire_is_not_in_the_local_code_page():
+    """Some names hold a raw 0x92 (Gillijim's Parrot, 48632). The client's output
+    was decoded in the Windows code page and came back as "?", while the wire's
+    copy of the same bytes reads as U+FFFD -- a name that differs from itself."""
+    import subprocess
+    from tortoise_capture import world as world_mod
+
+    ran = []
+
+    def run(command, **kwargs):
+        ran.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, b"Gillijim\x92s Parrot\n", b"")
+
+    original = world_mod.subprocess.run
+    world_mod.subprocess.run = run
+    try:
+        name = world_mod.World(client="unused").column("creature_template", "name", "entry = 48632")
+    finally:
+        world_mod.subprocess.run = original
+    assert name == b"Gillijim\x92s Parrot".decode("utf-8", "replace")
+    assert "--default-character-set=utf8mb4" in ran[0][0]
+
+
 def test_an_empty_string_in_the_database_is_a_value_not_an_absence():
     """`-N -B` prints a lone empty column as an empty line. Dropping it read
     subname '' as "no row", so a query's '' was never confirmed and a
@@ -1761,7 +1784,7 @@ def test_an_empty_string_in_the_database_is_a_value_not_an_absence():
     from tortoise_capture import world as world_mod
 
     original = world_mod.subprocess.run
-    world_mod.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, "\n", "")
+    world_mod.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, b"\n", b"")
     try:
         stored = world_mod.World(client="unused").column("creature_template", "subname", "entry = 1")
     finally:

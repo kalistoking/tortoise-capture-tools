@@ -74,17 +74,21 @@ class World:
         password = os.environ.get(ENV_PASSWORD)
         if password:
             env["MYSQL_PWD"] = password
+        # Read as the wire is: UTF-8, a byte that is none replaced. Left to the
+        # client and the local code page, a stored 0x92 came back "?" where the
+        # wire's copy of it reads U+FFFD -- a name unequal to itself.
         command = [self.client, f"-h{self.host}", f"-P{self.port}", f"-u{self.user}",
-                   self.database, "-N", "-B", "-e", sql]
+                   self.database, "--default-character-set=utf8mb4", "-N", "-B", "-e", sql]
         try:
-            done = subprocess.run(command, capture_output=True, text=True,
-                                  env=env, timeout=QUERY_TIMEOUT)
+            done = subprocess.run(command, capture_output=True, env=env, timeout=QUERY_TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise WorldError(f"could not run {self.client}: {exc}") from exc
         if done.returncode != 0:
-            raise WorldError(done.stderr.strip() or f"{self.client} exited {done.returncode}")
+            raise WorldError(done.stderr.decode("utf-8", "replace").strip()
+                             or f"{self.client} exited {done.returncode}")
         # An empty line is a row too: one empty column, as subname '' prints.
-        return [line.split("\t") for line in done.stdout.splitlines()]
+        return [line.split("\t")
+                for line in done.stdout.decode("utf-8", "replace").splitlines()]
 
     def scalar(self, sql: str) -> str | None:
         rows = self.query(sql)
