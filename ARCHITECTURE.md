@@ -830,6 +830,14 @@ table is empty. `dbc.py` reads that one file from the server's dbc directory
 (`[server] dbc`), checking its layout against DBCfmt.h rather than assuming
 it, so a stored 0 the model explains is restated instead of pinned over.
 
+A scale can also be overridden per spawn: the server takes the `object_scaling`
+row for the full guid over the template's (Creature.cpp:372,
+GuidObjectScaling.h). tct does not read that table, so a creature carrying an
+override would broadcast it as if it were the template's scale. It has not
+come up: all 4,297 rows in the live database are gameobjects (0xF110), none
+creatures. If creature rows appear there, the scale comparison must read them
+first.
+
 Without a database the command still runs; the lookups become gaps.
 
 ### 17.5 Not every fact is about a creature
