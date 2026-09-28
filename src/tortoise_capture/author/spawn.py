@@ -289,7 +289,9 @@ class Spawn(BaseAuthorRule):
                 rows.append((waypoint, True))
         if points and points[0].get("repeats"):
             rows.append((points[0], True))
+        first_row: dict[int, int] = {}              # waypoint point -> the row it is written on
         for number, (waypoint, again) in enumerate(rows, start=1):
+            first_row.setdefault(waypoint["point"], number)
             mv_values = {"id": db_guid, "point": number,
                          "position_x": self.wire_float(waypoint["position_x"]),
                          "position_y": self.wire_float(waypoint["position_y"]),
@@ -298,12 +300,13 @@ class Spawn(BaseAuthorRule):
                              "position_y": DERIVED, "position_z": DERIVED}
             mv_notes = []
             if again:
-                mv_notes.append(f"point {waypoint['point']} again: the capture shows the "
+                mv_notes.append(f"row {first_row[waypoint['point']]} again: the capture shows the "
                                 "server moving the creature to where it already stood there "
                                 f"on {waypoint['repeats']} of {waypoint['arrivals']} arrivals, "
                                 "which only a path holding the point twice in a row does "
                                 "(WaypointMovementGenerator.cpp:192-211)")
-            elif (number == len(rows) and (spawn.route or {}).get("closes_loop")):
+            elif (number == len(rows) and (spawn.route or {}).get("closes_loop")
+                    and not points[0].get("still_hops")):
                 mv_notes.append("the path ends here: the capture shows no hop repeating "
                                 "point 1, and after its last point the server walks on to "
                                 "point 1 anyway (WaypointMovementGenerator.cpp:198-207) -- "
@@ -377,6 +380,13 @@ class Spawn(BaseAuthorRule):
             # Named per spawn only when there is more than one to tell apart.
             table = ("creature_movement" if len(seen) == 1
                      else f"creature_movement (spawn {guid & GUID_COUNTER_MASK})")
+            if spawn.patrols():
+                for w in spawn.waypoints:
+                    if w.get("still_hops") and not w.get("repeats"):
+                        yield (f"{table} -- point {w['point']} was left standing still, back "
+                               f"to itself, on {w['still_hops']} of {w.get('arrivals')} "
+                               "arrivals: too few to call it held twice in a row, too many "
+                               "to call it none -- check whether the path holds it twice")
             if spawn.patrols() or spawn.wander:
                 continue
             if spawn.moved():

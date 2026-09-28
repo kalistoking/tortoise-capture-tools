@@ -247,21 +247,22 @@ class _Route:
             return None
         return sum(max(c.values()) for c in revisited) / total
 
-    def repeated(self) -> dict[int, tuple[int, int]]:
-        """point -> (same-point hops, arrivals) for each point the path holds
-        twice in a row."""
-        # Only a move from where the creature already stands: a leg paused by a
-        # player's gossip (MotionMaster.cpp:914-935) is sent again to the same
-        # point on resuming (WaypointMovementGenerator.cpp:213-218), but from
-        # wherever the pause caught it.
+    def still_hops(self) -> dict[int, tuple[int, int]]:
+        """point -> (hops that set off from it back to it, arrivals there).
+
+        Only a move from where the creature already stands: a leg paused by a
+        player's gossip (MotionMaster.cpp:914-935) is sent again to the same
+        point on resuming (WaypointMovementGenerator.cpp:213-218), but from
+        wherever the pause caught it."""
         doubles = Counter(a for a, b, still in zip(self.labels, self.labels[1:],
                                                     self.hop_stills[1:]) if a == b and still)
-        found = {}
-        for point, hops in doubles.items():
-            arrivals = len(self.clusters[point]) - hops
-            if hops >= MIN_REPEATS and hops >= MIN_REPEAT_SHARE * arrivals:
-                found[point] = (hops, arrivals)
-        return found
+        return {point: (hops, len(self.clusters[point]) - hops)
+                for point, hops in doubles.items()}
+
+    def repeated(self) -> dict[int, tuple[int, int]]:
+        """The points the path holds twice in a row: still hops enough to call."""
+        return {point: (hops, arrivals) for point, (hops, arrivals) in self.still_hops().items()
+                if hops >= MIN_REPEATS and hops >= MIN_REPEAT_SHARE * arrivals}
 
     def walks_a_line(self) -> bool:
         """Whether every point left twice leads to at most two others, and one
@@ -454,15 +455,16 @@ class Patrol(BaseAnalyzer):
                 yield self.event(route.last_packet, "wander_area", guid=guid, entry=route.entry,
                                  position_x=cx, position_y=cy, position_z=cz,
                                  radius=radius, hops=len(route.labels))
-            repeated = route.repeated()
+            repeated, still = route.repeated(), route.still_hops()
             for point, index in enumerate(order, start=1):
                 x, y, z = route.centre(index)
-                hops, arrivals = repeated.get(index, (0, 0))
+                hops, arrivals = still.get(index, (0, len(route.clusters[index])))
                 yield self.event(route.last_packet, "patrol_waypoint", guid=guid,
                                  entry=route.entry, point=point,
                                  position_x=x, position_y=y, position_z=z,
                                  observations=len(route.clusters[index]),
-                                 repeats=hops, arrivals=arrivals)
+                                 repeats=hops if index in repeated else 0,
+                                 still_hops=hops, arrivals=arrivals)
 
     # -- sql ---------------------------------------------------------------
 

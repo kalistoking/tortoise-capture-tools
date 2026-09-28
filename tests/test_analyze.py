@@ -99,6 +99,14 @@ def test_a_point_held_twice_mid_path_shows_where_it_is():
     assert held == [3]
 
 
+def test_every_waypoint_says_how_often_it_was_left_standing_still():
+    """Below the bar a point is not called held twice, but the count still
+    goes out: the spawn rule tells "none" from "too few to call"."""
+    found = _square_holding(2, laps=10)
+    counts = {ev.data["point"]: ev.data["still_hops"] for ev in found if ev.kind == "patrol_waypoint"}
+    assert counts[3] == 10 and counts[1] == 0
+
+
 def test_a_path_that_stops_shows_no_repeat():
     route = findings_by_kind(run_analyzer(Patrol(), _hops(laps=10)))["patrol_route"]
     assert route.data["repeats_start"] is False

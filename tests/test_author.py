@@ -840,6 +840,37 @@ def test_a_route_the_wire_shows_repeating_its_first_point_repeats_it():
     assert movement[-1].provenance["point"] == DERIVED
 
 
+def test_a_copy_names_the_row_it_repeats():
+    """Two held points shift the numbering: the note said "point 2 again" on a
+    row that repeats row 3."""
+    events = [ev for ev in _route_closing() if ev.kind not in ("patrol_waypoint", "patrol_route")]
+    for point in (1, 2, 3):
+        events.append(make_event("patrol_waypoint", 999.0, guid=GUID, entry=ENTRY, point=point,
+                                 position_x=float(point), position_y=0.0, position_z=0.0,
+                                 repeats=12 if point > 1 else 0, arrivals=13))
+    events.append(make_event("patrol_route", 999.0, guid=GUID, entry=ENTRY, count=3,
+                             closes_loop=True))
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    movement = [r for r in rows if r.table == "creature_movement"]
+    assert [r.values["position_x"] for r in movement] == [1.0, 2.0, 2.0, 3.0, 3.0]
+    assert any("row 4 again" in note for note in movement[4].notes)
+
+
+def test_too_few_hops_to_call_a_point_held_twice_are_a_gap_not_a_none():
+    """Two same-point hops at point 1 in ten laps are under the bar, and the
+    path was said to show "no hop repeating point 1"."""
+    events = []
+    for ev in _route_closing():
+        if ev.kind == "patrol_waypoint" and ev.data["point"] == 1:
+            ev = make_event("patrol_waypoint", 999.0, **{**ev.data, "still_hops": 2,
+                                                          "arrivals": 10})
+        events.append(ev)
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
+    movement = [r for r in rows if r.table == "creature_movement"]
+    assert not any("no hop" in note for note in movement[-1].notes)
+    assert any("creature_movement" in gap and "2 of 10" in gap for gap in gaps)
+
+
 def test_a_point_held_twice_mid_path_is_written_twice_there():
     """81349 holds its point 6 twice, pausing 40 s on the first -- one of 342
     paths in the live database with such a pair away from its ends."""
@@ -847,7 +878,7 @@ def test_a_point_held_twice_mid_path_is_written_twice_there():
     movement = [r for r in rows if r.table == "creature_movement"]
     assert [r.values["point"] for r in movement] == [1, 2, 3]
     assert movement[1].values["position_x"] == movement[2].values["position_x"]
-    assert any("point 2 again" in note for note in movement[2].notes)
+    assert any("row 2 again" in note for note in movement[2].notes)
 
 
 def test_a_route_that_shows_no_repeat_ends_at_its_last_point():
