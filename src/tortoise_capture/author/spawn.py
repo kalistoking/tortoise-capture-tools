@@ -83,12 +83,25 @@ class _Spawn:
     wander: dict[str, Any] | None = None      # its wander_area finding
     respawn: dict[str, Any] | None = None     # its respawn_timer finding
     hops: int = 0                             # linear moves broadcast, any kind
-    corpses: int = 0                          # CREATEs of it lying dead
+    corpses: list[tuple[float, tuple[float, ...]]] = field(default_factory=list)  # lying dead
     summoned: bool = False                    # a CREATE named whoever summoned it
 
     def sighting(self) -> tuple[tuple[float, ...], bool] | None:
-        """The create that followed a death, else the earliest one seen."""
+        """The create that followed a death, else the earliest one seen --
+        or, for a spawn only ever seen lying dead, where it lay."""
+        if not self.creates and self.lies_dead():
+            return min(self.corpses)[1], False
         return spawn_sighting(self.creates, self.deaths)
+
+    def lies_dead(self) -> bool:
+        """Seen only dead, and never seen dying: a spawn that stands dead by
+        default (SPAWN_FLAG_DEAD, Creature.cpp:1749) at its spawn point, or one
+        killed before the capture began, where it died."""
+        return bool(self.corpses) and not self.creates and not self.deaths
+
+    def died_out_of_sight(self) -> bool:
+        """Seen dying and then only as the corpse, which lies where it died."""
+        return bool(self.corpses) and not self.creates and bool(self.deaths)
 
     def patrols(self) -> bool:
         return bool(self.waypoints) and bool((self.route or {}).get("confident", True))
@@ -117,7 +130,8 @@ class Spawn(BaseAuthorRule):
             if spawn is not None and _SUMMONER & {f.get("name") for f in ev.data.get("fields", ())}:
                 spawn.summoned = True
             if spawn is not None and is_corpse(ev):
-                spawn.corpses += 1
+                if position and ev.packet.t is not None:
+                    spawn.corpses.append((ev.packet.t, tuple(position)))
             elif position and ev.packet.t is not None and spawn is not None:
                 spawn.creates.append((ev.packet.t, tuple(position)))
         elif ev.kind == "party_kill":
@@ -150,7 +164,7 @@ class Spawn(BaseAuthorRule):
     def _seen(self) -> list[tuple[int, _Spawn]]:
         """Spawns the capture saw a position for, in guid order."""
         return [(guid, s) for guid, s in sorted(self._spawns.items())
-                if s.creates and not s.summoned]
+                if (s.creates or s.lies_dead()) and not s.summoned]
 
     # -- emit --------------------------------------------------------------
 
@@ -231,6 +245,10 @@ class Spawn(BaseAuthorRule):
             notes.append("position is the centre of the area it wandered, NOT a respawn -- "
                          "the capture holds no death for it; orientation is whichever way "
                          "it faced when first seen")
+        elif spawn.lies_dead():
+            notes.append("position is where it lay dead, the only way it was seen: its spawn "
+                         "point if it stands dead by default, where it died if it was killed "
+                         "before the capture began -- see gaps")
         elif not after_death:
             notes.append("position is the first sighting, NOT a respawn -- the capture "
                          "holds no death for this creature, so this may be mid-route")
@@ -285,14 +303,22 @@ class Spawn(BaseAuthorRule):
             yield (f"creature -- {len(summoned)} summon(s), not proposed: a CREATE named "
                    "who summoned them, so they despawn rather than respawn (guid "
                    f"{', '.join(str(g & GUID_COUNTER_MASK) for g in summoned)})")
-        only_dead = [guid for guid, s in sorted(self._spawns.items()) if s.corpses and not s.creates]
+        for guid, spawn in sorted(self._spawns.items()):
+            if spawn.lies_dead() and not spawn.summoned:
+                yield (f"creature (spawn {guid & GUID_COUNTER_MASK}).spawn_flags -- only ever "
+                       "seen lying dead, never dying: if it stands dead by default, spawn_flags "
+                       "needs SPAWN_FLAG_DEAD (0x80) and the position is its spawn point; if it "
+                       "was killed before the capture began, the position is where it died "
+                       "-- decide by hand")
+        only_dead = [guid for guid, s in sorted(self._spawns.items()) if s.died_out_of_sight()]
         if only_dead:
             yield (f"creature -- {len(only_dead)} spawn(s) seen only as a corpse, which lies "
                    "where it died: no spawn point to author (guid "
                    f"{', '.join(str(g & GUID_COUNTER_MASK) for g in only_dead)})")
         seen = self._seen()
         if not seen:
-            if not only_dead:
+            # A summon or a corpse is a CREATE too, and says so above.
+            if not any(s.creates or s.corpses or s.summoned for s in self._spawns.values()):
                 yield "creature -- no CREATE block for this entry, so no spawn position was seen"
             return
         if self._map_id is None:

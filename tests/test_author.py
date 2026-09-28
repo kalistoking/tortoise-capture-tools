@@ -648,14 +648,32 @@ def test_a_corpse_is_not_where_the_spawn_stands():
     assert abs(creature.values["position_x"] - (-9129.66)) < 0.01
 
 
-def test_a_spawn_seen_only_as_a_corpse_is_reported_not_placed():
-    corpse = make_event("object_create", 120.0, guid=GUID, entry=ENTRY,
-                        movement={"movement_info": {"pos": (-9170.0, -1030.0, 70.0, 0.0)}},
-                        fields=[{"index": 0, "name": "UNIT_FIELD_MAXHEALTH", "raw": 342}])
-    rows, gaps = author_rows(Spawn(), [corpse], ENTRY)
+def _lying_dead(t=120.0):
+    return make_event("object_create", t, guid=GUID, entry=ENTRY,
+                      movement={"movement_info": {"pos": (-9170.0, -1030.0, 70.0, 0.0)}},
+                      fields=[{"index": 0, "name": "UNIT_FIELD_MAXHEALTH", "raw": 342}])
+
+
+def test_a_spawn_seen_dying_and_then_only_as_a_corpse_is_reported_not_placed():
+    """Its corpse lies where it died -- not a spawn point."""
+    events = [make_event("party_kill", 100.0, guid=GUID, entry=ENTRY), _lying_dead()]
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
     assert not any(r.table == "creature" for r in rows)
-    assert any("corpse" in gap for gap in gaps)
+    assert any("corpse" in gap and "where it died" in gap for gap in gaps)
     assert not any("no CREATE block" in gap for gap in gaps)
+
+
+def test_a_spawn_only_ever_seen_dead_is_placed_where_it_lies_and_questioned():
+    """A spawn that stands dead by default -- SPAWN_FLAG_DEAD, 61 in the live
+    database, Ralthas's 81163 among them -- lies at its spawn point
+    (Creature.cpp:1749); one killed before the capture began lies where it
+    died. The capture cannot tell them apart; dropping the first as "where it
+    died" was wrong."""
+    rows, gaps = author_rows(Spawn(), [_lying_dead()], ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert abs(creature.values["position_x"] - (-9170.0)) < 0.01
+    assert any("dead" in note for note in creature.notes)
+    assert any("0x80" in gap for gap in gaps)
 
 
 _GAMEOBJECT = make_guid(ENTRY, 7, high=0xF110)
@@ -683,6 +701,8 @@ def test_a_creature_a_spell_summoned_is_reported_not_spawned():
     rows, gaps = author_rows(Spawn(), _spawn_events() + [summoned], ENTRY)
     assert [r.values["guid"] for r in rows if r.table == "creature"] == [SPAWN_GUID]
     assert any("summon" in gap and str((GUID + 1) & 0xFFFFFF) in gap for gap in gaps)
+    _, gaps = author_rows(Spawn(), [summoned], ENTRY)
+    assert not any("no CREATE block" in gap for gap in gaps)
 
 
 def test_a_single_respawn_sample_does_not_bound_spawntimesecs():
