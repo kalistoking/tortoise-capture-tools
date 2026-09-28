@@ -751,6 +751,16 @@ def test_a_spawns_respawns_give_one_timer_not_a_range():
     assert any("2 observation" in note and "Creature.cpp:1748" in note for note in creature.notes)
 
 
+def test_respawns_two_timers_fit_are_a_gap_that_says_so():
+    events = _spawn_events() + [
+        make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY, value_min=299.30,
+                   value_max=299.45, samples=2, confident=False, seconds=None, fits=[299, 300]),
+    ]
+    _, gaps = author_rows(Spawn(), events, ENTRY)
+    gap = next(g for g in gaps if "spawntimesecsmin/max" in g)
+    assert "299 or 300" in gap and "drawn again" not in gap
+
+
 def test_respawns_no_one_timer_explains_are_a_gap():
     events = _spawn_events() + [
         make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY, value_min=300.1,

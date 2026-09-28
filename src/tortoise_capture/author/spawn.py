@@ -202,7 +202,11 @@ class Spawn(BaseAuthorRule):
                          f"all fit {r['seconds']} and no other -- one draw of this spawn's "
                          "timer, which it draws once when it loads (Creature.cpp:1748), so a "
                          "range the row holds cannot be seen from it; min = max is right for "
-                         "a fixed timer, as 95% of creature rows are")
+                         "a fixed timer, as 95% of creature rows are. Dynamic respawn cuts it "
+                         "by up to a quarter while 4+ players are within 120 yd "
+                         "(Creature.cpp:2427-2500, mangosd.conf.dist:2057-2064), the same "
+                         "cut for the same crowd: many players about, and this may be the "
+                         "cut timer, not the authored one")
         else:
             # None seen, one sample, or samples no one timer explains --
             # left out of `values` entirely; see gaps().
@@ -342,11 +346,18 @@ class Spawn(BaseAuthorRule):
                     yield (f"{table}.spawntimesecsmin/max -- only one sample of the respawn "
                            f"({r['value_min']:.3f}s), which cannot tell a fixed timer from one "
                            "drawn again at each death")
+                elif not r.get("confident") and len(r.get("fits") or ()) > 1:
+                    yield (f"{table}.spawntimesecsmin/max -- {r['samples']} respawns took "
+                           f"{r['value_min']:.3f}-{r['value_max']:.3f}s, which fits a timer "
+                           f"of {' or '.join(map(str, r['fits']))} s alike: the server counts "
+                           "whole seconds from the death, so one more respawn would settle "
+                           "it -- not authored")
                 elif not r.get("confident"):
                     yield (f"{table}.spawntimesecsmin/max -- {r['samples']} respawns took "
                            f"{r['value_min']:.3f}-{r['value_max']:.3f}s, more apart than timing "
                            "in whole seconds explains: its timer is drawn again at each death "
-                           "or cut by dynamic respawn, so it is not authored")
+                           "(spawn_flags' random respawn), cut differently by dynamic respawn "
+                           "as players came and went, or one sighting came late -- not authored")
         for guid, spawn in seen:
             # Named per spawn only when there is more than one to tell apart.
             table = ("creature_movement" if len(seen) == 1

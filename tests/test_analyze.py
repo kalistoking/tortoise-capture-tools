@@ -352,6 +352,24 @@ def test_respawn_is_also_detected_from_a_health_reset_with_no_fresh_create():
     assert respawn["seconds"] == 300
 
 
+def test_respawn_gaps_two_whole_seconds_fit_are_left_open_not_called_redrawn():
+    """299.30 s and 299.45 s fit a timer of 299 and of 300 alike -- a fixed
+    timer, one whole-second count cannot pick between; about 1 in 5 pairs of
+    samples of a fixed 300 s land like this."""
+    events = [
+        make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+        make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
+        make_event("object_values", 399.30, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+        make_event("party_kill", 500.0, guid=GUID, entry=ENTRY),
+        make_event("object_values", 799.45, guid=GUID, entry=ENTRY,
+                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+    ]
+    respawn = findings_by_kind(run_analyzer(Behaviour(), events))["respawn_timer"].data
+    assert respawn["seconds"] is None and respawn["fits"] == [299, 300]
+
+
 def test_respawn_gaps_no_one_whole_second_explains_are_not_a_timer():
     """spawn_flags' random respawn re-draws the delay at each death, +-10%
     (Creature.cpp:1974): gaps a whole second apart and more are not one timer."""

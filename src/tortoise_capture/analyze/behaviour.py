@@ -107,11 +107,11 @@ def _health_of(ev: Event) -> int | None:
     return None
 
 
-def _timer_seconds(gaps: list[float]) -> int | None:
-    """The one whole-second timer every gap fits, or None when none or two do."""
+def _timer_fits(gaps: list[float]) -> list[int]:
+    """Every whole-second timer all the gaps fit: one is the timer, two are a
+    fixed timer the count cannot pick between, none is not one fixed timer."""
     low, high = max(gaps) - RESPAWN_SLACK, min(gaps) + 1
-    fits = range(math.floor(low) + 1, math.ceil(high))
-    return fits[0] if len(fits) == 1 else None
+    return list(range(math.floor(low) + 1, math.ceil(high)))
 
 
 @dataclass
@@ -239,15 +239,17 @@ class Behaviour(BaseAnalyzer):
             if after:
                 gaps.append(min(after) - death)
         if gaps:
-            seconds = _timer_seconds(gaps)
+            fits = _timer_fits(gaps)
+            seconds = fits[0] if len(fits) == 1 else None
             confident = len(gaps) >= MIN_RESPAWNS_FOR_CONFIDENCE and seconds is not None
             caveat = ("" if confident else
                       f" -- too few to tell a fixed timer (want {MIN_RESPAWNS_FOR_CONFIDENCE}+)"
                       if len(gaps) < MIN_RESPAWNS_FOR_CONFIDENCE else
+                      f" -- fits {' or '.join(map(str, fits))} s" if fits else
                       " -- no one whole second fits every gap")
             yield self.event(c.last_packet, "respawn_timer", entry=c.entry, guid=c.guid,
                              value_min=min(gaps), value_max=max(gaps), samples=len(gaps),
-                             seconds=seconds, confident=confident, caveat=caveat)
+                             seconds=seconds, fits=fits, confident=confident, caveat=caveat)
 
     def _text_triggers(self, entry: int, spawns: list[_Creature], last: Packet,
                        sound_for: dict[tuple[int, str], int]) -> Iterator[Event]:
