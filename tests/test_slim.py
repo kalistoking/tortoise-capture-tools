@@ -122,6 +122,19 @@ def test_a_realm_nobody_talked_to_is_not_kept_on_its_word():
         raise AssertionError("kept a conversation the realm list named but nobody had")
 
 
+def test_a_named_address_no_realm_is_at_says_so():
+    """It said "no realm list ... the capture may begin after the logon" --
+    of a capture holding a realm list, only not at that address."""
+    try:
+        _with_capture(_session(), lambda path: slim.plan(
+            path, Endpoint(None, slim.LOGON_PORT), None, "10.0.0.5"))
+    except SlimError as exc:
+        assert "127.0.0.1:8090" in str(exc) and "10.0.0.5" in str(exc)
+        assert "no realm list" not in str(exc)
+    else:
+        raise AssertionError("took a realm at another address than the one named")
+
+
 def test_the_slim_copy_is_the_original_with_records_removed_verbatim():
     def body(path):
         p = slim.plan(path, Endpoint(None, slim.LOGON_PORT), None)

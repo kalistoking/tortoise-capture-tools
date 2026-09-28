@@ -280,8 +280,12 @@ def _listed_world(path: Path, records: list[_Record], realms: list[tuple[str, st
                   logon: Endpoint, address: str | None = None) -> Endpoint:
     """The one listed realm a client in the capture talked to -- at `address`,
     when the address alone was named."""
-    listed = [e for e in (_address(a) for _, a in realms)
-              if e is not None and address in (None, e.ip)]
+    every = [e for e in (_address(a) for _, a in realms) if e is not None]
+    listed = [e for e in every if address in (None, e.ip)]
+    if every and not listed:
+        raise SlimError(f"{path}: the realm list names {', '.join(map(str, every))}, none at "
+                        f"the address named, {address} -- name the world port too, or "
+                        "leave the address out")
     if not listed:
         raise SlimError(f"{path}: no realm list from a logon server at {logon} (the capture "
                         "may begin after the logon) and no world port was named -- name "
