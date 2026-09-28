@@ -790,12 +790,45 @@ def test_without_a_death_the_position_is_emitted_but_flagged():
     assert any("respawn timer" in gap for gap in gaps)
 
 
-def test_a_closed_route_repeats_its_first_point_to_close_the_loop():
-    rows, _ = author_rows(Spawn(), _spawn_events(), ENTRY)
+def _route_closing(repeated_point=None):
+    """The fixture's two-point route, with `repeated_point` shown held twice."""
+    events = []
+    for ev in _spawn_events():
+        if ev.kind == "patrol_waypoint" and ev.data["point"] == repeated_point:
+            ev = make_event("patrol_waypoint", 999.0, **{**ev.data, "repeats": 12, "arrivals": 13})
+        events.append(ev)
+    return events
+
+
+def test_a_route_the_wire_shows_repeating_its_first_point_repeats_it():
+    """A path whose last point repeats its first makes the server move nowhere
+    once a lap, and the capture shows that hop -- 647 of 3,995 paths in the
+    live database close this way, Tortoise's capture-authored ones among them."""
+    rows, _ = author_rows(Spawn(), _route_closing(repeated_point=1), ENTRY)
     movement = [r for r in rows if r.table == "creature_movement"]
     assert [r.values["point"] for r in movement] == [1, 2, 3]
     assert movement[-1].values["position_x"] == movement[0].values["position_x"]
-    assert movement[-1].provenance["point"] == CONVENTION
+    assert movement[-1].provenance["point"] == DERIVED
+
+
+def test_a_point_held_twice_mid_path_is_written_twice_there():
+    """81349 holds its point 6 twice, pausing 40 s on the first -- one of 342
+    paths in the live database with such a pair away from its ends."""
+    rows, _ = author_rows(Spawn(), _route_closing(repeated_point=2), ENTRY)
+    movement = [r for r in rows if r.table == "creature_movement"]
+    assert [r.values["point"] for r in movement] == [1, 2, 3]
+    assert movement[1].values["position_x"] == movement[2].values["position_x"]
+    assert any("point 2 again" in note for note in movement[2].notes)
+
+
+def test_a_route_that_shows_no_repeat_ends_at_its_last_point():
+    """Most paths -- 2,540 of 3,995 -- stop at their last point, and the server
+    walks on to point 1 anyway (WaypointMovementGenerator.cpp:198-207); a
+    repeat appended by convention put one point too many on every one."""
+    rows, _ = author_rows(Spawn(), _route_closing(), ENTRY)
+    movement = [r for r in rows if r.table == "creature_movement"]
+    assert [r.values["point"] for r in movement] == [1, 2]
+    assert any("point 1" in note for note in movement[-1].notes)
 
 
 def test_a_low_confidence_route_is_not_proposed():

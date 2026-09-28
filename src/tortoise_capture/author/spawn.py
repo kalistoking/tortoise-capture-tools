@@ -274,32 +274,39 @@ class Spawn(BaseAuthorRule):
         if not spawn.patrols():
             return
         points = sorted(spawn.waypoints, key=lambda w: w["point"])
-        for waypoint in points:
-            mv_values = {"id": db_guid, "point": waypoint["point"],
+        # A point the path holds twice in a row is written twice, where the
+        # capture showed it; the first point's second copy goes last, closing
+        # the path the way Tortoise's own capture-authored paths are written.
+        rows = []
+        for index, waypoint in enumerate(points):
+            rows.append((waypoint, False))
+            if index and waypoint.get("repeats"):
+                rows.append((waypoint, True))
+        if points and points[0].get("repeats"):
+            rows.append((points[0], True))
+        for number, (waypoint, again) in enumerate(rows, start=1):
+            mv_values = {"id": db_guid, "point": number,
                          "position_x": self.wire_float(waypoint["position_x"]),
                          "position_y": self.wire_float(waypoint["position_y"]),
                          "position_z": self.wire_float(waypoint["position_z"])}
             mv_provenance = {"id": WIRE, "point": DERIVED, "position_x": DERIVED,
                              "position_y": DERIVED, "position_z": DERIVED}
             mv_notes = []
+            if again:
+                mv_notes.append(f"point {waypoint['point']} again: the capture shows the "
+                                "server moving the creature to where it already stood there "
+                                f"on {waypoint['repeats']} of {waypoint['arrivals']} arrivals, "
+                                "which only a path holding the point twice in a row does "
+                                "(WaypointMovementGenerator.cpp:192-211)")
+            elif (number == len(rows) and (spawn.route or {}).get("closes_loop")):
+                mv_notes.append("the path ends here: the capture shows no hop repeating "
+                                "point 1, and after its last point the server walks on to "
+                                "point 1 anyway (WaypointMovementGenerator.cpp:198-207) -- "
+                                "the way 2,540 of 3,995 paths in the live database end")
             self.fill_schema_defaults(ctx, "creature_movement", mv_values,
                                       mv_provenance, mv_notes)
             yield AuthoredRow(table="creature_movement", values=mv_values,
                               provenance=mv_provenance, notes=tuple(mv_notes))
-        if (spawn.route or {}).get("closes_loop"):
-            first = points[0]
-            close_values = {"id": db_guid, "point": len(points) + 1,
-                            "position_x": self.wire_float(first["position_x"]),
-                            "position_y": self.wire_float(first["position_y"]),
-                            "position_z": self.wire_float(first["position_z"])}
-            close_provenance = {"id": WIRE, "point": CONVENTION, "position_x": DERIVED,
-                                "position_y": DERIVED, "position_z": DERIVED}
-            close_notes = ["the route closes, so the first point is repeated as the "
-                          "last, the way authored routes close a loop"]
-            self.fill_schema_defaults(ctx, "creature_movement", close_values,
-                                      close_provenance, close_notes)
-            yield AuthoredRow(table="creature_movement", values=close_values,
-                              provenance=close_provenance, notes=tuple(close_notes))
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
         summoned = [guid for guid, s in sorted(self._spawns.items()) if s.summoned]

@@ -50,6 +50,43 @@ def test_repeated_sightings_of_one_waypoint_collapse_into_one_point():
     assert sum(seen.values()) == 10
 
 
+def _square_holding(corner, laps=10):
+    """Hops round the square, the path holding `corner` twice in a row."""
+    events, t = [_sighted(0.5, 0)], 1.0
+    for _ in range(laps):
+        for c in range(len(SQUARE)):
+            for _ in range(2 if c == corner else 1):
+                x, y, z = SQUARE[c]
+                events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY,
+                                         dest=(x, y, z)))
+                t += 1.0
+    return run_analyzer(Patrol(), events)
+
+
+def test_a_path_repeating_its_first_point_shows_it():
+    """At the end of a path that repeats point 1 the server moves to where the
+    creature already stands: a hop to the same point, once a lap."""
+    found = _square_holding(0)
+    route = findings_by_kind(found)["patrol_route"]
+    assert route.data["repeats_start"] is True and route.data["confident"] is True
+    first = next(ev for ev in found if ev.kind == "patrol_waypoint" and ev.data["point"] == 1)
+    assert first.data["repeats"] == 10
+
+
+def test_a_point_held_twice_mid_path_shows_where_it_is():
+    """The same hop anywhere else is a pair in the middle of the path -- 342
+    such paths in the live database -- not its start."""
+    found = _square_holding(2)
+    assert findings_by_kind(found)["patrol_route"].data["repeats_start"] is False
+    held = [ev.data["point"] for ev in found if ev.kind == "patrol_waypoint" and ev.data["repeats"]]
+    assert held == [3]
+
+
+def test_a_path_that_stops_shows_no_repeat():
+    route = findings_by_kind(run_analyzer(Patrol(), _hops(laps=10)))["patrol_route"]
+    assert route.data["repeats_start"] is False
+
+
 def test_numbering_starts_at_the_spawn_point_not_the_capture_start():
     """A capture that begins mid-route must still number from the spawn."""
     # Start walking at the third corner, so hop order is 3,4,1,2,3,4,...

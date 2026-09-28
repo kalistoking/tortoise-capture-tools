@@ -25,8 +25,11 @@ So instead:
 
 Validated against the live `tw_world`: recovers all 41 distinct waypoints of
 Ralthas's route, in the authored order, mean XY error 0.006 yards. The
-authored table repeats the first point as a 42nd to close the loop, which is
-why the recovered count is one lower -- `closes_loop` reports it.
+authored table repeats the first point as a 42nd to close the loop, and the
+wire shows that: after its last point the server moves on to point 1, where
+the creature already stands -- a hop to the same point, once a lap. Any point a
+path holds twice in a row shows the same way, at its end or in its middle
+(81349 pauses 40 s on one); each waypoint says how often it did.
 
 Z is broadcast after the server's runtime ground-snap, so it tracks the
 terrain rather than the authored value (~0.35 yd apart at worst). Positions
@@ -54,6 +57,14 @@ from ..core.registry import analyzer
 CLUSTER_TOLERANCE = 1.0
 
 MIN_WAYPOINTS = 3            # fewer than this is not a route
+
+# A path holding a point twice in a row makes the server move to where the
+# creature already stands, once a lap (WaypointMovementGenerator.cpp:198-207 at
+# the end of a path, :192-211 anywhere else). The captures show that same-point
+# hop on 5 of 13 to all of such a path's laps, and on at most one stray hop of a
+# path that holds none.
+MIN_REPEATS = 3
+MIN_REPEAT_SHARE = 0.25         # of the arrivals at that point
 
 # Above this share of hops seen during an aggro-to-death window, a route is
 # more likely combat repositioning across many re-engagements than a real
@@ -232,6 +243,17 @@ class _Route:
             return None
         return sum(max(c.values()) for c in revisited) / total
 
+    def repeated(self) -> dict[int, tuple[int, int]]:
+        """point -> (same-point hops, arrivals) for each point the path holds
+        twice in a row."""
+        doubles = Counter(a for a, b in zip(self.labels, self.labels[1:]) if a == b)
+        found = {}
+        for point, hops in doubles.items():
+            arrivals = len(self.clusters[point]) - hops
+            if hops >= MIN_REPEATS and hops >= MIN_REPEAT_SHARE * arrivals:
+                found[point] = (hops, arrivals)
+        return found
+
     def walks_a_line(self) -> bool:
         """Whether every point left twice leads to at most two others, and one
         turns: a route walked back and forth, whose inner points go either way
@@ -403,6 +425,7 @@ class Patrol(BaseAnalyzer):
             yield self.event(route.last_packet, "patrol_route", guid=guid, entry=route.entry,
                              count=len(order), hops=len(route.labels),
                              closes_loop=getattr(route, "returns_to_start", False),
+                             repeats_start=bool(order) and order[0] in route.repeated(),
                              combat_hop_fraction=combat_fraction,
                              single_visit_fraction=single_visit,
                              transition_order=ordered, confident=confident,
@@ -419,12 +442,15 @@ class Patrol(BaseAnalyzer):
                 yield self.event(route.last_packet, "wander_area", guid=guid, entry=route.entry,
                                  position_x=cx, position_y=cy, position_z=cz,
                                  radius=radius, hops=len(route.labels))
+            repeated = route.repeated()
             for point, index in enumerate(order, start=1):
                 x, y, z = route.centre(index)
+                hops, arrivals = repeated.get(index, (0, 0))
                 yield self.event(route.last_packet, "patrol_waypoint", guid=guid,
                                  entry=route.entry, point=point,
                                  position_x=x, position_y=y, position_z=z,
-                                 observations=len(route.clusters[index]))
+                                 observations=len(route.clusters[index]),
+                                 repeats=hops, arrivals=arrivals)
 
     # -- sql ---------------------------------------------------------------
 
