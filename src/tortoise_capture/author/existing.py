@@ -58,34 +58,38 @@ def only_new(rows: Iterable[AuthoredRow], world: Any) -> tuple[list[AuthoredRow]
             column = world.key_column(table)
             held[key] = world.row_exists(table, f"`{column}` = {literal(value, 'mysql')}")
 
-    with_parent: dict[tuple[str, Any], str] = {}
+    # key -> (the table it hangs off, whether that row is stored or only held)
+    with_parent: dict[tuple[str, Any], tuple[str, bool]] = {}
     for table, (column, parent) in _HANGS_OFF.items():
         for row in rows:
-            key = _key(row, world)
+            key, up = _key(row, world), (parent, row.values.get(column))
             if (row.table == table and key is not None and not held.get(key)
-                    and held.get((parent, row.values.get(column)))):
+                    and held.get(up)):
                 held[key] = True
-                with_parent[key] = parent
+                with_parent[key] = (parent, up not in with_parent)
 
     kept = [row for row in rows if not held.get(_key(row, world), False)]
-    reported: dict[tuple[str, str | None], list[Any]] = {}
+    reported: dict[tuple[str, tuple[str, bool] | None], list[Any]] = {}
     for (table, value), exists in held.items():
         if exists:
             reported.setdefault((table, with_parent.get((table, value))), []).append(value)
 
     gaps = []
-    for (table, parent), values in reported.items():
+    for (table, up), values in reported.items():
         dropped = sum(1 for row in rows if row.table == table and _key(row, world) in
                       {(table, v) for v in values})
         named = ", ".join(map(str, values[:_NAMED])) + (" ..." if len(values) > _NAMED else "")
-        if parent is None:
+        if up is None:
             gaps.append(f"{table} -- already in the database under {world.key_column(table)} "
                         f"{named}: {dropped} row(s) not proposed, since only rows new to it "
                         "are; compare them with what the capture saw by hand")
         else:
+            parent, stored = up
             gaps.append(f"{table} -- {world.key_column(table)} {named}: {dropped} row(s) not "
-                        f"proposed, since the {parent} row they hang off is already in the "
-                        "database and was not compared with the capture")
+                        f"proposed, since the {parent} row they hang off "
+                        + ("is already in the database and was not compared with the capture"
+                           if stored else "is not proposed either, down a chain that ends in "
+                           "a row the database already holds"))
     return kept, gaps
 
 

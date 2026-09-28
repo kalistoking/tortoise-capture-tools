@@ -1439,7 +1439,11 @@ def test_a_script_is_held_with_the_text_it_would_speak():
                       existing={"broadcast_text": {"713500"}})
     kept, gaps = only_new(rows, world)
     assert kept == []
-    assert any(gap.startswith("creature_ai_events --") for gap in gaps)
+    events = next(gap for gap in gaps if gap.startswith("creature_ai_events --"))
+    scripts = next(gap for gap in gaps if gap.startswith("creature_ai_scripts --"))
+    # The script row is held, not stored: saying it is "already in the
+    # database" sent a reader looking for a row that is not there.
+    assert "already in the database" in scripts and "already in the database" not in events
 
 
 def test_an_update_is_never_filtered_as_existing():
