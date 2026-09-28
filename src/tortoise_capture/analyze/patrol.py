@@ -166,6 +166,7 @@ class _Route:
         self.labels: list[int] = []
         self.hop_times: list[float] = []            # packet time per hop, parallel to labels
         self.hop_points: list[tuple[float, float, float]] = []   # destination per hop, too
+        self.hop_stills: list[bool] = []            # whether the hop set off from its destination
         self.creates: list[tuple[float, tuple[float, float, float]]] = []   # (t, position)
         self.entry: int | None = None
         self.last_packet: Packet | None = None
@@ -173,9 +174,12 @@ class _Route:
         self.deaths: list[float] = []                # party_kill timestamps
         self.closes_elsewhere = False               # walk() came round to a non-start point
 
-    def add_hop(self, point: tuple[float, float, float], t: float) -> None:
+    def add_hop(self, point: tuple[float, float, float], t: float,
+                start: tuple[float, float, float] | None = None) -> None:
         self.hop_times.append(t)
         self.hop_points.append(point)
+        self.hop_stills.append(start is not None
+                               and math.dist(start[:2], point[:2]) <= CLUSTER_TOLERANCE)
         for index, members in enumerate(self.clusters):
             if math.dist(members[0][:2], point[:2]) <= CLUSTER_TOLERANCE:
                 members.append(point)
@@ -246,7 +250,12 @@ class _Route:
     def repeated(self) -> dict[int, tuple[int, int]]:
         """point -> (same-point hops, arrivals) for each point the path holds
         twice in a row."""
-        doubles = Counter(a for a, b in zip(self.labels, self.labels[1:]) if a == b)
+        # Only a move from where the creature already stands: a leg paused by a
+        # player's gossip (MotionMaster.cpp:914-935) is sent again to the same
+        # point on resuming (WaypointMovementGenerator.cpp:213-218), but from
+        # wherever the pause caught it.
+        doubles = Counter(a for a, b, still in zip(self.labels, self.labels[1:],
+                                                    self.hop_stills[1:]) if a == b and still)
         found = {}
         for point, hops in doubles.items():
             arrivals = len(self.clusters[point]) - hops
@@ -366,7 +375,8 @@ class Patrol(BaseAnalyzer):
             route = self._routes.setdefault(guid, _Route())
             route.entry = ev.data.get("entry")
             route.last_packet = ev.packet
-            route.add_hop(tuple(ev.data["dest"]), ev.packet.t)
+            start = ev.data.get("start")
+            route.add_hop(tuple(ev.data["dest"]), ev.packet.t, tuple(start) if start else None)
         elif ev.kind == "object_create":
             # A create block is the creature standing where it spawned -- but
             # only the respawn one is; the first sighting catches it mid-route.

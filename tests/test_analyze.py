@@ -50,15 +50,22 @@ def test_repeated_sightings_of_one_waypoint_collapse_into_one_point():
     assert sum(seen.values()) == 10
 
 
-def _square_holding(corner, laps=10):
-    """Hops round the square, the path holding `corner` twice in a row."""
+def _square_holding(corner, laps=10, resumed=False):
+    """Hops round the square, the path holding `corner` twice in a row -- or,
+    `resumed`, the walk to it stopped half way and taken up again."""
     events, t = [_sighted(0.5, 0)], 1.0
     for _ in range(laps):
         for c in range(len(SQUARE)):
-            for _ in range(2 if c == corner else 1):
-                x, y, z = SQUARE[c]
+            x, y, z = SQUARE[c]
+            px, py, pz = SQUARE[c - 1]
+            starts = [(px, py, pz)]
+            if c == corner:
+                # A held point moves from where it stands; a resumed leg from
+                # wherever the pause caught it.
+                starts.append(((px + x) / 2, (py + y) / 2, z) if resumed else (x, y, z))
+            for start in starts:
                 events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY,
-                                         dest=(x, y, z)))
+                                         start=start, dest=(x, y, z)))
                 t += 1.0
     return run_analyzer(Patrol(), events)
 
@@ -71,6 +78,16 @@ def test_a_path_repeating_its_first_point_shows_it():
     assert route.data["repeats_start"] is True and route.data["confident"] is True
     first = next(ev for ev in found if ev.kind == "patrol_waypoint" and ev.data["point"] == 1)
     assert first.data["repeats"] == 10
+
+
+def test_a_leg_taken_up_again_after_a_pause_is_not_a_point_held_twice():
+    """A player's gossip or a quest greeting pauses the walk (MotionMaster.cpp:
+    914-935) and the server sends the same destination again when it resumes
+    (WaypointMovementGenerator.cpp:213-218) -- from wherever the creature
+    stopped. A point held twice is a move from where it already stands."""
+    found = _square_holding(2, resumed=True)
+    held = [ev.data["point"] for ev in found if ev.kind == "patrol_waypoint" and ev.data["repeats"]]
+    assert held == []
 
 
 def test_a_point_held_twice_mid_path_shows_where_it_is():
