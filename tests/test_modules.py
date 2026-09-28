@@ -163,6 +163,25 @@ def test_monster_say_carries_sender_and_message():
     assert ev.data["entry"] == ENTRY
 
 
+def test_a_say_with_no_text_is_read_as_an_empty_line():
+    """BuildChatPacket writes neither length nor text when the text is empty
+    (Chat.cpp:2311-2312) -- a line with no text for that gender or locale --
+    and the decoder read past the end, losing the say and its sender."""
+    body = (struct.pack("<BI", 0x0B, 0) + struct.pack("<Q", GUID) + sized_string("Ralthas")
+            + struct.pack("<Q", 0))
+    ev = decode_one(MessageChat(), make_packet(0x96, body), make_ctx())
+    assert ev.kind == "monster_say" and ev.data["message"] == "" and ev.data["entry"] == ENTRY
+
+
+def test_a_player_saying_a_monster_line_carries_no_entry():
+    """DoScriptText takes a player as the speaker too (ScriptMgr.cpp:2838); a
+    player guid holds no entry, and it came out as entry 0."""
+    body = (struct.pack("<BI", 0x0B, 0) + struct.pack("<Q", 0x2A) + sized_string("Somebody")
+            + struct.pack("<Q", 0) + sized_string("Hello"))
+    ev = decode_one(MessageChat(), make_packet(0x96, body), make_ctx())
+    assert "entry" not in ev.data
+
+
 def test_monster_emote_has_no_entry_so_entry_filters_skip_it():
     body = (struct.pack("<BI", 0x0D, 0) + sized_string("Ralthas") + struct.pack("<Q", 0)
             + sized_string("looks around."))

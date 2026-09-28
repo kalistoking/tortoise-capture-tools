@@ -21,7 +21,7 @@ from typing import Iterator
 
 from ..core.base import BaseModule
 from ..core.contracts import Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec
-from ..core.reader import ByteReader, guid_entry, guid_type
+from ..core.reader import ByteReader, guid_entry, guid_type, has_entry
 from ..core.registry import module
 
 CHAT_MSG_MONSTER_SAY = 0x0B
@@ -47,6 +47,12 @@ _TABLE = TableSpec(
 )
 
 
+
+def _message(r: ByteReader) -> str:
+    """The text -- or nothing at all: an empty one is not written, not even its
+    length (Chat.cpp:2311-2312)."""
+    return r.sized_string("message") if not r.eof else ""
+
 @module(id="messagechat", opcodes=("SMSG_MESSAGECHAT",), order=20)
 class MessageChat(BaseModule):
     text_section = "SMSG_MESSAGECHAT (monster say / yell / emote)"
@@ -68,17 +74,18 @@ class MessageChat(BaseModule):
             sender_guid = r.u64("sender")
             sender = r.sized_string("senderName")
             r.u64("target")
-            yield self.event(pkt, kind, guid=sender_guid, entry=guid_entry(sender_guid),
+            # A player can speak a monster line too (ScriptMgr.cpp:2838), and
+            # its guid holds no entry.
+            owner = {"entry": guid_entry(sender_guid)} if has_entry(sender_guid) else {}
+            yield self.event(pkt, kind, guid=sender_guid, **owner,
                              guid_type=guid_type(sender_guid), label=label, sender=sender,
-                             chat_type=msg_type, language=language,
-                             message=r.sized_string("message"))
+                             chat_type=msg_type, language=language, message=_message(r))
         elif msg_type == CHAT_MSG_MONSTER_EMOTE:
             sender = r.sized_string("senderName")
             r.u64("target")
             # No sender guid on the wire: no entry key, so --entry skips it.
             yield self.event(pkt, "monster_emote", sender=sender,
-                             chat_type=msg_type, language=language,
-                             message=r.sized_string("message"))
+                             chat_type=msg_type, language=language, message=_message(r))
         else:
             yield self.event(pkt, "chat_other", chat_type=msg_type, size=len(pkt.body))
 
