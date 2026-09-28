@@ -512,6 +512,26 @@ def test_a_template_casting_through_eventai_is_not_given_a_spell_list():
     assert any("spell_list_id" in gap and "EventAI" in gap for gap in gaps)
 
 
+def test_a_template_with_its_own_script_is_not_given_a_spell_list():
+    """ScriptedAI runs a spell list too (ScriptedAI.cpp:82-83), and a C++ script
+    casts its own spells besides: 1,575 of 1,690 scripted templates in the live
+    database have no list. Any AI or script decides whether one belongs."""
+    for column, value in (("script_name", "npc_defias_wizard"), ("ai_name", "GuardAI")):
+        world = StubWorld(columns={("creature_template", "spell_list_id"): "0",
+                                   ("creature_template", column): value})
+        rows, gaps = author_rows(Stats(), _casting(), ENTRY, world=world)
+        assert "spell_list_id" not in rows[0].values
+        assert any("spell_list_id" in gap and value in gap for gap in gaps)
+
+
+def test_an_ai_name_of_0_is_no_ai():
+    """16 templates hold '0' where the rest hold '' -- neither names an AI."""
+    world = StubWorld(columns={("creature_template", "spell_list_id"): "0",
+                               ("creature_template", "ai_name"): "0"})
+    rows, _ = author_rows(Stats(), _casting(), ENTRY, world=world)
+    assert rows[0].values["spell_list_id"] == ENTRY
+
+
 def test_a_template_without_a_spell_list_gets_the_conventional_one():
     world = StubWorld(columns={("creature_template", "spell_list_id"): "0"})
     rows, _ = author_rows(Stats(), _casting(), ENTRY, world=world)
