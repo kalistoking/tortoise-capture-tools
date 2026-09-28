@@ -14,12 +14,14 @@ layout at `Object.cpp:64`):
     if JUMPING     (0x00002000):  4 x float
     if SPLINE_ELEVATION:          float
 
-**There is no guid in it, and that is the point.** The server takes the mover
-from the session (`MovementHandler.cpp:304`), so a client-sent movement *is*
-the recording player by construction — a stronger attribution than any
-heuristic could offer, and the reason these survive `--entry` as session-scoped
-facts. `modules/update_object.py` finds the same player from the other
-direction, by `UPDATEFLAG_SELF`; this needs no marker at all.
+**There is no guid in it.** The server takes the mover from the session
+(`MovementHandler.cpp:304`): the recording player -- unless the client has
+handed control to a pet or a possessed unit with CMSG_SET_ACTIVE_MOVER (Eyes
+of the Beast, Mind Control; `MovementHandler.cpp:838-874`), after which these
+are that unit's moves. tct does not decode that opcode, so a capture made
+while controlling something else reads its moves as the player's. That is the
+reason these survive `--entry` as session-scoped facts, and why
+`modules/update_object.py`'s `UPDATEFLAG_SELF` is the firmer marker.
 
 `MSG_` means the number is used in BOTH directions with **different layouts**.
 The server relays another player's movement to us by prefixing the mover's
