@@ -85,6 +85,12 @@ class Runner:
         # `only` narrows decoding, never expansion: dropping a container module
         # would silently hide every packet inside it.
         self._only = only
+        if only:
+            known = {mod.id for mod in registry.modules()}
+            for unknown in sorted(set(only) - known):
+                # A typo decoded nothing and wrote empty output without a word.
+                _logger.error("--only names %s, which no module is; known: %s",
+                              unknown, ", ".join(sorted(known)))
         self._analyzers = list(analyzers)
         self._contexts: dict[str, DecodeContext] = {}
 
@@ -119,7 +125,13 @@ class Runner:
                 self._to_sink(sink, found, self._analyzer_by_id(found.module_id), stats)
 
         for sink in self._sinks:
-            sink.close()
+            # One sink failing to write must not leave the others unwritten.
+            try:
+                sink.close()
+            except Exception as exc:
+                stats.errors += 1
+                _logger.error("sink %s failed to close: %s: %s",
+                              type(sink).__name__, type(exc).__name__, exc)
         return stats
 
     def _analyzer_by_id(self, module_id: str) -> Any:

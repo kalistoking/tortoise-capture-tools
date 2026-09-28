@@ -55,6 +55,8 @@ def guid_entry(guid: int) -> int:
 
 
 def guid_type(guid: int) -> str:
+    if not guid:
+        return "EMPTY"           # no object; IsPlayer() wants a non-empty guid too
     return HIGHGUID_NAMES.get(guid_high(guid), f"0x{guid_high(guid):04X}")
 
 

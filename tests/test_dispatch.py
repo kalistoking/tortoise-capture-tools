@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from support import make_ctx, make_packet, make_tables
+from tortoise_capture import log as _log
 from tortoise_capture.core.base import BaseModule
 from tortoise_capture.core.dispatch import Filters, Runner
+from tortoise_capture.core.reader import guid_type
 from tortoise_capture.core.registry import Registration, Registry
 
 OPCODE = 0x123
@@ -127,3 +131,48 @@ def test_every_run_gets_its_own_analyzers_and_authoring_rules():
         first, second = registry.all(), registry.all()
         assert first and all(a is not b for a, b in zip(first, second))
         assert [type(a) for a in first] == [type(b) for b in second]
+
+
+class _Errors(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.ERROR)
+        self.messages = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+def _errors_while(body):
+    seen = _Errors()
+    root = logging.getLogger(_log.ROOT)
+    root.addHandler(seen)
+    try:
+        return body(), seen.messages
+    finally:
+        root.removeHandler(seen)
+
+
+def test_an_only_that_names_no_module_is_an_error_not_an_empty_run():
+    """A typo in --only decoded nothing, wrote empty output and exited 0."""
+    _, errors = _errors_while(lambda: Runner(_registry(Good()), make_ctx(), [],
+                                             only={"goood"}).run([make_packet(OPCODE, b"")]))
+    assert any("goood" in message for message in errors)
+
+
+class _ClosesBadly(Collector):
+    def close(self):
+        raise OSError("disk full")
+
+
+def test_a_sink_that_fails_to_close_leaves_the_others_closed_and_is_counted():
+    """sink.close() was unguarded: the SQL writer failing left the sinks after
+    it unwritten, and the run's stats were lost to the exception."""
+    after = Collector()
+    stats, errors = _errors_while(lambda: Runner(_registry(Good()), make_ctx(),
+                                                 [_ClosesBadly(), after]).run([]))
+    assert after.closed and stats.errors == 1 and errors
+
+
+def test_an_empty_guid_is_not_a_player():
+    """ObjectGuid::IsPlayer needs a non-empty guid (ObjectGuid.h:178)."""
+    assert guid_type(0) == "EMPTY"
