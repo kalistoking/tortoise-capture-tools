@@ -145,6 +145,20 @@ def test_unknown_keys_and_levels_are_reported_but_not_fatal():
     assert cfg.log_level == "info" and cfg.sql_dialect == "mysql"      # fell back
 
 
+def test_a_value_of_the_wrong_type_is_reported_and_not_used():
+    """`file = "false"` is a non-empty string, so file logging stayed on; and
+    `port = 8090.9` became 8090 -- counted as a port the user named."""
+    def body(tmp):
+        (tmp / CONFIG_NAME).write_text('[capture]\nport = 8090.9\n[log]\nfile = "false"\n',
+                                       encoding="utf-8")
+        return RunConfig.resolve(Args())
+
+    cfg = _in_dir(body)
+    text = " ".join(message for _, message in cfg.issues)
+    assert "8090.9" in text and "'false'" in text
+    assert "port" not in cfg.named and cfg.port == 8090
+
+
 def test_an_explicit_config_path_that_is_missing_stops_the_run():
     try:
         RunConfig.resolve(Args(config="no/such/file.toml"))

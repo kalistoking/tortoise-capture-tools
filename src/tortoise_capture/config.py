@@ -129,7 +129,7 @@ class RunConfig:
             named.update(from_file)
         named.update(_apply_env(values, issues))
         named.update(_apply_args(values, args))
-        _validate(values, issues)
+        _validate(values, issues, named)
 
         log_dir = None if not values["log_to_file"] else Path(values["log_dir"])
         return cls(
@@ -231,7 +231,26 @@ def _apply_args(values: dict[str, Any], args) -> set[str]:
     return named
 
 
-def _validate(values: dict[str, Any], issues: list[tuple[str, str]]) -> None:
+def _whole(value: Any) -> bool:
+    """An int, or the digits of one (the environment gives strings)."""
+    return (isinstance(value, int) and not isinstance(value, bool)) or (
+        isinstance(value, str) and value.isdigit())
+
+
+def _validate(values: dict[str, Any], issues: list[tuple[str, str]],
+              named: set[str] | None = None) -> None:
+    # A value of the wrong type is reported and not used: "false" is a true
+    # string, and 8090.9 would pass as a port the user named.
+    for key, fits, kind in (("port", _whole, "a whole number"),
+                            ("logon_port", _whole, "a whole number"),
+                            ("log_to_file", lambda v: isinstance(v, bool), "true or false")):
+        if key in values and not fits(values[key]):
+            issues.append(("warn", f"{key} must be {kind}, not {values[key]!r}; "
+                                   f"using {_DEFAULTS[key]!r}"))
+            values[key] = _DEFAULTS[key]
+            if named is not None:
+                named.discard(key)
+
     for key, default in (("log_level", _log.DEFAULT_LEVEL), ("file_log_level", None)):
         level = values.get(key)
         if level is not None and _log.level_value(level) is None:
