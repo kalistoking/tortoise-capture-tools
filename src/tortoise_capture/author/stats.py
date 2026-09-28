@@ -326,7 +326,7 @@ class Stats(BaseAuthorRule):
 
         # spell_list_id points a creature at its creature_spells row, so it
         # only belongs here when there is one to point at -- and never over a
-        # list the template already has, nor onto one with an AI or a script
+        # list the template already has, nor onto one with EventAI or a script
         # of its own, which may cast the same spells (see gaps()).
         own = self._own_spell_list(ctx) if self._saw_spells else None
         if self._saw_spells and (own == ctx.entry or own is None and not self._scripted(ctx)):
@@ -419,13 +419,15 @@ class Stats(BaseAuthorRule):
                 ctx.world.column("creature_template", column, f"entry = {ctx.entry}") == "NULL")
 
     def _scripted(self, ctx: AuthorContext) -> str | None:
-        """How the template casts on its own, if it may: an AI or a C++ script.
-        ScriptedAI runs a spell list as EventAI does (ScriptedAI.cpp:82-83)."""
-        for column, what in (("script_name", "runs the C++ script {}"),
-                             ("ai_name", "runs {}")):
-            name = self._stored_text(ctx, column)
-            if name not in (None, "", "0"):      # 16 templates hold '0' for none
-                return what.format(name)
+        """How the template may cast besides a spell list: its C++ script, or
+        EventAI's events. The built-in AIs cast only through the list
+        (AggressorAI.cpp:60-68), as '' does, which selects them anyway -- the
+        director's call, manager-040."""
+        script = self._stored_text(ctx, "script_name")
+        if script not in (None, "", "0"):
+            return f"runs the C++ script {script}"
+        if self._stored_text(ctx, "ai_name") == "EventAI":
+            return "runs EventAI"
         return None
 
     def _own_spell_list(self, ctx: AuthorContext) -> int | None:
