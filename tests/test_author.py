@@ -1060,6 +1060,65 @@ def _multi_slot_equip_events(displays, infos):
     return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=fields)]
 
 
+# Mr. Smite (646), the Deadmines boss. His template holds sword 2179; his
+# script swaps it mid-fight -- two axes 2183 below 66% health, hammer 10756
+# below 33% (boss_mr_smite.cpp:165-180) -- through SetVirtualItem, the very
+# fields a CREATE carries, and his Reset() loads the template's back.
+SMITE = 646
+_SMITE_ITEMS = {2179: (2, 7, 13), 2183: (2, 0, 13), 10756: (2, 5, 17)}   # class, subclass, inv
+_SMITE_DISPLAYS = {7420: 2179, 7427: 2183, 19766: 10756}
+_SWORD, _AXES, _HAMMER = [7420, 0, 0], [7427, 7427, 0], [19766, 0, 0]
+
+
+def _smite_create(t, displays):
+    """A CREATE of Mr. Smite holding `displays` in the three virtual-item slots."""
+    def info(display):
+        if not display:
+            return 0
+        cls, sub, inv = _SMITE_ITEMS[_SMITE_DISPLAYS[display]]
+        return cls | sub << 8 | inv << 24
+    fields = [{"index": 0, "name": DISPLAY_FIELD, "raw": displays[0]}]
+    fields += [{"index": 1 + i, "name": None, "raw": d} for i, d in enumerate(displays[1:])]
+    fields.append({"index": 10, "name": INFO_FIELD, "raw": info(displays[0])})
+    fields += [{"index": 11 + i, "name": None, "raw": raw}
+               for i, raw in enumerate([0, info(displays[1]), 0, info(displays[2]), 0])]
+    return make_event("object_create", t, guid=GUID, entry=SMITE, fields=fields)
+
+
+def _smite_world():
+    return StubWorld(displays=_SMITE_DISPLAYS, items=_SMITE_ITEMS,
+                     columns={("creature_template", "equipment_id"): str(SMITE)})
+
+
+def test_mr_smite_seen_first_mid_fight_is_equipped_as_he_respawns():
+    """A capture that joins the fight sees him first with the two axes. The
+    CREATE after his death is what he spawns holding -- the template's sword."""
+    events = [_smite_create(10.0, _AXES),
+              make_event("party_kill", 60.0, guid=GUID, entry=SMITE),
+              _smite_create(700.0, _SWORD)]
+    rows, gaps = author_rows(Equipment(), events, SMITE, world=_smite_world())
+    assert rows[0].values["equipentry1"] == 2179 and "equipentry2" not in rows[0].values
+    assert any("2183" in note or "7427" in note for note in rows[0].notes)
+
+
+def test_mr_smite_changing_weapons_without_a_respawn_is_a_gap():
+    """Seen with the sword and then the axes, and never after a death: which
+    one he spawns with, the capture cannot say by itself."""
+    events = [_smite_create(10.0, _SWORD), _smite_create(40.0, _AXES)]
+    rows, gaps = author_rows(Equipment(), events, SMITE, world=_smite_world())
+    assert any(gap.startswith("creature_equip_template") and "7427" in gap for gap in gaps)
+
+
+def test_a_creature_seen_only_dead_is_equipped_from_its_corpse_and_says_so():
+    """Ralthas shows 6172 once, as a corpse; it still holds its weapon, which
+    is what it died with -- the template's, unless a script swapped it."""
+    corpse = _smite_create(10.0, _SWORD)
+    corpse.data["fields"].append({"index": 30, "name": "UNIT_FIELD_MAXHEALTH", "raw": 5000})
+    rows, _ = author_rows(Equipment(), [corpse], SMITE, world=_smite_world())
+    assert rows[0].values["equipentry1"] == 2179
+    assert any("corpse" in note for note in rows[0].notes)
+
+
 def test_an_offhand_is_authored_too_not_silently_dropped():
     """Both test creatures carry one weapon, so slots 2 and 3 never showed."""
     world = StubWorld(displays={5010: 5276, 7788: 9001}, columns={

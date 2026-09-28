@@ -34,7 +34,8 @@ from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
 from ..core.contracts import (
-    CONVENTION, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event, is_creature,
+    CONVENTION, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event, is_corpse, is_creature,
+    spawn_sighting,
 )
 from ..core.registry import author_rule
 
@@ -53,19 +54,69 @@ def unpack_item_info(raw: int) -> dict[str, int]:
 @author_rule(id="equipment", table="creature_equip_template", order=40)
 class Equipment(BaseAuthorRule):
     def __init__(self) -> None:
-        self._raw: dict[int, int] | None = None     # the first unit CREATE's fields, by index
+        self._raw: dict[int, int] | None = None     # the chosen CREATE's fields, by index
         self._named: dict[str, int] = {}             # name -> index, as that CREATE named them
+        self._after_death = False                   # whether that CREATE followed a death
+        self._from_corpse = False                   # whether it was a corpse's, for want of any
         self._unresolved: str | None = None
         self._unresolved_extra: list[str] = []
+        # guid -> [(t, fields by index, names)], its deaths, and every VALUES
+        # block's fields: all a script's weapon swap can show up in.
+        self._creates: dict[int, list[tuple[float, dict[int, int], dict[str, int]]]] = {}
+        self._deaths: dict[int, list[float]] = {}
+        self._corpses: list[tuple[float, dict[int, int], dict[str, int]]] = []
+        self._updates: list[tuple[dict[int, int], set[int]]] = []
 
     def handle(self, ev: Event, mod: Any = None) -> None:
-        # First CREATE wins, as for every template column; later ones carry the same.
-        if (ev.kind != "object_create" or self._raw is not None
-                or not is_creature(ev.data.get("guid"))
-                or not ev.data.get("named_ok", True) or not ev.data.get("fields")):
+        guid = ev.data.get("guid")
+        if not is_creature(guid) or ev.packet.t is None:
             return
-        self._raw = {f["index"]: f["raw"] for f in ev.data["fields"]}
-        self._named = {f["name"]: f["index"] for f in ev.data["fields"] if f["name"]}
+        if ev.kind == "party_kill":
+            self._deaths.setdefault(guid, []).append(ev.packet.t)
+        elif ev.kind == "object_values" and ev.data.get("fields"):
+            self._updates.append(({f["index"]: f["raw"] for f in ev.data["fields"]},
+                                  {f["index"] for f in ev.data["fields"] if f["name"]}))
+        elif (ev.kind == "object_create" and ev.data.get("named_ok", True)
+                and ev.data.get("fields")):
+            seen = (ev.packet.t, {f["index"]: f["raw"] for f in ev.data["fields"]},
+                    {f["name"]: f["index"] for f in ev.data["fields"] if f["name"]})
+            if is_corpse(ev):
+                self._corpses.append(seen)
+            else:
+                self._creates.setdefault(guid, []).append(seen)
+
+    def _choose(self) -> None:
+        """What a creature holds is its template's only as it spawns: a script
+        can swap it mid-fight (Mr. Smite's does, boss_mr_smite.cpp:165-180) and
+        its Reset() loads the template's back. So the CREATE after a death is
+        taken when there is one -- any spawn's -- else the first."""
+        if self._raw is not None:
+            return
+        if not self._creates:
+            if self._corpses:
+                self._raw, self._named = min(self._corpses, key=lambda c: c[0])[1:]
+                self._from_corpse = True
+            return
+        first = min((c for creates in self._creates.values() for c in creates), key=lambda c: c[0])
+        self._raw, self._named = first[1], first[2]
+        for guid, creates in sorted(self._creates.items()):
+            sighting = spawn_sighting([(t, (raw, named)) for t, raw, named in creates],
+                                      self._deaths.get(guid, ()))
+            if sighting is not None and sighting[1]:
+                (self._raw, self._named), self._after_death = sighting[0], True
+                return
+
+    def _other_displays(self, ctx: AuthorContext, held: set[int]) -> list[int]:
+        """Display ids the capture showed it holding besides `held`."""
+        base = self._base(ctx, DISPLAY_FIELD)
+        if base is None:
+            return []
+        creates = [c for creates in self._creates.values() for c in creates] + self._corpses
+        blocks = [(fields, set(named.values())) for _, fields, named in creates] + self._updates
+        # As in _slots: a sub-slot arrives unnamed, a named one is another field.
+        seen = {fields.get(base + i) for fields, named in blocks for i in range(EQUIP_SLOTS)
+                if not (i and base + i in named)}
+        return sorted(d for d in seen - held if d)
 
     def _base(self, ctx: AuthorContext, name: str) -> int | None:
         table = getattr(ctx, "fields", None)
@@ -74,6 +125,7 @@ class Equipment(BaseAuthorRule):
 
     def _slots(self, ctx: AuthorContext) -> list[tuple[int, int, int | None]]:
         """(slot, display, info) for every slot that broadcast an item."""
+        self._choose()
         if not self._raw:
             return []
         named = set(self._named.values())
@@ -99,11 +151,27 @@ class Equipment(BaseAuthorRule):
                                 f"{slots[0][1]} could not be resolved to an item")
             return
 
+        others = self._other_displays(ctx, {display for _, display, _ in slots})
+        if others and not self._after_death:
+            self._unresolved = (f"it held other weapons in this capture too (display "
+                                f"{', '.join(map(str, others))}) -- a script swaps them "
+                                "mid-fight -- and none was seen after a death, which alone "
+                                "shows what it spawns holding; not proposed, decide by hand")
+            return
+
         # Keyed by the creature's entry, where most templates point their
         # equipment_id; gaps() says when this one does not.
         values: dict[str, Any] = {"entry": ctx.entry}
         provenance = {"entry": CONVENTION}
         notes: list[str] = []
+        if self._from_corpse:
+            notes.append("read off its corpse, the only sighting of it: a corpse holds what "
+                         "the creature died with, the template's unless a script swapped it")
+        if others:
+            notes.append(f"it held other weapons in this capture too (display "
+                         f"{', '.join(map(str, others))}), as a script swaps them mid-fight; "
+                         "these are what the CREATE after its death showed, which is what "
+                         "it spawns holding")
         skip = []
         if slots[0][0] != 1:
             values["equipentry1"], provenance["equipentry1"] = 0, WIRE
