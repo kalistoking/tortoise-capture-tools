@@ -52,48 +52,55 @@ class CaptureSession:
     client: tuple[str, int]
 
 
-def _reassemble(packets, src: tuple[str, int], dst: tuple[str, int]) -> Stream:
-    """Orders segments by TCP sequence number, trimming retransmit overlap.
+def _segments(packets, src: tuple[str, int], dst: tuple[str, int]) -> list[tuple[int, bytes, float]]:
+    """(seq, payload, capture time) of every payload-carrying segment src -> dst."""
+    from scapy.all import IP, Raw, TCP  # noqa: PLC0415 - lazy: scapy is heavy
+
+    return [(p[TCP].seq, bytes(p[Raw].load), float(p.time)) for p in packets
+            if TCP in p and IP in p and Raw in p and p[Raw].load
+            and (p[IP].src, p[TCP].sport) == src and (p[IP].dst, p[TCP].dport) == dst]
+
+
+def _reassemble(segments: list[tuple[int, bytes, float]], src: tuple[str, int],
+                dst: tuple[str, int]) -> Stream:
+    """Orders segments by TCP sequence number and keeps each byte once.
+
+    Every segment is kept, not one per sequence number -- a retransmit can be
+    cut at other boundaries than the original, or be shorter -- and the stream
+    grows only by the bytes past its end. Sequence numbers count from the
+    first segment's, modulo 2^32, so a stream that wraps carries on.
 
     A gap is zero-filled and reported: the decode after it will desync, and
     saying where is more useful than silently shifting every later offset.
     """
-    from scapy.all import IP, Raw, TCP  # noqa: PLC0415 - lazy: scapy is heavy
-
-    chunks: dict[int, tuple[bytes, float]] = {}
-    for p in packets:
-        if not (TCP in p and IP in p and Raw in p):
-            continue
-        if (p[IP].src, p[TCP].sport) != src or (p[IP].dst, p[TCP].dport) != dst:
-            continue
-        payload = bytes(p[Raw].load)
-        if payload:
-            chunks[p[TCP].seq] = (payload, float(p.time))
-
-    if not chunks:
+    if not segments:
         return Stream(b"")
+
+    base = segments[0][0]
+    # Offsets from the first segment seen, signed: a retransmit of earlier
+    # data captured after it sits just before, not 4 GiB after.
+    ordered = sorted(((((seq - base + 2**31) % 2**32) - 2**31, data, ts)
+                      for seq, data, ts in segments), key=lambda s: (s[0], -len(s[1])))
 
     buf = bytearray()
     breakpoints: list[tuple[int, float]] = []
-    segments: list[bytes] = []
-    ordered = sorted(chunks.items())
-    expected = ordered[0][0]
-    for seq, (data, ts) in ordered:
-        if seq < expected:                       # retransmission overlap
-            overlap = expected - seq
-            data = data[overlap:] if overlap < len(data) else b""
-        elif seq > expected:
-            _logger.warning("gap in %s:%d -> %s:%d stream: expected seq %d, got %d "
-                            "(%d bytes missing)",
-                            src[0], src[1], dst[0], dst[1], expected, seq, seq - expected)
-            buf.extend(b"\x00" * (seq - expected))
-        if data:
+    kept: list[bytes] = []
+    start = ordered[0][0]
+    end = start                                   # the stream holds [start, end)
+    for offset, data, ts in ordered:
+        if offset > end:
+            _logger.warning("gap in %s:%d -> %s:%d stream: %d bytes missing at offset %d",
+                            src[0], src[1], dst[0], dst[1], offset - end, end - start)
+            buf.extend(b"\x00" * (offset - end))
+            end = offset
+        fresh = data[end - offset:]               # only what is past the end so far
+        if fresh:
             breakpoints.append((len(buf), ts))
-            segments.append(data)
-        buf.extend(data)
-        expected = seq + len(data)
+            kept.append(fresh)
+            buf.extend(fresh)
+            end += len(fresh)
 
-    return Stream(bytes(buf), tuple(breakpoints), tuple(segments))
+    return Stream(bytes(buf), tuple(breakpoints), tuple(kept))
 
 
 def read_session(path: Path, server_ip: str, port: int) -> CaptureSession:
@@ -113,8 +120,8 @@ def read_session(path: Path, server_ip: str, port: int) -> CaptureSession:
 
     server = (server_ip, port)
     t0 = min(float(p.time) for p in packets)     # one origin, so both directions share a clock
-    s2c = _reassemble(packets, server, client)
-    c2s = _reassemble(packets, client, server)
+    s2c = _reassemble(_segments(packets, server, client), server, client)
+    c2s = _reassemble(_segments(packets, client, server), client, server)
 
     _logger.info("session %s:%d <-> %s:%d -- S2C %d bytes, C2S %d bytes",
                  client[0], client[1], server[0], server[1], len(s2c), len(c2s))
