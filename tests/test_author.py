@@ -1110,15 +1110,38 @@ def _smite_world():
                      columns={("creature_template", "equipment_id"): str(SMITE)})
 
 
-def test_mr_smite_seen_first_mid_fight_is_equipped_as_he_respawns():
-    """A capture that joins the fight sees him first with the two axes. The
-    CREATE after his death is what he spawns holding -- the template's sword."""
+def test_mr_smite_seen_with_two_sets_is_a_gap_even_across_a_death():
+    """A capture that joins the fight sees him first with the two axes, the
+    sword after his respawn. The respawn does not reload the template's gear
+    (Creature.cpp:740-760) -- his Reset() does, Warmaster Voone's does not
+    (boss_warmaster_voone.cpp) -- so which set is the template's is not the
+    capture's to say."""
     events = [_smite_create(10.0, _AXES),
               make_event("party_kill", 60.0, guid=GUID, entry=SMITE),
               _smite_create(700.0, _SWORD)]
     rows, gaps = author_rows(Equipment(), events, SMITE, world=_smite_world())
-    assert rows[0].values["equipentry1"] == 2179 and "equipentry2" not in rows[0].values
-    assert any("2183" in note or "7427" in note for note in rows[0].notes)
+    assert rows == []
+    assert any(gap.startswith("creature_equip_template") and "7420" in gap and "7427" in gap
+               for gap in gaps)
+
+
+def test_a_hand_emptied_mid_capture_is_a_change_too():
+    """Smite kneels unarmed between sets (LoadEquipment(0), boss_mr_smite.cpp:135);
+    a VALUES block carries a field only when it changed, a 0 included."""
+    emptied = make_event("object_values", 30.0, guid=GUID, entry=SMITE,
+                         fields=[{"index": 0, "name": DISPLAY_FIELD, "raw": 0}])
+    rows, gaps = author_rows(Equipment(), [_smite_create(10.0, _AXES), emptied], SMITE,
+                             world=_smite_world())
+    assert rows == [] and any(gap.startswith("creature_equip_template") for gap in gaps)
+
+
+def test_two_spawns_armed_differently_are_a_gap():
+    """A spawn's creature_addon can arm it other than its template (Creature.cpp:410-423)."""
+    other = _smite_create(20.0, _HAMMER)
+    other.data["guid"] = GUID + 1
+    rows, gaps = author_rows(Equipment(), [_smite_create(10.0, _SWORD), other], SMITE,
+                             world=_smite_world())
+    assert rows == [] and any("19766" in gap for gap in gaps)
 
 
 def test_mr_smite_changing_weapons_without_a_respawn_is_a_gap():

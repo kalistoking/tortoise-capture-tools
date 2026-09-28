@@ -35,7 +35,6 @@ from typing import Any, Iterator
 from ..core.base import BaseAuthorRule
 from ..core.contracts import (
     CONVENTION, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event, is_corpse, is_creature,
-    spawn_sighting,
 )
 from ..core.registry import author_rule
 
@@ -56,14 +55,12 @@ class Equipment(BaseAuthorRule):
     def __init__(self) -> None:
         self._raw: dict[int, int] | None = None     # the chosen CREATE's fields, by index
         self._named: dict[str, int] = {}             # name -> index, as that CREATE named them
-        self._after_death = False                   # whether that CREATE followed a death
         self._from_corpse = False                   # whether it was a corpse's, for want of any
         self._unresolved: str | None = None
         self._unresolved_extra: list[str] = []
-        # guid -> [(t, fields by index, names)], its deaths, and every VALUES
-        # block's fields: all a script's weapon swap can show up in.
+        # Every CREATE, live and dead, as (t, fields by index, names), and every
+        # VALUES block's fields: all a change of weapons can show up in.
         self._creates: dict[int, list[tuple[float, dict[int, int], dict[str, int]]]] = {}
-        self._deaths: dict[int, list[float]] = {}
         self._corpses: list[tuple[float, dict[int, int], dict[str, int]]] = []
         self._updates: list[tuple[dict[int, int], set[int]]] = []
 
@@ -71,9 +68,7 @@ class Equipment(BaseAuthorRule):
         guid = ev.data.get("guid")
         if not is_creature(guid) or ev.packet.t is None:
             return
-        if ev.kind == "party_kill":
-            self._deaths.setdefault(guid, []).append(ev.packet.t)
-        elif ev.kind == "object_values" and ev.data.get("fields"):
+        if ev.kind == "object_values" and ev.data.get("fields"):
             self._updates.append(({f["index"]: f["raw"] for f in ev.data["fields"]},
                                   {f["index"] for f in ev.data["fields"] if f["name"]}))
         elif (ev.kind == "object_create" and ev.data.get("named_ok", True)
@@ -86,37 +81,39 @@ class Equipment(BaseAuthorRule):
                 self._creates.setdefault(guid, []).append(seen)
 
     def _choose(self) -> None:
-        """What a creature holds is its template's only as it spawns: a script
-        can swap it mid-fight (Mr. Smite's does, boss_mr_smite.cpp:165-180) and
-        its Reset() loads the template's back. So the CREATE after a death is
-        taken when there is one -- any spawn's -- else the first."""
+        """The first live CREATE's; a corpse's only for a creature never seen alive."""
         if self._raw is not None:
             return
-        if not self._creates:
-            if self._corpses:
-                self._raw, self._named = min(self._corpses, key=lambda c: c[0])[1:]
-                self._from_corpse = True
-            return
-        first = min((c for creates in self._creates.values() for c in creates), key=lambda c: c[0])
-        self._raw, self._named = first[1], first[2]
-        for guid, creates in sorted(self._creates.items()):
-            sighting = spawn_sighting([(t, (raw, named)) for t, raw, named in creates],
-                                      self._deaths.get(guid, ()))
-            if sighting is not None and sighting[1]:
-                (self._raw, self._named), self._after_death = sighting[0], True
-                return
+        live = [c for creates in self._creates.values() for c in creates]
+        if live or self._corpses:
+            self._raw, self._named = min(live or self._corpses, key=lambda c: c[0])[1:]
+            self._from_corpse = not live
 
-    def _other_displays(self, ctx: AuthorContext, held: set[int]) -> list[int]:
-        """Display ids the capture showed it holding besides `held`."""
+    def _changes(self, ctx: AuthorContext) -> list[int]:
+        """The displays seen, when the capture shows what it holds changing --
+        empty when it never does. What a creature holds is its template's
+        only until something else sets it: a script mid-fight (Mr. Smite,
+        boss_mr_smite.cpp:165-180), a game event or the spawn's creature_addon
+        (Creature.cpp:410-419); and a respawn reloads the template's only
+        through the script's own Reset (Creature.cpp:740-760 does not)."""
         base = self._base(ctx, DISPLAY_FIELD)
         if base is None:
             return []
+
+        def slots(fields: dict[int, int], named: set[int]) -> dict[int, int]:
+            # As in _slots: a sub-slot arrives unnamed, a named one is another field.
+            return {i: fields.get(base + i, 0) for i in range(EQUIP_SLOTS)
+                    if not (i and base + i in named)}
+
         creates = [c for creates in self._creates.values() for c in creates] + self._corpses
-        blocks = [(fields, set(named.values())) for _, fields, named in creates] + self._updates
-        # As in _slots: a sub-slot arrives unnamed, a named one is another field.
-        seen = {fields.get(base + i) for fields, named in blocks for i in range(EQUIP_SLOTS)
-                if not (i and base + i in named)}
-        return sorted(d for d in seen - held if d)
+        held = [slots(fields, set(named.values())) for _, fields, named in creates]
+        # A VALUES block carries a field only when it changed: any display
+        # field in one is a change, a slot cleared to 0 included.
+        changed = [{i: d for i, d in slots(fields, named).items() if base + i in fields}
+                   for fields, named in self._updates]
+        if len({tuple(sorted(h.items())) for h in held}) < 2 and not any(changed):
+            return []
+        return sorted({d for h in held + changed for d in h.values()})
 
     def _base(self, ctx: AuthorContext, name: str) -> int | None:
         table = getattr(ctx, "fields", None)
@@ -151,12 +148,13 @@ class Equipment(BaseAuthorRule):
                                 f"{slots[0][1]} could not be resolved to an item")
             return
 
-        others = self._other_displays(ctx, {display for _, display, _ in slots})
-        if others and not self._after_death:
-            self._unresolved = (f"it held other weapons in this capture too (display "
-                                f"{', '.join(map(str, others))}) -- a script swaps them "
-                                "mid-fight -- and none was seen after a death, which alone "
-                                "shows what it spawns holding; not proposed, decide by hand")
+        if seen := self._changes(ctx):
+            self._unresolved = (f"what it held changed in this capture (display "
+                                f"{', '.join(map(str, seen))}; 0 is an empty hand): a script, "
+                                "a game event or the spawn's creature_addon can arm it other "
+                                "than its template does, and even a respawn reloads the "
+                                "template's only through its script's Reset -- not proposed, "
+                                "decide by hand")
             return
 
         # Keyed by the creature's entry, where most templates point their
@@ -166,12 +164,8 @@ class Equipment(BaseAuthorRule):
         notes: list[str] = []
         if self._from_corpse:
             notes.append("read off its corpse, the only sighting of it: a corpse holds what "
-                         "the creature died with, the template's unless a script swapped it")
-        if others:
-            notes.append(f"it held other weapons in this capture too (display "
-                         f"{', '.join(map(str, others))}), as a script swaps them mid-fight; "
-                         "these are what the CREATE after its death showed, which is what "
-                         "it spawns holding")
+                         "the creature died with, the template's unless a script, a game "
+                         "event or its creature_addon armed it otherwise")
         skip = []
         if slots[0][0] != 1:
             values["equipentry1"], provenance["equipentry1"] = 0, WIRE
