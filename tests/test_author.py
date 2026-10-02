@@ -1828,6 +1828,85 @@ def test_an_empty_string_in_the_database_is_a_value_not_an_absence():
     assert stored == ""
 
 
+def _client_printing(output: bytes):
+    """Patches subprocess.run so the mysql client "prints" `output`; returns
+    (World, restore)."""
+    import subprocess
+    from tortoise_capture import world as world_mod
+
+    original = world_mod.subprocess.run
+    world_mod.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, output, b"")
+
+    def restore():
+        world_mod.subprocess.run = original
+
+    return world_mod.World(client="unused"), restore
+
+
+def test_a_null_cell_is_no_value_not_the_four_letters():
+    """`mysql -N -B` prints NULL as the text NULL. numeric_column did
+    float("NULL") -- a ValueError out of authoring -- and scalar handed the
+    letters on as a stored value."""
+    world, restore = _client_printing(b"NULL\n")
+    try:
+        assert world.scalar("SELECT x") is None
+        assert world.numeric_column("creature_template", "speed_walk", "entry = 1") is None
+        assert world.row_exists("creature_template", "entry = 1") is False
+    finally:
+        restore()
+
+
+def test_column_still_tells_a_null_cell_from_a_missing_row():
+    """Stats authoring asks which of the two it is (a '' subname over a NULL is
+    left alone), so column() keeps the text NULL where scalar() has None."""
+    world, restore = _client_printing(b"NULL\n")
+    try:
+        assert world.column("creature_template", "subname", "entry = 1") == "NULL"
+    finally:
+        restore()
+    world, restore = _client_printing(b"")
+    try:
+        assert world.column("creature_template", "subname", "entry = 1") is None
+    finally:
+        restore()
+
+
+def test_the_escapes_the_client_puts_in_a_value_are_undone():
+    """-B prints a tab, a newline, a backslash and a NUL inside a value as \\t,
+    \\n, \\\\ and \\0, so a subname holding a tab was two columns."""
+    world, restore = _client_printing(b"a\\tb\tc\n")
+    try:
+        assert world.query("SELECT x") == [["a\tb", "c"]]
+    finally:
+        restore()
+    world, restore = _client_printing(b"l1\\nl2\t\\\\\t\\0\t\\\\n\t\\q\n")
+    try:
+        assert world.query("SELECT x") == [["l1\nl2", "\\", "\0", "\\n", "\\q"]]
+    finally:
+        restore()
+
+
+def test_a_value_holding_a_line_separator_other_than_newline_stays_one_row():
+    """splitlines() also breaks at \\r, U+0085 and U+2028, so a name holding one
+    shifted every row after it."""
+    text = "Ralthas\x85the\u2028Betrayer\rfirst\tsecond\nnext\tone\n"
+    world, restore = _client_printing(text.encode("utf-8"))
+    try:
+        assert world.query("SELECT x") == [["Ralthas\x85the\u2028Betrayer\rfirst", "second"],
+                                           ["next", "one"]]
+    finally:
+        restore()
+
+
+def test_a_client_that_ends_its_rows_with_cr_lf_is_read_the_same():
+    """The Windows mysql.exe writes \\r\\n through a pipe."""
+    world, restore = _client_printing(b"1\tone\r\n2\ttwo\r\n")
+    try:
+        assert world.query("SELECT x") == [["1", "one"], ["2", "two"]]
+    finally:
+        restore()
+
+
 def test_a_table_the_database_would_not_describe_is_an_error():
     """A failed DESCRIBE left key_column None, so the existing-row check let every
     row of that table through as an INSERT, and schema defaults went unfilled

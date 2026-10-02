@@ -22,6 +22,7 @@ to anything that can list processes.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Sequence
@@ -38,9 +39,43 @@ class WorldError(Exception):
     """The database could not answer. Authoring continues without it."""
 
 
+NULL_TEXT = "NULL"      # how `mysql -N -B` prints a NULL cell
+
+# `-B` writes a tab, a newline, a backslash and a NUL inside a value as a
+# backslash sequence, so that a row stays one line and a column one field.
+_BATCH_ESCAPE = re.compile(r"\\(.)", re.DOTALL)
+_BATCH_UNESCAPED = {"n": "\n", "t": "\t", "0": "\0", "\\": "\\"}
+
+
+def _unescape(cell: str) -> str:
+    """Undoes -B's escapes in one pass, so an escaped backslash followed by an
+    `n` comes back as a backslash and an `n`, not as a newline. A sequence
+    the client does not write is left as it stands."""
+    return _BATCH_ESCAPE.sub(lambda m: _BATCH_UNESCAPED.get(m.group(1), m.group(0)), cell)
+
+
+def _rows(output: str) -> list[list[str]]:
+    """The rows of `-N -B` output.
+
+    Split on the newline that ends a row and on nothing else: str.splitlines()
+    also breaks at CR, U+0085, U+2028 and more, any of which can sit inside a
+    value (a name) and shifted every row after it. An empty line is a row too:
+    one empty column, as subname '' prints.
+    """
+    lines = output.split("\n")
+    if lines[-1] == "":
+        lines.pop()                      # the last row's own terminator
+    # The Windows client ends each row "\r\n" through a pipe. A raw CR is not
+    # escaped by -B, so a value ending in one is indistinguishable from that;
+    # only a whole output of CR-terminated rows is taken to be it.
+    if lines and all(line.endswith("\r") for line in lines):
+        lines = [line[:-1] for line in lines]
+    return [[_unescape(cell) for cell in line.split("\t")] for line in lines]
+
+
 def _coerce(text: str | None) -> Any:
     """A DESCRIBE Default cell: 'NULL' -> no usable default, else int/float/str."""
-    if text is None or text == "NULL":
+    if text is None or text == NULL_TEXT:
         return None
     try:
         return int(text)
@@ -69,7 +104,8 @@ class World:
     # -- plumbing ----------------------------------------------------------
 
     def query(self, sql: str) -> list[list[str]]:
-        """Rows as lists of strings. `-N -B` gives clean tab-separated output."""
+        """Rows as lists of strings. `-N -B` gives clean tab-separated output,
+        its escapes undone. A NULL cell is the text NULL (see `scalar`)."""
         env = dict(os.environ)
         password = os.environ.get(ENV_PASSWORD)
         if password:
@@ -86,13 +122,23 @@ class World:
         if done.returncode != 0:
             raise WorldError(done.stderr.decode("utf-8", "replace").strip()
                              or f"{self.client} exited {done.returncode}")
-        # An empty line is a row too: one empty column, as subname '' prints.
-        return [line.split("\t")
-                for line in done.stdout.decode("utf-8", "replace").splitlines()]
+        return _rows(done.stdout.decode("utf-8", "replace"))
 
-    def scalar(self, sql: str) -> str | None:
+    def _cell(self, sql: str) -> str | None:
+        """The first cell of the first row as the client printed it: None only
+        when there is no row, and a NULL is the text NULL."""
         rows = self.query(sql)
         return rows[0][0] if rows and rows[0] else None
+
+    def scalar(self, sql: str) -> str | None:
+        """The first cell of the first row; None for no row and for a NULL.
+
+        A VARCHAR holding exactly the letters NULL is indistinguishable from a
+        NULL on this wire and reads as one too; where that matters, select
+        IFNULL(column, <something else>) instead.
+        """
+        cell = self._cell(sql)
+        return None if cell == NULL_TEXT else cell
 
     # -- the lookups authoring needs ---------------------------------------
 
@@ -146,7 +192,10 @@ class World:
         return (self.scalar(f"SELECT 1 FROM `{table}` WHERE {where} LIMIT 1")) is not None
 
     def column(self, table: str, column: str, where: str) -> str | None:
-        return self.scalar(f"SELECT `{column}` FROM `{table}` WHERE {where} LIMIT 1")
+        """The column's text; None when there is no such row. Unlike `scalar`, a
+        NULL comes back as the text NULL: stats authoring has to tell a NULL
+        subname from a missing row (it leaves a '' over a NULL alone)."""
+        return self._cell(f"SELECT `{column}` FROM `{table}` WHERE {where} LIMIT 1")
 
     def numeric_column(self, table: str, column: str, where: str) -> float | None:
         """Like `column`, but at full precision for a FLOAT/DOUBLE column.
