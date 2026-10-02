@@ -317,6 +317,47 @@ def test_combat_detours_do_not_enter_the_route():
     assert route.data["count"] == len(SQUARE)
 
 
+def test_two_fights_dragged_to_one_spot_do_not_make_a_calm_route_branch():
+    """40 calm hops of a square, and two fights that each ended at the same spot: the
+    spot is a cluster of two, off the walk, and drops_points counted it -- the route
+    was refused as "branching" for hops that calm_hops() leaves out of everything else."""
+    events = []
+    for lap in range(10):
+        for corner, (x, y, z) in enumerate(SQUARE):
+            t = lap * 4 + corner + 1.0
+            events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(x, y, z)))
+    for start in (10.2, 30.2):                   # between two calm hops, both times
+        events += [make_event("ai_reaction", start, guid=GUID, entry=ENTRY, reaction=2),
+                   make_event("move_linear", start + 0.3, guid=GUID, entry=ENTRY,
+                              dest=(500.0, 500.0, 10.0)),          # dragged to the same spot
+                   make_event("party_kill", start + 0.6, guid=GUID, entry=ENTRY)]
+    events.sort(key=lambda ev: ev.packet.t)
+    route = findings_by_kind(run_analyzer(Patrol(), events))["patrol_route"]
+    assert route.data["refused_because"] is None and route.data["count"] == len(SQUARE)
+
+
+def test_a_spot_calm_hops_keep_coming_back_to_still_drops_points():
+    """The same two hops to one spot, but with no fight round them: that is a point the
+    creature kept coming back to, and leaving it off the walk is still a refusal."""
+    events = []
+    for lap in range(10):
+        for corner, (x, y, z) in enumerate(SQUARE):
+            t = lap * 4 + corner + 1.0
+            events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY, dest=(x, y, z)))
+    for t in (10.5, 30.5):
+        events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY,
+                                 dest=(500.0, 500.0, 10.0)))
+    events.sort(key=lambda ev: ev.packet.t)
+    route = findings_by_kind(run_analyzer(Patrol(), events))["patrol_route"]
+    assert route.data["refused_because"] == "branching"
+
+
+def test_a_fresh_route_has_not_come_back_to_its_start():
+    """Set in walk() and read through getattr with a default that could not matter."""
+    from tortoise_capture.analyze.patrol import _Route
+    assert _Route().returns_to_start is False
+
+
 # A wanderer confined to a small area, the way a 5-yard random mover is: six
 # points it keeps coming back to, but never in the same order twice.
 _WANDER_POINTS = [(0.0, 0.0), (3.0, 0.0), (6.0, 0.0), (0.0, 3.0), (3.0, 3.0), (6.0, 3.0)]

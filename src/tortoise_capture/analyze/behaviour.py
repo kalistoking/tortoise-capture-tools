@@ -74,9 +74,13 @@ COINCIDENCE_WINDOW = 1.0
 MIN_INTERVALS_FOR_CONFIDENCE = 5
 
 # A spawn draws its timer once, when it loads (Creature.cpp:1748), and every
-# death reuses the draw -- unless spawn_flags re-draw it +-10% at each death or
-# dynamic respawn cuts it (Creature.cpp:1966-1976). One gap cannot tell those
-# apart; a second that fits the same whole second can.
+# death reuses the draw -- unless the draw is cut or redrawn at that death
+# (Creature.cpp:1966-1976). A spawn opts in to the +-10% redraw with
+# SPAWN_FLAG_RANDOM_RESPAWN_TIME. Dynamic respawn is the other way round: it is
+# applied to every spawn at every death (ApplyDynamicRespawnDelay, :1966), a
+# spawn opts out with SPAWN_FLAG_NO_DYNAMIC_RESPAWN (:2440), and it acts only
+# where the map, rank, level, delay and the players about allow it (:2433-2473).
+# One gap cannot tell those apart; a second that fits the same whole second can.
 MIN_RESPAWNS_FOR_CONFIDENCE = 2
 
 # The respawn is armed at time(nullptr) + delay, in whole seconds from the

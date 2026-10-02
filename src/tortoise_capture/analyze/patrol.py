@@ -188,6 +188,7 @@ class _Route:
         self.engagements: list[float] = []          # aggro-trigger timestamps (ai_reaction)
         self.life = Lifeline()                       # its deaths, by every witness
         self.closes_elsewhere = False               # walk() came round to a non-start point
+        self.returns_to_start = False               # walk() ended on a step back to the start
 
     def add_hop(self, point: tuple[float, float, float], t: float,
                 start: tuple[float, float, float] | None = None,
@@ -329,11 +330,15 @@ class _Route:
         it. Measured on the three test captures: the 11 routes this refuses
         all had fewer points than the database, and the 3 with missed points
         it keeps (81231, 81262, 81265) match its count.
+
+        Only hops made outside a fight count as coming back: a chase goes wherever
+        its target does, and two fights that ended at one spot are a cluster of two
+        there -- the same hops calm_hops() leaves out of the wander area.
         """
         walked = set(order)
-        return self.closes_elsewhere or any(
-            len(members) >= 2 for index, members in enumerate(self.clusters)
-            if index not in walked)
+        returns = Counter(label for label, t in zip(self.labels, self.hop_times)
+                          if label not in walked and not self._in_combat(t))
+        return self.closes_elsewhere or any(n >= 2 for n in returns.values())
 
     def centre(self, index: int) -> tuple[float, float, float]:
         """Mean of every observation of a waypoint -- one lap's noise averaged out."""
@@ -488,7 +493,7 @@ class Patrol(BaseAnalyzer):
                          combat_fraction * 100, "-" if ordered is None else f"{ordered:.2f}")
             yield self.event(route.last_packet, "patrol_route", guid=guid, entry=route.entry,
                              count=len(order), hops=len(route.labels),
-                             closes_loop=getattr(route, "returns_to_start", False),
+                             closes_loop=route.returns_to_start,
                              repeats_start=bool(order) and order[0] in route.repeated(),
                              combat_hop_fraction=combat_fraction,
                              single_visit_fraction=single_visit,
