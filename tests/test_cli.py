@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
 import tempfile
 from pathlib import Path
@@ -183,6 +184,19 @@ def test_a_named_address_no_realm_is_at_is_warned_about_not_whispered():
 
 def test_a_capture_without_a_realm_list_falls_back_to_the_default():
     assert _world_of(_session(with_logon=False)) == ("127.0.0.1", 8090)
+
+
+def test_a_config_value_of_the_wrong_type_is_a_config_error_not_a_traceback():
+    """`repo = 1` in tct.toml was a TypeError out of main; it is the config
+    error with exit 1 that a malformed file already gets."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = Path(tmp) / "tct.toml"
+        config.write_text("[capture]\nrepo = 1\n", encoding="utf-8")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = cli.main(["opcodes", "--config", str(config)])
+    assert code == cli.EXIT_FATAL
+    assert err.getvalue().startswith("ERROR config:") and "[capture] repo" in err.getvalue()
 
 
 def test_slim_refuses_an_out_path_it_would_not_write_to():

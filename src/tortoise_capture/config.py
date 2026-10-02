@@ -129,7 +129,7 @@ class RunConfig:
             named.update(from_file)
         named.update(_apply_env(values, issues))
         named.update(_apply_args(values, args))
-        _validate(values, issues, named)
+        _validate(values, issues, named, path)
 
         log_dir = None if not values["log_to_file"] else Path(values["log_dir"])
         return cls(
@@ -237,8 +237,38 @@ def _whole(value: Any) -> bool:
         isinstance(value, str) and value.isdigit())
 
 
+def _setting(attribute: str) -> str:
+    """`[section] key`: an attribute as the config file spells it."""
+    for section, keys in SCHEMA.items():
+        for key, name in keys.items():
+            if name == attribute:
+                return f"[{section}] {key}"
+    return attribute
+
+
+# Settings with no honest default to fall back on: a path of the wrong type
+# used as the default would run against another checkout, directory or
+# database than the one the file named. Those are refused (the config error
+# main reports, exit 1) rather than warned about like a port or a flag below.
+_PATH_KEYS = ("repo", "log_dir", "out_dir", "cache_dir", "dbc_dir", "db_client")
+
+
+def _require_types(values: dict[str, Any], source: Path | None) -> None:
+    where = f"{source}: " if source else ""
+    for key in _PATH_KEYS:
+        value = values.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{where}{_setting(key)} must be a path (a string), "
+                             f"not {value!r}")
+    port = values.get("db_port")
+    if isinstance(port, bool) or not isinstance(port, int):
+        raise ValueError(f"{where}{_setting('db_port')} must be a whole number, not {port!r}")
+
+
 def _validate(values: dict[str, Any], issues: list[tuple[str, str]],
-              named: set[str] | None = None) -> None:
+              named: set[str] | None = None, source: Path | None = None) -> None:
+    _require_types(values, source)
+
     # A value of the wrong type is reported and not used: "false" is a true
     # string, and 8090.9 would pass as a port the user named.
     for key, fits, kind in (("port", _whole, "a whole number"),

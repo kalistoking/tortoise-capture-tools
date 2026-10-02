@@ -159,6 +159,44 @@ def test_a_value_of_the_wrong_type_is_reported_and_not_used():
     assert "port" not in cfg.named and cfg.port == 8090
 
 
+def _resolve_text(text):
+    def body(tmp):
+        (tmp / CONFIG_NAME).write_text(text, encoding="utf-8")
+        return RunConfig.resolve(Args())
+    return _in_dir(body)
+
+
+def test_a_path_or_database_port_of_the_wrong_type_is_a_config_error():
+    """`repo = 1` went through Path() and came out a TypeError traceback; the
+    same for the other path keys, and `port = "3306"` reached the mysql client
+    as it was. No default is honest for them -- it would point the run at some
+    other checkout, directory or database -- so the file is refused, naming
+    the key as the file spells it."""
+    for text, named in (('[capture]\nrepo = 1\n', "[capture] repo"),
+                        ('[output]\ndir = 1\n', "[output] dir"),
+                        ('[output]\ncache_dir = ["a"]\n', "[output] cache_dir"),
+                        ('[log]\ndir = 1\n', "[log] dir"),
+                        ('[server]\ndbc = true\n', "[server] dbc"),
+                        ('[database]\nport = "3306"\n', "[database] port"),
+                        ('[database]\nport = 3306.5\n', "[database] port"),
+                        ('[database]\nclient = 7\n', "[database] client")):
+        try:
+            _resolve_text(text)
+        except ValueError as exc:
+            assert named in str(exc), (text, str(exc))
+        else:
+            raise AssertionError(f"{text!r} must be refused")
+
+
+def test_a_path_and_a_database_port_of_the_right_type_still_resolve():
+    cfg = _resolve_text('[capture]\nrepo = "x/y"\n[output]\ndir = "o"\ncache_dir = "c"\n'
+                        '[log]\ndir = "l"\n[server]\ndbc = "d"\n'
+                        '[database]\nport = 3307\nclient = "mysql"\n')
+    assert cfg.repo == Path("x/y") and cfg.out_dir == Path("o") and cfg.cache_dir == Path("c")
+    assert cfg.log_dir == Path("l") and cfg.dbc_dir == Path("d")
+    assert cfg.database["port"] == 3307 and cfg.database["client"] == "mysql"
+
+
 def test_an_explicit_config_path_that_is_missing_stops_the_run():
     try:
         RunConfig.resolve(Args(config="no/such/file.toml"))
