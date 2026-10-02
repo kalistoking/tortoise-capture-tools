@@ -303,11 +303,21 @@ def spawn_sighting(creates: Iterable[tuple[float, Any]],
     Prowler seen seven times stood 87 yd from its own point 1.
     """
     creates = sorted(creates, key=lambda c: c[0])
+    if (chosen := create_after_a_death(creates, deaths)) is not None:
+        return chosen[1][1], True
+    return (creates[0][1], False) if creates else None
+
+
+def create_after_a_death(creates: Iterable[tuple[float, Any]],
+                         deaths: Iterable[float]) -> tuple[float, tuple[float, Any]] | None:
+    """(the death, the CREATE) `spawn_sighting` takes for the respawn: the first
+    CREATE after the earliest death that has one. None when no death has."""
+    creates = sorted(creates, key=lambda c: c[0])
     for death in sorted(deaths):
         after = [c for c in creates if c[0] > death]
         if after:
-            return after[0][1], True
-    return (creates[0][1], False) if creates else None
+            return death, after[0]
+    return None
 
 
 @dataclass(frozen=True, slots=True)

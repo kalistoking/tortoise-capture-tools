@@ -23,12 +23,15 @@ the create that follows a death puts it back at its spawn point. Without a
 death, a wanderer's position is the centre of the area it was seen to wander
 (`analyze/patrol.py`'s `wander_area`), and anything else keeps the first
 sighting, flagged, because it is then wherever the creature was when the
-capture started. A patrol's route offers nothing better: against the twelve
-authored patrols in the Elwynn capture, the first sighting lands a median 31
-yd from the authored spawn and the route's centre 35 yd, and the authored spawn
-sits 2.5-17 yd off its own waypoints, at no point the route itself marks. Both
-this rule and `patrol.py` read the spawn through `spawn_sighting()`, so the
-route is numbered from where the row stands.
+capture started. A create that follows a death by far more than the spawn's own
+respawn timer (`late_by`) is no better: the player was out of range when it
+came back, and it shows the creature wherever it had walked since. A patrol's
+route offers nothing better: against the twelve authored patrols in the Elwynn
+capture, the first sighting lands a median 31 yd from the authored spawn and
+the route's centre 35 yd, and the authored spawn sits 2.5-17 yd off its own
+waypoints, at no point the route itself marks. Both this rule and `patrol.py`
+read the spawn through `spawn_sighting()`, so the route is numbered from where
+the row stands.
 
 `spawntimesecsmin/max` is looser about this than position has to be: it reads
 the spawn's own `respawn_timer` finding from `behaviour.py`, which counts a
@@ -57,7 +60,7 @@ from typing import Any, Iterator
 from ..core.base import BaseAuthorRule
 from ..core.contracts import (
     CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, Lifeline, is_corpse,
-    is_creature, spawn_sighting,
+    create_after_a_death, is_creature, spawn_sighting,
 )
 from ..core.registry import author_rule
 
@@ -71,6 +74,11 @@ GUID_COUNTER_MASK = 0xFFFFFF    # ObjectGuid low bits: the spawn's database id
 # Object.cpp:2190) sets neither, and still passes for a spawn.
 _SUMMONER = {"UNIT_FIELD_CREATEDBY", "UNIT_FIELD_SUMMONEDBY"}
 
+
+# A CREATE this many seconds later than the spawn's own timer allows (a gap falls in
+# (timer - 1, timer + 0.5), behaviour.py's RESPAWN_SLACK) is the player coming back,
+# not the creature coming back: it had time to walk on.
+LATE_SLACK = 5.0
 
 # Said where a position is not a respawn's although the capture shows a death.
 _DIED_NOT_SEEN_AGAIN = "it died in the capture but no CREATE showed it standing again afterwards"
@@ -97,6 +105,21 @@ class _Spawn:
         if not self.creates and self.lies_dead():
             return min(self.corpses)[1], False
         return spawn_sighting(self.creates, self.life.deaths)
+
+    def late_by(self) -> tuple[float, float] | None:
+        """(the gap, the timer) when the CREATE taken for the respawn came long
+        after the creature was back: the player was out of range, and it shows
+        the creature wherever it had walked since. The timer is what the
+        capture's respawn_timer finding knows -- its whole second, or else its
+        shortest gap, which a late sighting only lengthens. None when nothing
+        says so: one gap is its own timer, and a corpse CREATE only bounds the
+        death, so the gap from it measures nothing."""
+        chosen = create_after_a_death(self.creates, self.life.deaths)
+        timer = (self.respawn or {}).get("seconds") or (self.respawn or {}).get("value_min")
+        if chosen is None or timer is None or chosen[0] not in self.life.timed:
+            return None
+        gap = chosen[1][0] - chosen[0]
+        return (gap, timer) if gap > timer + LATE_SLACK else None
 
     def lies_dead(self) -> bool:
         """Seen only dead, and never seen dying: a spawn that stands dead by
@@ -188,6 +211,8 @@ class Spawn(BaseAuthorRule):
     def _spawn_rows(self, ctx: AuthorContext, db_guid: int,
                     spawn: _Spawn) -> Iterator[AuthoredRow]:
         (x, y, z, o), after_death = spawn.sighting()
+        late = spawn.late_by() if after_death else None
+        at_spawn = after_death and late is None             # a respawn the player was there for
         wander = spawn.wander if not spawn.patrols() else None
         values: dict[str, Any] = {
             "guid": db_guid, "id": ctx.entry,
@@ -199,9 +224,12 @@ class Spawn(BaseAuthorRule):
                       "position_z": WIRE, "orientation": WIRE,
                       "health_percent": CONVENTION, "mana_percent": CONVENTION}
         notes = []
-        if wander and not after_death:
+        if wander and not at_spawn:
             for axis in ("position_x", "position_y", "position_z"):
                 values[axis] = self.wire_float(wander[axis])
+                provenance[axis] = DERIVED
+        elif late:
+            for axis in ("position_x", "position_y", "position_z"):
                 provenance[axis] = DERIVED
 
         skip: set[str] = {"map"}
@@ -258,15 +286,22 @@ class Spawn(BaseAuthorRule):
             # schema's 5 is sized for a random mover, as for a waypoint mover.
             values["wander_distance"] = 0
             provenance["wander_distance"] = CONVENTION
-        if wander and not after_death:
-            why = _DIED_NOT_SEEN_AGAIN if spawn.life.deaths else "the capture holds no death for it"
+        came_late = (f"the first CREATE after its death came {late[0]:.0f} s after it, where "
+                     f"its respawn takes about {late[1]:.0f} s" if late else None)
+        if wander and not at_spawn:
+            why = came_late or (_DIED_NOT_SEEN_AGAIN if spawn.life.deaths
+                                else "the capture holds no death for it")
             notes.append("position is the centre of the area it wandered, NOT a respawn -- "
                          f"{why}; orientation is whichever way it faced when first seen")
         elif spawn.lies_dead():
             notes.append("position is where it lay dead, the only way it was seen: its spawn "
                          "point if it stands dead by default, where it died if it was killed "
                          "before the capture began -- see gaps")
-        elif not after_death:
+        elif late:
+            notes.append(f"position is the first CREATE after its death, NOT a respawn -- "
+                         f"{came_late}: the player came back long after it had, so it had "
+                         "walked on and this may be mid-route")
+        elif not at_spawn:
             why = (_DIED_NOT_SEEN_AGAIN if spawn.life.deaths
                    else "the capture holds no death for this creature")
             notes.append(f"position is the first sighting, NOT a respawn -- {why}, so this "

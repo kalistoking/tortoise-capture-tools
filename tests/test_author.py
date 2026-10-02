@@ -918,6 +918,83 @@ def test_a_corpse_seen_before_any_live_sighting_proves_no_death():
     assert any("NOT a respawn" in note for note in creature.notes)
 
 
+def _respawned(gaps, value_max=None, **extra):
+    """The analyzer's finding for a spawn whose death-to-sighting gaps were `gaps`."""
+    return make_event("respawn_timer", 999.0, guid=GUID, entry=ENTRY,
+                      value_min=min(gaps), value_max=value_max or max(gaps), samples=len(gaps),
+                      seconds=None, confident=False, **extra)
+
+
+def _a_sighting_long_after_the_respawn():
+    """Died at 100 and the player was out of range when it was back, 300 s later;
+    the CREATE that follows at 1000 shows it where it had walked to. It died
+    again at 1010 and came back at 1310 in view: the gaps are 900 and 300."""
+    return [_create(12.9, -9177.9, -1026.8),
+            make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
+            _create(1000.0, -9129.66, -1098.79, 73.66),
+            make_event("party_kill", 1010.0, guid=GUID, entry=ENTRY),
+            _create(1310.0, -9177.9, -1026.8)]
+
+
+def test_a_create_long_after_the_timer_is_not_the_spawn_point():
+    """The first CREATE after a death is where the creature stood when the
+    player came back, not where it respawned, unless the player was there."""
+    events = _a_sighting_long_after_the_respawn() + [_respawned([900.0, 300.0])]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert abs(creature.values["position_x"] - (-9129.66)) < 0.01
+    assert any("may be mid-route" in note and "900" in note and "300" in note
+               for note in creature.notes)
+    assert all(creature.provenance[axis] == DERIVED
+               for axis in ("position_x", "position_y", "position_z"))
+
+
+def test_a_create_within_the_timer_of_the_death_is_the_spawn_point():
+    events = [_create(12.9, -9177.9, -1026.8),
+              make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
+              _create(400.0, -9129.66, -1098.79, 73.66),
+              _respawned([300.0, 300.2])]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert not any("mid-route" in note or "NOT a respawn" in note for note in creature.notes)
+    assert creature.provenance["position_x"] == WIRE
+
+
+def test_one_gap_is_no_evidence_that_a_create_came_late():
+    """With no other respawn to say what the timer is, the gap is the timer."""
+    events = [_create(12.9, -9177.9, -1026.8),
+              make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
+              _create(1000.0, -9129.66, -1098.79, 73.66),
+              _respawned([900.0])]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert not any("mid-route" in note for note in creature.notes)
+    assert creature.provenance["position_x"] == WIRE
+
+
+def test_a_late_create_after_a_corpse_is_not_measured_against_the_timer():
+    """A corpse CREATE only bounds when it died, so the gap from it is no measure."""
+    events = [_create(12.9, -9177.9, -1026.8), _lying_dead(500.0),
+              _create(1000.0, -9129.66, -1098.79, 73.66), _respawned([200.0, 300.0])]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert not any("mid-route" in note for note in creature.notes)
+
+
+def test_a_wanderer_seen_long_after_its_respawn_is_placed_at_its_centre():
+    """The centre of the area is a better home than wherever a late CREATE found it."""
+    events = _a_sighting_long_after_the_respawn() + [
+        _respawned([900.0, 300.0]),
+        make_event("wander_area", 999.0, guid=GUID, entry=ENTRY, position_x=-9150.0,
+                   position_y=-1090.0, position_z=70.0, radius=4.92, hops=81),
+    ]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert creature.values["position_x"] == -9150.0
+    assert creature.provenance["position_x"] == DERIVED
+    assert any("NOT a respawn" in note and "900" in note for note in creature.notes)
+
+
 _GAMEOBJECT = make_guid(ENTRY, 7, high=0xF110)
 
 
