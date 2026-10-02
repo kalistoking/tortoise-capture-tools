@@ -94,6 +94,10 @@ def _reassemble(segments: list[tuple[int, bytes, float]], src: tuple[str, int],
 
     buf = bytearray()
     breakpoints: list[tuple[int, float]] = []
+    # A byte is readable once every byte before it is there, so a late retransmit
+    # holds back what follows it: times along the stream only go forward, which
+    # framing.walk's callers (heapq.merge of the two directions) rely on.
+    latest = float("-inf")
     kept: list[bytes] = []
     gaps: list[tuple[int, int]] = []
     start = ordered[0][0]
@@ -107,7 +111,8 @@ def _reassemble(segments: list[tuple[int, bytes, float]], src: tuple[str, int],
             end = offset
         fresh = data[end - offset:]               # only what is past the end so far
         if fresh:
-            breakpoints.append((len(buf), ts))
+            latest = max(latest, ts)
+            breakpoints.append((len(buf), latest))
             if offset < end:
                 kept[-1] += fresh                 # the tail of an overlap continues its chunk
             else:

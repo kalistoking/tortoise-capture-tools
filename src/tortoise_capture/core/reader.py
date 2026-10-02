@@ -125,6 +125,9 @@ class ByteReader:
         return self._unpack(f"<{count}f", count * 4, what)
 
     def raw(self, n: int, what: str = "bytes") -> bytes:
+        if n < 0:
+            raise WireError(f"{self.label or 'payload'}: reading {what} at offset {self.pos} "
+                            f"with a length of {n}")
         if self.pos + n > len(self.buf):
             raise WireError(
                 f"{self.label or 'payload'}: reading {what} at offset {self.pos} "

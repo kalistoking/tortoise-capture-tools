@@ -124,3 +124,45 @@ def test_a_message_whose_body_the_capture_never_saw_is_not_decoded():
 def test_the_reassembly_says_where_it_filled_a_gap():
     segments = [(1000, SENT[:200], 0.0), (1300, SENT[300:], 1.0)]
     assert pcap._reassemble(segments, CLIENT, SERVER).gaps == ((200, 300),)
+
+
+def test_the_bytes_a_late_retransmit_supplied_do_not_send_the_stream_back_in_time():
+    """The capture saw bytes 200-300 at t=2 and the retransmit of 100-200 at t=3. The
+    retransmit's bytes took its time and the later ones kept theirs, so times ran
+    1, 3, 2 along the stream; `heapq.merge` of the two directions assumes each is
+    in order and misplaced the other direction's messages around every retransmit.
+    A byte is readable once every byte before it is there: 1, 3, 3."""
+    segments = [(1000, SENT[:100], 1.0), (1200, SENT[200:300], 2.0), (1100, SENT[100:200], 3.0)]
+    stream = pcap._reassemble(segments, CLIENT, SERVER)
+    times = [stream.time_at(offset, 0.0) for offset in (0, 100, 200)]
+    assert times == [1.0, 3.0, 3.0]
+
+
+def test_a_stream_too_short_for_its_first_header_is_reported_not_a_traceback():
+    """A stream of 1 to 3 bytes (S2C) reached struct.unpack and raised out of the walk."""
+    import logging
+
+    from tortoise_capture.core.contracts import Direction
+    from tortoise_capture.wire import framing
+
+    class Table:
+        max_opcode = 0x400
+
+        def name(self, opcode):
+            return None
+
+    seen = []
+
+    class Catch(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    handler = Catch(logging.ERROR)
+    framing._logger.addHandler(handler)
+    try:
+        for direction, size in ((Direction.S2C, 3), (Direction.C2S, 5)):
+            stream = pcap.Stream(b"\x00" * size, ((0, 0.0),))
+            assert list(framing.walk(stream, direction, bytes(40), Table(), 0.0)) == []
+    finally:
+        framing._logger.removeHandler(handler)
+    assert len(seen) == 2 and "3 byte" in seen[0] and "5 byte" in seen[1]

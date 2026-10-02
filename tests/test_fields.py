@@ -37,6 +37,15 @@ def test_a_field_is_named_rather_than_the_end_marker_it_shares_an_index_with():
     assert by_index[6] == "UNIT_FIELD_CHARM" and env["OBJECT_END"] == 6
 
 
+def test_the_last_member_of_an_enum_needs_no_trailing_comma():
+    """The member pattern required a comma, and C++ allows none after the last one:
+    EUnitFields ends `PLAYER_END` bare, and it was dropped without a word."""
+    header = HEADER.replace("0x04 + OBJECT_END,\n}", "0x04 + OBJECT_END\n}")
+    assert header != HEADER
+    env, by_index = tables._evaluate(header, ("EObjectFields", "EUnitFields"))
+    assert env["UNIT_END"] == 10 and by_index[10] == "UNIT_END"
+
+
 def test_a_symbol_the_header_does_not_define_is_reported_not_read_as_zero():
     """An unknown term summed as 0 would shift every index after it in silence."""
     header = HEADER.replace("0x00 + OBJECT_END", "0x00 + OBJECT_ENDS")

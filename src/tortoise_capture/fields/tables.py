@@ -28,11 +28,12 @@ _logger = _log.get_logger("fields.tables")
 FIELDS_FILE = "src/game/Objects/UpdateFields.h"
 
 _ENUM_RE = r"enum\s+{name}\s*\{{(.*?)\}};"
-_MEMBER_RE = re.compile(r"(\w+)\s*(?:=\s*([^,]+))?\s*,")
+# A member ends at a comma, or at the end of the enum body: C++ allows none after the last.
+_MEMBER_RE = re.compile(r"(\w+)\s*(?:=\s*([^,]+))?\s*(?:,|$)")
 _LITERAL_RE = re.compile(r"^(0x[0-9A-Fa-f]+|\d+)$")
 
 # Part of the cache's stamp: a cache written by an older parser holds its names.
-_PARSER_VERSION = 2
+_PARSER_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)

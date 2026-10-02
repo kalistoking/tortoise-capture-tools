@@ -66,6 +66,10 @@ def walk(stream: Stream, direction: Direction, key: bytes, table: OpcodeTable,
     if not len(stream):
         _logger.error("%s stream is empty", direction)
         return
+    if len(stream) < header_len:
+        _logger.error("%s stream holds %d byte(s), fewer than the %d of its first header -- "
+                      "nothing to decode", direction, len(stream), header_len)
+        return
 
     # The handshake message is plaintext -- crypto is only initialised once
     # auth succeeds. Its own `size` field says exactly where it ends, so its

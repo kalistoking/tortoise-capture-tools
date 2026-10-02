@@ -28,6 +28,19 @@ def test_overrun_names_the_field_and_the_packet():
         raise AssertionError("an overrun must raise WireError")
 
 
+def test_a_negative_length_is_an_error_not_a_step_backwards():
+    """raw(-1) passed the bound check, returned an odd slice and moved the cursor back."""
+    r = ByteReader(b"abc")
+    r.u8()
+    try:
+        r.raw(-1)
+    except WireError as exc:
+        assert "-1" in str(exc)
+    else:
+        raise AssertionError("a negative length must raise WireError")
+    assert r.pos == 1
+
+
 def test_packguid_places_bytes_by_mask_bit_not_read_order():
     # Only byte 3 present: it belongs at bit position 3 (<< 24), not at the front.
     assert ByteReader(bytes([0b00001000, 0x7F])).packguid() == 0x7F000000
