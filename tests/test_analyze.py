@@ -112,6 +112,62 @@ def test_a_path_that_stops_shows_no_repeat():
     assert route.data["repeats_start"] is False
 
 
+# A five-point loop, one node of which pauses and wanders.
+_PENTAGON = [(0.0, 0.0, 10.0), (20.0, 0.0, 10.0), (30.0, 15.0, 10.0),
+             (10.0, 25.0, 10.0), (-10.0, 15.0, 10.0)]
+
+
+def _loop_with_a_wandering_node(node, near_draws, laps=10, held=None):
+    """Hops round the loop. At `node` the creature pauses with a wander_distance
+    (WaypointMovementGenerator.cpp:167-172): a hop at walk speed to a random
+    point within it (RandomMovementGenerator.cpp:52-61), then, when the pause
+    ends, a hop back to the node set to take exactly 1000 ms (:111-119). The
+    draw of each lap in `near_draws` fell 0.8 yd from the node, the others 3 yd
+    away, each in its own direction. `held` is a node the path holds twice in
+    a row: a move from where it already stands."""
+    events, t, here = [], 1.0, _PENTAGON[-1]
+
+    def hop(start, dest, ms):
+        nonlocal t
+        events.append(make_event("move_linear", t, guid=GUID, entry=ENTRY,
+                                 start=start, dest=dest, duration_ms=ms))
+        t += 5.0
+
+    for lap in range(laps):
+        for index, (x, y, z) in enumerate(_PENTAGON):
+            dest = (x, y, z)
+            hop(here, dest, round(math.dist(here[:2], dest[:2]) / 2.5 * 1000))
+            here = dest
+            if index == held:
+                hop(here, dest, 2)
+            if index == node:
+                radius = 0.8 if lap in near_draws else 3.0
+                angle = lap * 2.4
+                draw = (x + radius * math.cos(angle), y + radius * math.sin(angle), z)
+                hop(here, draw, round(radius / 2.5 * 1000))
+                hop(draw, dest, 1000)
+    return run_analyzer(Patrol(), events)
+
+
+def test_a_node_that_wanders_is_not_a_point_held_twice():
+    """A draw within a yard of the node clusters into it: the hop out and the
+    hop back are both moves from where the creature stands to the node, two a
+    lap on those laps, and the node was written into creature_movement twice."""
+    found = _loop_with_a_wandering_node(node=2, near_draws={1, 3, 6, 8})
+    assert findings_by_kind(found)["patrol_route"].data["confident"] is True
+    waypoints = [ev.data for ev in found if ev.kind == "patrol_waypoint"]
+    assert [w["point"] for w in waypoints if w["repeats"]] == []
+    assert [w["point"] for w in waypoints if w["still_hops"]] == []
+
+
+def test_a_point_held_twice_still_shows_beside_a_node_that_wanders():
+    """A held point's move is zero-length and quick, nothing like the return."""
+    found = _loop_with_a_wandering_node(node=2, near_draws={1, 3, 6, 8}, held=3)
+    held = {(round(ev.data["position_x"]), round(ev.data["position_y"]))
+            for ev in found if ev.kind == "patrol_waypoint" and ev.data["repeats"]}
+    assert held == {(10, 25)}
+
+
 def test_numbering_starts_at_the_spawn_point_not_the_capture_start():
     """A capture that begins mid-route must still number from the spawn."""
     # Start walking at the third corner, so hop order is 3,4,1,2,3,4,...

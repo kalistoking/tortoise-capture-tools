@@ -66,6 +66,19 @@ MIN_WAYPOINTS = 3            # fewer than this is not a route
 MIN_REPEATS = 3
 MIN_REPEAT_SHARE = 0.25         # of the arrivals at that point
 
+# A node with a pause and a wander_distance is not held twice, though it looks
+# it. During the pause the server hops the creature to a random point within
+# wander_distance (WaypointMovementGenerator.cpp:167-172, RandomMovement
+# Generator.cpp:52-61) and, when the pause ends, sends it back to the node with
+# a speed set to take exactly one second (WaypointMovementGenerator.cpp:111-119).
+# A draw within CLUSTER_TOLERANCE of the node clusters into it, and then the
+# hop out and the hop back are each a move from where the creature stands to
+# the node -- two a lap. A held point's own move is zero-length and takes a few
+# milliseconds, nothing like this one.
+WANDER_RETURN_MS = 1000
+WANDER_RETURN_SLOP_MS = 10      # the duration is rounded to whole milliseconds twice over
+MOVED = 0.01                    # yards: less than this is no move at all
+
 # Above this share of hops seen during an aggro-to-death window, a route is
 # more likely combat repositioning across many re-engagements than a real
 # patrol -- see combat_hop_fraction()'s docstring and docs/feasibility-
@@ -167,6 +180,8 @@ class _Route:
         self.hop_times: list[float] = []            # packet time per hop, parallel to labels
         self.hop_points: list[tuple[float, float, float]] = []   # destination per hop, too
         self.hop_stills: list[bool] = []            # whether the hop set off from its destination
+        self.hop_lengths: list[float | None] = []   # yards from where it set off, if the wire said
+        self.hop_ms: list[int | None] = []          # the duration the server gave it
         self.creates: list[tuple[float, tuple[float, float, float]]] = []   # (t, position)
         self.entry: int | None = None
         self.last_packet: Packet | None = None
@@ -175,11 +190,14 @@ class _Route:
         self.closes_elsewhere = False               # walk() came round to a non-start point
 
     def add_hop(self, point: tuple[float, float, float], t: float,
-                start: tuple[float, float, float] | None = None) -> None:
+                start: tuple[float, float, float] | None = None,
+                duration_ms: int | None = None) -> None:
         self.hop_times.append(t)
         self.hop_points.append(point)
-        self.hop_stills.append(start is not None
-                               and math.dist(start[:2], point[:2]) <= CLUSTER_TOLERANCE)
+        length = None if start is None else math.dist(start[:2], point[:2])
+        self.hop_lengths.append(length)
+        self.hop_ms.append(duration_ms)
+        self.hop_stills.append(length is not None and length <= CLUSTER_TOLERANCE)
         for index, members in enumerate(self.clusters):
             if math.dist(members[0][:2], point[:2]) <= CLUSTER_TOLERANCE:
                 members.append(point)
@@ -254,10 +272,33 @@ class _Route:
         player's gossip (MotionMaster.cpp:914-935) is sent again to the same
         point on resuming (WaypointMovementGenerator.cpp:213-218), but from
         wherever the pause caught it."""
-        doubles = Counter(a for a, b, still in zip(self.labels, self.labels[1:],
-                                                    self.hop_stills[1:]) if a == b and still)
+        wandering = self._wander_hops()
+        doubles = Counter(self.labels[i] for i in range(1, len(self.labels))
+                          if self.labels[i] == self.labels[i - 1] and self.hop_stills[i]
+                          and i not in wandering)
         return {point: (hops, len(self.clusters[point]) - hops)
                 for point, hops in doubles.items()}
+
+    def _moved(self, hop: int) -> bool:
+        return (self.hop_lengths[hop] or 0.0) > MOVED
+
+    def _wander_hops(self) -> set[int]:
+        """The hops of a creature wandering at a waypoint, not holding it: the
+        hop back to the node that takes exactly a second, and the draws within
+        a yard of the node that came before it in the same pause -- the still
+        hops directly behind it at the same point, as long as they moved."""
+        found: set[int] = set()
+        for hop, ms in enumerate(self.hop_ms):
+            if (ms is None or abs(ms - WANDER_RETURN_MS) > WANDER_RETURN_SLOP_MS
+                    or not self._moved(hop)):
+                continue
+            found.add(hop)
+            behind = hop - 1
+            while (behind >= 0 and self.hop_stills[behind] and self._moved(behind)
+                   and self.labels[behind] == self.labels[hop]):
+                found.add(behind)
+                behind -= 1
+        return found
 
     def repeated(self) -> dict[int, tuple[int, int]]:
         """The points the path holds twice in a row: still hops enough to call."""
@@ -379,7 +420,8 @@ class Patrol(BaseAnalyzer):
             route.entry = ev.data.get("entry")
             route.last_packet = ev.packet
             start = ev.data.get("start")
-            route.add_hop(tuple(ev.data["dest"]), ev.packet.t, tuple(start) if start else None)
+            route.add_hop(tuple(ev.data["dest"]), ev.packet.t, tuple(start) if start else None,
+                          ev.data.get("duration_ms"))
         elif ev.kind == "object_create":
             # A create block is the creature standing where it spawned -- but
             # only the respawn one is; the first sighting catches it mid-route.
