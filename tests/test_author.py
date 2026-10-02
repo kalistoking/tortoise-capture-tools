@@ -1601,7 +1601,10 @@ def test_an_offhand_is_authored_too_not_silently_dropped():
     rows, _ = author_rows(Equipment(), events, ENTRY, world=world)
     assert rows[0].values["equipentry1"] == 5276
     assert rows[0].values["equipentry2"] == 9001
-    assert "equipentry3" not in rows[0].values          # empty slot stays unset
+    # The empty slot is a 0 the CREATE showed (it carries every non-zero field), as
+    # the main hand's is: not left for the schema to fill as "not observed".
+    assert rows[0].values["equipentry3"] == 0
+    assert rows[0].provenance["equipentry3"] == WIRE
 
 
 # class 4, subclass 6, inventory type 14 -- a shield.
@@ -1768,7 +1771,8 @@ def test_a_creature_that_only_ever_cast_triggered_spells_has_no_spell_list():
 
 
 def test_a_chosen_cast_still_gives_the_template_its_spell_list():
-    rows, _ = author_rows(Stats(), _identity_events() + _cast(60.0, 1449), ENTRY)
+    world = StubWorld(columns={("creature_template", "spell_list_id"): "0"})
+    rows, _ = author_rows(Stats(), _identity_events() + _cast(60.0, 1449), ENTRY, world=world)
     assert rows[0].values["spell_list_id"] == ENTRY
 
 
@@ -2288,3 +2292,62 @@ def test_describe_is_cached_per_table():
     world.describe("creature")
     world.describe("creature_movement")
     assert len(calls) == 2          # one per distinct table, not per call
+
+
+# --------------------------------------------------------------------------
+# P7 item 21: what authoring says when it cannot check, cannot fit, or cannot know
+# --------------------------------------------------------------------------
+
+def test_spells_past_the_eighth_slot_are_named_as_left_out_not_dropped():
+    """creature_spells has eight slots; the ninth and tenth spell seen vanished, the note
+    said "8 spell(s) seen cast", and the gaps went on describing the vanished ones' timing."""
+    events = [make_event("creature_query", 12.9, entry=ENTRY, name="Many")]
+    for n in range(10):
+        events += _cast(60.0 + n, 100 + n)
+    rows, gaps = author_rows(Spells(), events, ENTRY)
+    values = rows[0].values
+    assert "spellId_8" in values and "spellId_9" not in values
+    notes = " ".join(rows[0].notes)
+    assert "10 spell(s) seen cast" in notes
+    assert "108" in notes and "109" in notes
+    assert any("108" in gap and "109" in gap and "slot" in gap for gap in gaps)
+    assert not any("for spell 108" in gap or "for spell 109" in gap for gap in gaps)
+
+
+def test_the_cast_target_note_names_the_default_it_read_not_a_fixed_one():
+    """The note said "(1)" whatever the table says, and with no database nothing was read."""
+    world = StubWorld(schema={"creature_spells": {"castTarget_1": 3}})
+    rows, _ = author_rows(Spells(), _spell_events(), ENTRY, world=world)
+    note = next(n for n in rows[0].notes if n.startswith("castTarget"))
+    assert "default (3)" in note
+    rows, _ = author_rows(Spells(), _spell_events(), ENTRY)
+    note = next(n for n in rows[0].notes if n.startswith("castTarget"))
+    assert "default (" not in note
+
+
+def test_an_empty_hand_is_one_reading_whichever_hand_it_is():
+    """An absent main hand was a 0 read off the wire; an absent offhand or ranged slot
+    was the schema's 0, "not observed" -- one fact (a CREATE carries every non-zero
+    field) under two provenances."""
+    world = StubWorld(displays={5010: 5276}, columns={
+        ("item_template", "class"): "2", ("item_template", "subclass"): "10",
+        ("item_template", "inventory_type"): "17"},
+        schema={"creature_equip_template": {"equipentry1": 0, "equipentry2": 0,
+                                            "equipentry3": 0}})
+    rows, _ = author_rows(Equipment(), _equip_events(), ENTRY, world=world)
+    row = rows[0]
+    assert row.values["equipentry1"] == 5276
+    for slot in (2, 3):
+        assert row.values[f"equipentry{slot}"] == 0
+        assert row.provenance[f"equipentry{slot}"] == WIRE
+    assert any("offhand" in note and "ranged" in note for note in row.notes)
+    assert not any("schema default" in note and "equipentry" in note for note in row.notes)
+
+
+def test_without_a_database_no_spell_list_is_proposed_for_the_template():
+    """The guard -- no list of its own, no EventAI, no script -- reads the database; with
+    none it was answered "no" for all three and spell_list_id = entry went out."""
+    rows, gaps = author_rows(Stats(), _identity_events() + _cast(60.0, 1449), ENTRY)
+    assert "spell_list_id" not in rows[0].values
+    assert any("spell_list_id" in gap and "database" in gap and str(ENTRY) in gap
+               for gap in gaps)

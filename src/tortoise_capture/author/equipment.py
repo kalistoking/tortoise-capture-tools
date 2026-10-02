@@ -41,6 +41,7 @@ from ..core.registry import author_rule
 DISPLAY_FIELD = "UNIT_VIRTUAL_ITEM_DISPLAY"
 INFO_FIELD = "UNIT_VIRTUAL_ITEM_INFO"
 EQUIP_SLOTS = 3                  # mainhand, offhand, ranged
+_SLOT_NAMES = ("main-hand", "offhand", "ranged")
 INFO_WORDS_PER_SLOT = 2          # Size:6 over three slots
 
 
@@ -167,9 +168,16 @@ class Equipment(BaseAuthorRule):
                          "the creature died with, the template's unless a script, a game "
                          "event or its creature_addon armed it otherwise")
         skip = []
-        if slots[0][0] != 1:
-            values["equipentry1"], provenance["equipentry1"] = 0, WIRE
-            notes.append("no main-hand item was broadcast; a CREATE carries every non-zero "
+        # An empty hand is one reading in every slot: a CREATE carries every non-zero
+        # field, so a slot that is not there is a 0, not an unknown. Left to the schema
+        # the offhand and ranged slots alone came out as "default (not observed)".
+        present = {slot for slot, _, _ in slots}
+        empty = [n for n in range(1, EQUIP_SLOTS + 1) if n not in present]
+        for slot in empty:
+            values[f"equipentry{slot}"], provenance[f"equipentry{slot}"] = 0, WIRE
+        if empty:
+            names = " or ".join(_SLOT_NAMES[n - 1] for n in empty)
+            notes.append(f"no {names} item was broadcast; a CREATE carries every non-zero "
                          "field, so its absence is a 0, not an unknown")
         for slot, display, info in slots:
             found, found_notes, failure = self._resolve(ctx, display, info)

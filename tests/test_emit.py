@@ -147,3 +147,77 @@ def test_a_missing_template_is_reported_not_raised():
         text_sink._logger.removeHandler(handler)
     assert reported == [(logging.ERROR, "module demo emits kind 'unknown' with no text template")]
     assert "(no records)" in out.getvalue()
+
+
+def _errors_of(logger, work):
+    messages = []
+
+    class Catch(logging.Handler):
+        def emit(self, record):
+            messages.append(record.getMessage())
+
+    handler = Catch(logging.ERROR)
+    logger.addHandler(handler)
+    try:
+        work()
+    finally:
+        logger.removeHandler(handler)
+    return messages
+
+
+def test_a_template_that_cannot_format_a_value_is_reported_not_raised():
+    """`{x:.2f}` over a None raises TypeError, which only KeyError, IndexError and
+    ValueError were caught for: the whole run ended in a traceback."""
+
+    class Moving(DemoModule):
+        text_templates = {"demo": "x={x:.2f}"}
+
+    out = io.StringIO()
+    sink = TextSink(out, [Moving()])
+    messages = _errors_of(text_sink._logger,
+                          lambda: sink.handle(_event(x=None), Moving()))
+    assert len(messages) == 1 and "does not match its fields" in messages[0]
+
+
+def test_an_event_record_keeps_its_scope():
+    """`scope="session"` is what lets an event past an --entry filter; the record dropped it."""
+    from tortoise_capture.emit import jsonl
+
+    event = Event(packet=make_packet(1, b""), module_id="m", kind="k", data={}, scope="session")
+    assert jsonl.event_record(event)["scope"] == "session"
+
+
+def test_a_value_json_has_no_form_for_is_reported_not_quietly_a_string():
+    from tortoise_capture.emit import jsonl
+    import json
+
+    out = io.StringIO()
+    event = Event(packet=make_packet(1, b""), module_id="m", kind="k", data={"ids": {1, 2}})
+    messages = _errors_of(jsonl._logger, lambda: jsonl.EventSink(out).handle(event))
+    assert len(messages) == 1 and "set" in messages[0]
+    assert json.loads(out.getvalue())["data"]["ids"]            # still one valid line
+
+
+def test_a_dump_line_that_is_not_an_object_is_reported_and_the_rest_is_read():
+    from tortoise_capture.emit import jsonl
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "dump.jsonl"
+        good = io.StringIO()
+        jsonl.PacketSink(good).handle(make_packet(0x1EC, b"\x01\x02", "SMSG_AUTH_CHALLENGE"))
+        path.write_text("[1, 2]\n3\n" + good.getvalue(), encoding="utf-8")
+        found = []
+        messages = _errors_of(jsonl._logger, lambda: found.extend(jsonl.read_packets(path)))
+    assert len(found) == 1 and len(messages) == 2
+
+
+def test_a_conflict_rule_the_sql_writer_does_not_know_is_refused():
+    """An unknown rule fell through to a plain INSERT, which fails on a second run of
+    the same capture where "ignore" would not: a typo changed what re-running meant."""
+    TableSpec(name="t", columns=(), conflict="replace")
+    try:
+        TableSpec(name="t", columns=(), conflict="upsert")
+    except ValueError as exc:
+        assert "upsert" in str(exc)
+    else:
+        raise AssertionError("an unknown conflict rule was accepted")

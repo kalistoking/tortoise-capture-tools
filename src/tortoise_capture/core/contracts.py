@@ -88,6 +88,9 @@ class Column:
     nullable: bool = True
 
 
+CONFLICT_RULES = ("ignore", "replace", "plain")
+
+
 @dataclass(frozen=True, slots=True)
 class TableSpec:
     """Output table a module writes into.
@@ -96,6 +99,12 @@ class TableSpec:
     managed=False -- a table that already exists in tw_world (creature_movement
                      and friends): inserts only, never DDL. Emitting CREATE
                      TABLE for a table the server owns would be actively wrong.
+
+    conflict says what an INSERT does with a row whose key is already there:
+    "ignore" (the default, which no table overrides) skips it, so running a
+    capture into the same database twice adds nothing; "replace" overwrites it;
+    "plain" lets the INSERT fail. MySQL's IGNORE also turns other insert errors
+    into warnings, so a table that must not lose a row quietly wants "plain".
     """
 
     name: str
@@ -104,6 +113,11 @@ class TableSpec:
     managed: bool = True
     conflict: str = "ignore"   # ignore | replace | plain
     comment: str = ""
+
+    def __post_init__(self) -> None:
+        if self.conflict not in CONFLICT_RULES:
+            raise ValueError(f"table {self.name}: conflict rule {self.conflict!r} is not one "
+                             f"of {', '.join(CONFLICT_RULES)}")
 
 
 @dataclass(frozen=True, slots=True)

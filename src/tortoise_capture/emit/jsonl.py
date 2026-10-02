@@ -6,7 +6,7 @@ framing a large pcap is the slow part, and decoding is what changes while a
 new opcode module is being written.
 
 Packet record: {"seq","t","dir","opcode","name","size","hex","via"}
-Event record:  {"seq","t","dir","module","kind","data"}
+Event record:  {"seq","t","dir","module","kind","scope","data"}
 """
 
 from __future__ import annotations
@@ -22,10 +22,24 @@ from ..core.contracts import Direction, Event, Packet
 _logger = _log.get_logger("emit.jsonl")
 
 
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, (bytes, bytearray)):
-        return bytes(value).hex()
-    return str(value)
+class _Fallback:
+    """json.dumps's `default`: bytes as hex, which is how the record schema carries
+    them. Any other type has no JSON form: it is written as its str() so the line
+    stays valid, and reported once per type -- the dump is the seam other tools
+    read, and a quiet string where a number or a list was meant is a module's bug."""
+
+    def __init__(self) -> None:
+        self._reported: set[str] = set()
+
+    def __call__(self, value: Any) -> Any:
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value).hex()
+        name = type(value).__name__
+        if name not in self._reported:
+            self._reported.add(name)
+            _logger.error("a %s value has no JSON form and is written as its str(): %r",
+                          name, value)
+        return str(value)
 
 
 def packet_record(pkt: Packet) -> dict[str, Any]:
@@ -47,7 +61,7 @@ def finite(value: Any) -> Any:
 
 def event_record(ev: Event) -> dict[str, Any]:
     return {"seq": ev.packet.seq, "t": ev.packet.t, "dir": str(ev.packet.direction),
-            "module": ev.module_id, "kind": ev.kind, "data": ev.data}
+            "module": ev.module_id, "kind": ev.kind, "scope": ev.scope, "data": ev.data}
 
 
 def read_packets(path: Path) -> Iterator[Packet]:
@@ -62,7 +76,7 @@ def read_packets(path: Path) -> Iterator[Packet]:
                 yield Packet(seq=rec["seq"], t=rec["t"], direction=Direction(rec["dir"]),
                              opcode=int(rec["opcode"], 16), name=rec.get("name", ""),
                              body=bytes.fromhex(rec["hex"]), via=rec.get("via", "direct"))
-            except (ValueError, KeyError) as exc:
+            except (ValueError, KeyError, TypeError) as exc:   # TypeError: JSON, but no object
                 _logger.error("%s:%d is not a usable packet record: %s", path, line_no, exc)
 
 
@@ -72,9 +86,10 @@ class PacketSink:
     def __init__(self, out: TextIO) -> None:
         self._out = out
         self.count = 0
+        self._default = _Fallback()
 
     def handle(self, pkt: Packet) -> None:
-        self._out.write(json.dumps(packet_record(pkt), default=_jsonable) + "\n")
+        self._out.write(json.dumps(packet_record(pkt), default=self._default) + "\n")
         self.count += 1
 
     def close(self) -> None:
@@ -87,9 +102,10 @@ class EventSink:
     def __init__(self, out: TextIO) -> None:
         self._out = out
         self.count = 0
+        self._default = _Fallback()
 
     def handle(self, ev: Event, mod: Any = None) -> None:
-        self._out.write(json.dumps(finite(event_record(ev)), default=_jsonable) + "\n")
+        self._out.write(json.dumps(finite(event_record(ev)), default=self._default) + "\n")
         self.count += 1
 
     def close(self) -> None:

@@ -51,7 +51,7 @@ class TextSink:
             return None
         try:
             body = template.format_map(mod.text_fields(ev))
-        except (KeyError, IndexError, ValueError) as exc:
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
             token = (mod.id, ev.kind)
             if token not in self._missing:
                 self._missing.add(token)

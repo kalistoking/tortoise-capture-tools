@@ -91,13 +91,25 @@ class Spells(BaseAuthorRule):
                 "creature_spells row or an EventAI action casting with CF_TRIGGERED would look "
                 "the same, so check castFlags if this one is meant to be a slot")
 
+    def _slotted(self) -> list[int]:
+        """The spells that get a slot. By spell id, not by how often each was seen:
+        creature_spells is positional, so cast counts would make a slot assignment
+        depend on how long the capture happened to run."""
+        return sorted(self._casts)[:MAX_SLOTS]
+
+    def _left_out(self) -> list[int]:
+        return sorted(self._casts)[MAX_SLOTS:]
+
+    @staticmethod
+    def _left_out_text(spells: list[int]) -> str:
+        return (f"creature_spells has {MAX_SLOTS} slots: the {MAX_SLOTS} lowest spell ids took "
+                f"them, and spell(s) {', '.join(map(str, spells))} were seen cast and have no "
+                "slot -- choose by hand which to keep, or cast the rest from EventAI")
+
     def rows(self, ctx: AuthorContext) -> Iterator[AuthoredRow]:
         if not self._casts:
             return
-        # By spell id, not by how often each was seen: creature_spells is
-        # positional, so cast counts would make a slot assignment depend on
-        # how long the capture happened to run.
-        spells = sorted(self._casts)[:MAX_SLOTS]
+        spells = self._slotted()
 
         name, source = self._name, WIRE
         if not name and ctx.world is not None:
@@ -160,9 +172,19 @@ class Spells(BaseAuthorRule):
 
         for spell, times in self._triggered_only().items():
             notes.append(self._triggered_text(spell, times))
-        notes.append(f"{len(spells)} spell(s) seen cast; a spell never used during the "
+        notes.append(f"{len(self._casts)} spell(s) seen cast; a spell never used during the "
                      "capture cannot appear here at all")
-        notes.append("castTarget is left at the table's own default (1) for every slot: "
+        if self._left_out():
+            notes.append(self._left_out_text(self._left_out()))
+        # What the table says, when there is a table to ask -- not a number written here
+        # that the schema can change under it.
+        defaults = set()
+        if ctx.world is not None:
+            described = ctx.world.describe("creature_spells")
+            defaults = {described.get(f"castTarget_{slot}")
+                        for slot in range(1, len(spells) + 1)} - {None}
+        shown = f" ({next(iter(defaults))})" if len(defaults) == 1 else ""
+        notes.append(f"castTarget is left at the table's own default{shown} for every slot: "
                      "it is the AI's target-selection rule (CreatureAI.cpp GetTargetByType), "
                      "consulted before a spell is cast and never put on the wire in any "
                      "form -- no capture, however complete, can recover it, which is also "
@@ -176,7 +198,9 @@ class Spells(BaseAuthorRule):
         if not self._casts:                # no row to carry the note: say it here
             for spell, times in self._triggered_only().items():
                 yield "creature_spells -- " + self._triggered_text(spell, times)
-        for spell in sorted(self._casts):
+        if self._left_out():
+            yield "creature_spells -- " + self._left_out_text(self._left_out())
+        for spell in self._slotted():
             if spell not in self._initial:
                 yield (f"creature_spells.delayInitialMin/Max for spell {spell} -- seen cast, "
                        "but never inside a fight that began from rest (the first aggro of "
