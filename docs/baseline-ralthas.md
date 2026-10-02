@@ -2,9 +2,9 @@
 
 The reference capture every regression is measured against. The capture
 itself is **not** in this repository and never will be (see README, Data
-policy); it lives on the local machine and tests find it through
-`TCT_TEST_CAPTURE`. What follows is the expected *result* of processing it,
-which is safe to version and is what the golden tests assert.
+policy); it lives on the local machine. What follows is the expected *result*
+of processing it, which is safe to version. No test reads the capture: the
+numbers are checked by hand, by running the toolkit over it.
 
 Target: **Ralthas**, `creature_template.entry = 62635`, spawn `guid 2590698`
 in this fork's own `tw_world`.

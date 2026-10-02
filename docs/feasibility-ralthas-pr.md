@@ -385,7 +385,7 @@ in for.
 
 The work was never only in the decoding, which already reached most of these
 numbers from the first, short capture. It was in the `analyze/` layer that
-turns dozens of hops into 41 waypoints and a handful of timestamps into two
+turns dozens of hops into 42 waypoints (41 distinct; the last closes the loop) and a handful of timestamps into two
 AI events; in `fill_schema_defaults` reading each table's own column defaults
 instead of a second copy of its schema; in restating a confirmed value as the
 database's own reading (a true no-op) rather than the wire's computed one,

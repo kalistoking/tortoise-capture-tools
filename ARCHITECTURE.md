@@ -26,7 +26,7 @@ cost one new file and nothing else**, for 825 opcodes, over a long time.
 
 ## 2. Layering
 
-Five layers, each usable on its own and testable without the one above it.
+Six layers, each usable on its own and testable without the one above it.
 Data flows one way; no layer imports a layer above it.
 
 ```
@@ -116,7 +116,7 @@ accepted too, for opcodes absent from a given checkout.
 
 ```
 src/tortoise_capture/
-  cli.py              subcommands: key, dump, decode, author, opcodes
+  cli.py              subcommands: key, dump, decode, author, slim, opcodes
   config.py           tct.toml + environment + flags, in that precedence
   log.py              four-level logging (error/warn/info/debug)
   core/
@@ -129,6 +129,7 @@ src/tortoise_capture/
     pcap.py           capture read, TCP reassembly, timestamps
     crypt.py          HeaderCrypt, known-plaintext session-key recovery
     framing.py        header layouts, session walk, desync detection
+    slim.py           keep only the WoW conversation of a capture, verified
     opcodes.py        opcode table from the server checkout (+ cache)
   fields/
     tables.py         UpdateFields.h enum evaluation, object-type gating
@@ -143,6 +144,7 @@ src/tortoise_capture/
   analyze/            <-- also grows; patrol reconstruction, behaviour correlation
   author/             <-- also grows; one rule per world table it can propose
   world.py            read-only world-database lookups (no driver dependency)
+  dbc.py              read-only client data files (CreatureDisplayInfo.dbc)
 ```
 
 ---
@@ -280,8 +282,8 @@ and `warn` is **whether anything was lost**.
 
 | level | content | stdout | stderr | log file |
 |---|---|---|---|---|
-| `error` | the work failed: desync, module exception, unparsable payload, row for an undeclared table | no | **yes** | yes |
-| `warn` | suspicious, but the run continued: zero-filled TCP gap, missing checkout falling back to numeric-only, container size mismatch, module declaring an opcode this fork lacks | no | **yes** | yes |
+| `error` | the work failed: desync, a message whose body fell in a TCP gap (dropped, not decoded), module exception, unparsable payload, row for an undeclared table | no | **yes** | yes |
+| `warn` | suspicious, but the run continued: missing checkout falling back to numeric-only, container size mismatch, module declaring an opcode this fork lacks | no | **yes** | yes |
 | `info` | where the run has got to: files read, stream sizes, counts, milestones | yes | no | yes |
 | `debug` | per-packet / per-field detail, offsets, decisions taken | yes | no | yes |
 
@@ -313,7 +315,7 @@ Exit codes: `0` clean, `2` completed with errors, `1` fatal (could not start).
 ### 8.2 The config file
 
 `tct.toml`, next to the repository. TOML, so it reads as the plain
-`parametr = hodnota` with `#` comments that it looks like, but values keep
+`key = value` with `#` comments that it looks like, but values keep
 their types — `port = 8090` is an integer, `file = true` is a boolean,
 `[log.modules]` is a table — and `tomllib` is in the standard library, so it
 costs no dependency. Everything in it is optional.
@@ -528,14 +530,11 @@ Order followed so far, highest content value first:
 - **Synthetic packets.** Each module ships a test that builds its payload
   byte by byte from the documented layout and asserts the decoded `Event`.
   No capture needed, no privacy question, runs anywhere.
-- **Golden output.** Small committed expected-text / expected-SQL files guard
-  the template and mapping layers.
 - **Regression tests** for the two known traps: object-type gating of unit
   field names, and the differing inner framing of the two compressed
   containers.
-- **Opt-in integration.** Tests that want the real `Ralthas` session read
-  `TCT_TEST_CAPTURE`; unset means skipped. **No capture, JSONL, log or
-  extracted record is ever committed** — a capture contains the recorded
+- **No capture in the repository.** No test reads one. **No capture, JSONL,
+  log or extracted record is ever committed** — a capture contains the recorded
   account name, and `.gitignore` covers those formats by extension.
 - **Architecture test.** Fails if anything under `core/`, `wire/`, `emit/` or
   `cli.py` imports `modules/`.
@@ -551,7 +550,7 @@ Order followed so far, highest content value first:
 | unknown opcode | not an error — counted as uncovered, reported at the end |
 | unsupported update-block type | error, that message stops (the offset is unrecoverable past it), the run continues |
 | missing checkout or table | **warn** naming the path, numeric-only fallback — output is degraded, not lost |
-| gap in the TCP stream | **warn** saying where and how many bytes; zero-filled, decode continues until it desyncs |
+| gap in the TCP stream | **warn** at reassembly, saying where and how many bytes (the gap is zero-filled to keep the offsets); then an **error** for each message holding a byte the capture never saw -- dropped, not decoded, so the run exits 2; the cipher state is kept and the messages after it read on, unless the gap fell over a header and desyncs the direction |
 | container size mismatch | **warn**; the inflated body is used, since it parsed |
 | module declares an opcode this fork lacks | **warn** at startup; that opcode stays uncovered |
 | unknown key or level in the config file | **warn**, that key ignored, default used |

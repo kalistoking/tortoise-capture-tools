@@ -62,7 +62,7 @@ post-mitigation, not the raw `creature_template` roll).
 
 Two analyzers answer what no single packet can: `patrol` reconstructs a
 creature's route from the hops it broadcast (validated against the live
-database — all 41 waypoints in the authored order, mean XY error 0.006 yards),
+database — all 42 waypoints (41 distinct; the last closes the loop) in the authored order, mean XY error 0.006 yards),
 and `behaviour` correlates across opcodes to derive respawn timers, which
 trigger fires which line of dialogue, and spell cast timing. Findings carry
 their sample counts, and say so when a capture is too short to support a
@@ -113,7 +113,7 @@ tct decode capture.jsonl --entry <creature_template.entry> --format text,sql
 tct author capture.jsonl --entry <creature_template.entry>
 ```
 
-A capture is mostly whatever else the machine was doing -- one here is 285 MB
+A capture is mostly whatever else the machine was doing -- one was 285 MB
 with a WoW session of 1.2 MB. The first time `dump`, `decode` or `author` reads
 a capture that holds more than the WoW conversation, it leaves a slim copy
 beside it (`capture.wow.pcap`): the logon and world connections, record for
@@ -146,7 +146,7 @@ back into structured data (e.g. an editing tool) rather than read it.
 ## Configuration
 
 Copy `tct.example.toml` to `tct.toml` and set what you would otherwise retype
-every run. It is TOML — `parametr = hodnota`, `#` comments, `[section]`
+every run. It is TOML — `key = value`, `#` comments, `[section]`
 groups — and every key is optional.
 
 ```toml
@@ -162,8 +162,8 @@ update_object = "debug" # detail for one module, without the other 824
 ```
 
 Precedence: built-in default → `tct.toml` → environment (`TCT_REPO`,
-`TCT_PORT`, `TCT_SERVER_IP`, `TCT_LOG_LEVEL`, `TCT_CONFIG`) → command-line
-flag. So `--log-level debug` overrides the file for a single run, and
+`TCT_PORT`, `TCT_SERVER_IP`, `TCT_LOGON_PORT`, `TCT_LOGON_IP`, `TCT_LOG_LEVEL`,
+`TCT_CONFIG`) → command-line flag. So `--log-level debug` overrides the file for a single run, and
 `--debug` is a shortcut for it.
 
 An optional `[database]` section points `tct author` at a read-only world
@@ -196,7 +196,7 @@ src/tortoise_capture/
   author/    one rule per world table it can propose rows for
   emit/      text / SQL / JSONL / migration (SQL and JSON) sinks
 docs/        wire-format knowledge, how to add an opcode
-tests/       synthetic-packet and golden tests
+tests/       synthetic-packet tests
 ```
 
 Tests run with `pytest` after `pip install -e ".[dev]"`, or without it via
@@ -222,8 +222,8 @@ Tests run with `pytest` after `pip install -e ".[dev]"`, or without it via
 capture contains the recorded account name (in `CMSG_AUTH_SESSION`) and is
 treated as private test material.
 
-Test captures stay on the local machine and are pointed at through
-`TCT_TEST_CAPTURE`; tests that need one skip themselves when it is unset.
+No test reads a capture: the suite builds its packets byte by byte (see
+`tests/support.py`), so it runs anywhere and needs nothing private.
 
 ## License
 

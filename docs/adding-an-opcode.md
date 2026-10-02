@@ -25,8 +25,12 @@ class MyThing(BaseModule):
     def decode(self, pkt: Packet, ctx: DecodeContext) -> Iterator[Event]:
         r = ByteReader(pkt.body, pkt.name)
         guid = r.u64("guid")
-        yield self.event(pkt, "my_thing", guid=guid, entry=guid_entry(guid),
-                         something=r.u32("something"))
+        data = {"guid": guid, "something": r.u32("something")}
+        # Only a creature, pet, gameobject or transport guid carries an entry;
+        # a player's guid has none, and guid_entry() on it names nothing.
+        if has_entry(guid):
+            data["entry"] = guid_entry(guid)
+        yield self.event(pkt, "my_thing", **data)
 ```
 
 Rules that matter:
@@ -36,7 +40,9 @@ Rules that matter:
 - **Use the conventional keys.** `entry` and `guid` in `Event.data` are what
   `--entry` and `--guid` filter on. Omit them when the payload genuinely
   cannot supply them (`SMSG_MESSAGECHAT`'s emote form carries no sender GUID)
-  — the events then correctly drop out of a filtered run.
+  — the events then correctly drop out of a filtered run. A guid supplies an
+  `entry` only if `has_entry(guid)`; give `entry` to no other guid, as
+  the modules here do.
 - **One `kind` per shape**, not per opcode: `monster_move` emits `move_stop`,
   `move_linear` and `move_spline` because each prints differently.
 - **Decoding part of a payload is fine.** `spell_go` stops after the spell id.
@@ -64,7 +70,9 @@ Rules that matter:
 The template is a `str.format` string over `text_fields(event)`, which
 defaults to `event.data`. Override `text_fields` when the template needs a
 derived value (a flattened coordinate, a pre-rendered multi-line block) —
-see `monster_move` and `update_object`.
+see `monster_move` and `update_object` — or when a template names `entry`
+and the event may not carry one: `data.setdefault("entry", "-")`, as
+`attacker_state` does.
 
 Timestamps, section headers, the `--entry` marker and ordering are the core's
 job. A module never prints.
