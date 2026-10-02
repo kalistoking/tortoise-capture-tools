@@ -91,7 +91,7 @@ architecture here.
 
 ## Requirements
 
-- Python 3.14
+- Python 3.12 or newer (`requires-python` in `pyproject.toml`; developed on 3.14)
 - `scapy` (only third-party dependency)
 - A `tortoise-wow` checkout, for opcode and update-field tables
 

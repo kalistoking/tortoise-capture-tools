@@ -27,9 +27,11 @@ class _Errors(logging.Handler):
     def __init__(self):
         super().__init__(logging.ERROR)
         self.count = 0
+        self.messages = []
 
     def emit(self, record):
         self.count += 1
+        self.messages.append(record.getMessage())
 
 
 @contextlib.contextmanager
@@ -303,3 +305,33 @@ def test_a_recovered_key_is_checked_against_the_server_and_the_forks_highest_opc
         assert cli._session_key(_SESSION, None, _TABLES.opcodes) == b"key"
         assert cli._session_key(_SESSION, "6b6579", _TABLES.opcodes) == b"key"  # given
     assert seen == [((), "the server's stream", 0x4FF)]
+
+
+def test_slim_reads_a_named_port_at_the_address_dump_does():
+    """`tct slim --port N` kept a world server at any address, where `dump --port N` read
+    127.0.0.1 (or --server-ip): the slim copy could hold a connection the same
+    command line then could not decode. tct.example.toml: at server_ip if set, else
+    127.0.0.1."""
+    cfg = SimpleNamespace(named=frozenset({"port"}), port=9000, server_ip="127.0.0.1")
+    assert cli._named_world(cfg) == slim.Endpoint("127.0.0.1", 9000)
+    cfg = SimpleNamespace(named=frozenset({"port", "server_ip"}), port=9000, server_ip="10.0.0.5")
+    assert cli._named_world(cfg) == slim.Endpoint("10.0.0.5", 9000)
+    assert cli._named_world(SimpleNamespace(named=frozenset(), port=8090,
+                                            server_ip="127.0.0.1")) is None
+
+
+def test_an_unknown_output_format_is_an_error_not_dropped():
+    """`--format text,xml` wrote the text and said nothing of xml."""
+    seen = _Errors()
+    cli._logger.addHandler(seen)
+    try:
+        code = cli.cmd_decode(SimpleNamespace(format="text,xml"), None)
+    finally:
+        cli._logger.removeHandler(seen)
+    assert code == cli.EXIT_WITH_ERRORS
+    assert any("xml" in message for message in seen.messages)
+
+
+def test_the_module_docstring_names_every_command():
+    for name in cli._COMMANDS:
+        assert f"tct {name} " in cli.__doc__ or f"tct {name}\n" in cli.__doc__, name

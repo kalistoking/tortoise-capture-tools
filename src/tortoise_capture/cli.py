@@ -4,6 +4,7 @@
     tct dump    <capture>        decrypt and frame the session into JSONL
     tct decode  <capture|jsonl>  run every registered module over the packets
     tct author  <capture|jsonl>  propose world-database rows for one creature
+    tct slim    <capture>        keep only the WoW conversation of a capture, beside it
     tct opcodes                  show the opcode table and module coverage
 
 Nothing here knows any module: it loads the registry, hands it to the runner,
@@ -35,6 +36,8 @@ from .fields import tables as field_tables
 from .wire import crypt, opcodes as opcode_tables, pcap, slim
 
 EXIT_OK, EXIT_FATAL, EXIT_WITH_ERRORS = 0, 1, 2
+
+_DECODE_FORMATS = ("text", "sql", "jsonl")
 
 _logger = _log.get_logger("cli")
 
@@ -87,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_dec.add_argument("source", help="a capture, or a .jsonl produced by `tct dump`")
     p_dec.add_argument("--session-key", help="hex key, skips recovery (captures only)")
     p_dec.add_argument("--no-slim", action="store_true", help=_NO_SLIM)
-    p_dec.add_argument("--format", default="text", help="text,sql,jsonl (default: text)")
+    p_dec.add_argument("--format", default="text", help=f"{','.join(_DECODE_FORMATS)} (default: text)")
     p_dec.add_argument("--entry", type=int, help="only events about this creature_template entry")
     p_dec.add_argument("--guid", type=lambda v: int(v, 0), help="only events about this wire GUID")
     p_dec.add_argument("--only", help="comma-separated module ids to decode with")
@@ -142,7 +145,7 @@ def _load_tables(cfg: RunConfig) -> Tables:
                   fields=field_tables.load(cfg.repo, cfg.cache_dir))
 
 
-def _context(tables: Tables, cfg: RunConfig, **options) -> DecodeContext:
+def _context(tables: Tables, **options) -> DecodeContext:
     return DecodeContext(tables=tables, log=_log.get_logger("decode"), options=options)
 
 
@@ -174,10 +177,12 @@ def _logon(cfg: RunConfig) -> slim.Endpoint:
 
 def _named_world(cfg: RunConfig) -> slim.Endpoint | None:
     """The world server as named, or None to read it from the realm list -- a
-    default port is not a name, and must not win over what the capture says."""
+    default port is not a name, and must not win over what the capture says.
+    A named port is at `server_ip` (127.0.0.1 unless named), as `_world` reads
+    it: a copy slimmed on a looser rule keeps what the same options cannot decode."""
     if "port" not in cfg.named:
         return None
-    return slim.Endpoint(_named_address(cfg), cfg.port)
+    return slim.Endpoint(cfg.server_ip, cfg.port)
 
 
 def _named_address(cfg: RunConfig) -> str | None:
@@ -284,7 +289,7 @@ def cmd_key(args, cfg: RunConfig) -> int:
 def cmd_dump(args, cfg: RunConfig) -> int:
     tables = _load_tables(cfg)
     registry = registry_mod.load(tables)
-    ctx = _context(tables, cfg)
+    ctx = _context(tables)
 
     session = pcap.read_session(Path(args.capture), *_world(cfg, Path(args.capture)))
     key = _session_key(session, args.session_key, tables.opcodes)
@@ -303,17 +308,31 @@ def cmd_dump(args, cfg: RunConfig) -> int:
     return EXIT_OK
 
 
+def _formats(spec: str) -> set[str] | None:
+    """The output formats named in `--format`, or None (after saying so) if any of
+    them is not one."""
+    names = {f.strip() for f in spec.split(",") if f.strip()}
+    unknown = sorted(names - set(_DECODE_FORMATS))
+    if unknown:
+        _logger.error("unknown --format name(s) %s (want %s)", ", ".join(unknown),
+                      ", ".join(_DECODE_FORMATS))
+        return None
+    return names
+
+
 def cmd_decode(args, cfg: RunConfig) -> int:
+    formats = _formats(args.format)
+    if formats is None:
+        return EXIT_WITH_ERRORS
     tables = _load_tables(cfg)
     registry = registry_mod.load(tables)
-    ctx = _context(tables, cfg, entry=args.entry, guid=args.guid)
+    ctx = _context(tables, entry=args.entry, guid=args.guid)
 
     packets, stem = _packet_source(args, cfg, registry, ctx)
     if packets is None:
         return EXIT_WITH_ERRORS
 
     only = {mid.strip() for mid in args.only.split(",")} if args.only else None
-    formats = {f.strip() for f in args.format.split(",") if f.strip()}
     analyzers = [] if args.no_analyze else registry_mod.load_analyzers().all()
     # Analyzers render their findings through the same sinks as modules, so the
     # text sink needs their sections too.
@@ -338,7 +357,7 @@ def cmd_decode(args, cfg: RunConfig) -> int:
         open_files.append(handle)
         sinks.append(jsonl_emit.EventSink(handle))
     if not sinks:
-        _logger.error("no usable --format given (want text, sql or jsonl)")
+        _logger.error("no usable --format given (want %s)", ", ".join(_DECODE_FORMATS))
         return EXIT_WITH_ERRORS
 
     runner = Runner(registry, ctx, sinks, Filters(entry=args.entry, guid=args.guid),
@@ -365,7 +384,7 @@ def cmd_author(args, cfg: RunConfig) -> int:
     """
     tables = _load_tables(cfg)
     registry = registry_mod.load(tables)
-    ctx = _context(tables, cfg, entry=args.entry)
+    ctx = _context(tables, entry=args.entry)
 
     packets, stem = _packet_source(args, cfg, registry, ctx)
     if packets is None:
@@ -429,7 +448,7 @@ def cmd_slim(args, cfg: RunConfig) -> int:
         return EXIT_WITH_ERRORS
     tables = _load_tables(cfg)
     registry = registry_mod.load(tables)
-    ctx = _context(tables, cfg)
+    ctx = _context(tables)
     session = pcap.read_session(capture, *plan.world_server)
     key = _session_key(session, args.session_key, tables.opcodes)
     if key is None or not _write_verified(plan, out, session, key, registry, ctx):
