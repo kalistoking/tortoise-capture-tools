@@ -31,6 +31,7 @@ from __future__ import annotations
 import contextlib
 import datetime as _dt
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -53,6 +54,22 @@ _DETAIL = "%(asctime)s %(levelname)-5s %(name)s %(message)s"
 # "warn" is the vocabulary this project uses, and it also keeps every level
 # name inside the 5-character column the formats above reserve.
 logging.addLevelName(logging.WARNING, "WARN")
+
+
+# `--session-key <hex>` or `--session-key=<hex>`, and any shorter spelling
+# argparse accepts (--session-k, --session ...): the key decrypts the whole
+# capture, and the log file travels with handoffs.
+_SESSION_KEY_FLAG = "--session-key"
+_SESSION_KEY_ARG = re.compile(r"(?P<flag>--ses[\w-]*)(?P<sep>=|\s+)(?P<value>\S+)")
+
+
+def redact(command_line: str) -> str:
+    """The command line with the value of --session-key hidden."""
+    def hide(match: re.Match) -> str:
+        if not _SESSION_KEY_FLAG.startswith(match["flag"]):
+            return match[0]                    # some other option that begins --ses
+        return f"{match['flag']}{match['sep']}<redacted>"
+    return _SESSION_KEY_ARG.sub(hide, command_line)
 
 
 def level_value(name: str) -> int | None:
@@ -178,7 +195,7 @@ def setup(level: str = DEFAULT_LEVEL, file_level: str | None = None,
         with open(log_file, "a", encoding="utf-8") as fp:
             fp.write(f"\n----- {stamp} -----\n")
             if command_line:
-                fp.write(command_line + "\n")
+                fp.write(redact(command_line) + "\n")
 
     # Per-module levels live in the handler policies above, not on the loggers
     # themselves -- a level set on a logger would outlive this call and leak

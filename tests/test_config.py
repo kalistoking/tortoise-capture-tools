@@ -272,6 +272,44 @@ def test_capturing_logs_leaves_the_tct_logger_as_it_found_it():
     assert root.handlers == handlers
 
 
+def _logged_command_line(command_line):
+    """What setup() leaves in the log file for the command line it is given."""
+    root = logging.getLogger(_log.ROOT)
+    saved = (root.level, root.propagate, list(root.handlers))
+    real_out, real_err = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "run.log"
+        try:
+            _log.setup(level="info", log_file=path, command_line=command_line)
+        finally:
+            sys.stdout, sys.stderr = real_out, real_err
+            for handler in root.handlers:
+                if handler not in saved[2]:
+                    handler.close()          # a file left open cannot be removed on Windows
+            root.setLevel(saved[0])
+            root.propagate = saved[1]
+            root.handlers[:] = saved[2]
+        return path.read_text(encoding="utf-8")
+
+
+def test_the_session_key_never_reaches_the_log_file():
+    """The command line goes into logs/<stem>.log, which travels with handoffs;
+    --session-key <hex> put the key that decrypts the whole capture in it."""
+    for line in ("tct dump x --session-key 00ff", "tct dump x --session-key=00ff",
+                 "tct dump x --session-k 00ff", "tct dump x --session=00ff",
+                 "tct dump x --session-key 00ff --entry 5"):
+        logged = _logged_command_line(line)
+        assert "00ff" not in logged, line
+        assert "tct dump x --ses" in logged, line         # the rest of the line is kept
+    assert "--entry 5" in _logged_command_line("tct author x --session-key 00ff --entry 5")
+
+
+def test_a_command_line_without_a_session_key_is_logged_as_it_was():
+    line = "tct dump x --server-ip 10.0.0.5 --sessions-dir y"
+    assert line in _logged_command_line(line)
+
+
 def test_errors_and_warnings_are_counted_separately():
     _capture_logs("info")
     assert _log.error_count() == 1 and _log.warning_count() == 1
