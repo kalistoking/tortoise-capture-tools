@@ -34,9 +34,10 @@ the database exactly.
 
 **Level, health and mana are one spawn's roll, not the template.**
 `Creature::SelectLevel` (Creature.cpp:1576-1612) rolls each spawn's level from
-`level_min..level_max` and derives its health and mana from where that level
-falls in the range (the per-rank rates are 1 on this core, mangosd.conf.dist),
-so one spawn can confirm or contradict a stored range but pins at most one end
+`level_min..level_max` -- again at every respawn (Creature.cpp:755), so a spawn
+before and after a death is two rolls, compared as two spawns are -- and derives
+its health and mana from where that level falls in the range (the per-rank
+rates are 1 on this core, mangosd.conf.dist), so one spawn can confirm or contradict a stored range but pins at most one end
 of it -- and an observed range can only be narrower than the authored one. They
 are therefore checked against the database spawn by spawn and reported, never
 proposed. Against a fully migrated tw_world the check holds exactly: every
@@ -57,7 +58,8 @@ from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
 from ..core.contracts import (
-    CONFIRMED, CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, is_creature,
+    CONFIRMED, CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, Lifeline,
+    is_corpse, is_creature,
 )
 from ..core.registry import author_rule
 from .casts import CastLedger
@@ -153,7 +155,12 @@ class Stats(BaseAuthorRule):
         self._fields: dict[str, int] = {}
         self._speeds: dict[str, float] = {}                 # column -> first CREATE's speed
         self._query: dict[str, Any] | None = None           # the creature query's answer
-        self._spawns: dict[int, dict[str, int]] = {}       # guid -> its own first CREATE
+        # (guid, which life of it) -> the first CREATE of that life. A respawn
+        # starts a new life: it goes through SelectLevel again.
+        self._spawns: dict[tuple[int, int], dict[str, int]] = {}
+        self._lives: dict[int, Lifeline] = {}
+        self._life_no: dict[int, int] = {}
+        self._dead: set[int] = set()                        # died since its last CREATE
         self._disagreed: dict[str, set[tuple[int, int]]] = {}  # name -> (first, later)
         self._saw_spells = False
         self._casts = CastLedger()
@@ -168,10 +175,16 @@ class Stats(BaseAuthorRule):
             # guarantee -- so a later CREATE that disagrees is kept and
             # reported rather than dropped on the floor.
             #
-            # "Later" means the same spawn's: each spawn rolls its own level
-            # from the template's range (Creature::SelectLevel), so two spawns
-            # of one entry disagreeing is the template, not a modified creature.
-            first = self._spawns.setdefault(ev.data.get("guid"), {})
+            # "Later" means the same life of the same spawn's: each spawn rolls
+            # its own level from the template's range (Creature::SelectLevel),
+            # and rolls it again at every respawn (Creature.cpp:755), so two
+            # spawns of one entry, or one spawn before and after a death,
+            # disagreeing is the template, not a modified creature.
+            guid = ev.data.get("guid")
+            if guid in self._dead and not is_corpse(ev):
+                self._dead.discard(guid)
+                self._life_no[guid] = self._life_no.get(guid, 0) + 1
+            first = self._spawns.setdefault((guid, self._life_no.get(guid, 0)), {})
             for field in ev.data.get("fields", ()):
                 name = field["name"]
                 if not name:
@@ -191,11 +204,24 @@ class Stats(BaseAuthorRule):
                     first[column] = speeds[index]
                 elif speeds[index] != first[column]:
                     self._disagreed.setdefault(column, set()).add((first[column], speeds[index]))
+            self._witness(ev)
+        elif ev.kind in ("party_kill", "object_values") and is_creature(ev.data.get("guid")):
+            self._witness(ev)
         elif ev.kind in ("spell_start", "spell_go"):
             if self._casts.classify(ev):        # a cast the creature chose: see casts.py
                 self._saw_spells = True
         elif ev.kind == "creature_query" and self._query is None:
             self._query = dict(ev.data)
+
+    def _witness(self, ev: Event) -> None:
+        """A death of this creature, from any of the three things that show one
+        (Lifeline): its next live CREATE is a respawn."""
+        guid = ev.data["guid"]
+        life = self._lives.setdefault(guid, Lifeline())
+        deaths = len(life.deaths)
+        life.see(ev)
+        if len(life.deaths) > deaths:
+            self._dead.add(guid)
 
     def _typed(self, name: str) -> Any:
         value = fv.decode(name, self._fields[name])
@@ -367,10 +393,12 @@ class Stats(BaseAuthorRule):
                          if "UNIT_FIELD_LEVEL" in spawn})
         if len(levels) > 1:
             spawned = sum("UNIT_FIELD_LEVEL" in spawn for spawn in self._spawns.values())
+            respawned = (", a respawn counting as one more" if any(self._life_no.values())
+                         else "")
             notes.append(f"UNIT_FIELD_LEVEL seen as {levels[0]}-{levels[-1]} across {spawned} "
-                         "spawns, each rolling its own; level_min/level_max span at least "
-                         "this, and are not proposed from it -- an observed range can only "
-                         "be narrower than the authored one")
+                         f"spawns{respawned}, each rolling its own; level_min/level_max span "
+                         "at least this, and are not proposed from it -- an observed range "
+                         "can only be narrower than the authored one")
         if ctx.world is None:
             notes.append("float stats are the server's computed broadcast values, which "
                          "drift ~3e-6 from the authored ones; no database was available to "

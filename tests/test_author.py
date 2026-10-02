@@ -292,6 +292,51 @@ def test_two_spawns_rolling_different_levels_are_not_a_modified_creature():
     assert "level_min" not in rows[0].values
 
 
+def _prowler(t, level, health, guid=GUID, **extra):
+    return make_event("object_create", t, guid=guid, entry=ENTRY, fields=_fields(
+        UNIT_FIELD_LEVEL=level, UNIT_FIELD_BASE_HEALTH=health, UNIT_FIELD_ATTACK_POWER=44,
+        **extra))
+
+
+def test_a_respawn_rolls_its_level_again_and_is_not_a_modified_creature():
+    """A respawn goes through SelectLevel again (Creature.cpp:755, the roll at
+    :1583): level 9 and health 206 before the death, 10 and 231 after, is one
+    template rolled twice -- the same as two guids -- not a creature that
+    changed between sightings."""
+    events = [_prowler(12.9, 9, 206),
+              make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
+              _prowler(400.0, 10, 231)]
+    rows, gaps = author_rows(Stats(), events, ENTRY)
+    assert not any("later CREATE" in gap for gap in gaps)
+    assert any("9-10" in note and "2 spawns" in note for note in rows[0].notes)
+    assert "level_min" not in rows[0].values
+
+
+def test_a_respawn_seen_as_health_going_to_zero_rolls_its_level_again_too():
+    events = [_prowler(12.9, 9, 206),
+              make_event("object_values", 100.0, guid=GUID, entry=ENTRY,
+                         fields=_fields(UNIT_FIELD_HEALTH=0)),
+              _prowler(400.0, 10, 231)]
+    _, gaps = author_rows(Stats(), events, ENTRY)
+    assert not any("later CREATE" in gap for gap in gaps)
+
+
+def test_a_level_that_changes_with_no_death_between_is_still_reported():
+    events = [_prowler(12.9, 9, 206), _prowler(400.0, 10, 231)]
+    _, gaps = author_rows(Stats(), events, ENTRY)
+    assert any("level_min" in gap and "later CREATE" in gap for gap in gaps)
+    assert any("health_min" in gap and "later CREATE" in gap for gap in gaps)
+
+
+def test_a_corpse_the_player_came_back_to_is_not_a_respawn():
+    """A corpse CREATE is the same life the first CREATE showed, dead meanwhile;
+    a level that differs between the two is a creature that changed."""
+    corpse = make_event("object_create", 400.0, guid=GUID, entry=ENTRY, fields=_fields(
+        UNIT_FIELD_LEVEL=10, UNIT_FIELD_MAXHEALTH=231, UNIT_FIELD_ATTACK_POWER=44))
+    _, gaps = author_rows(Stats(), [_prowler(12.9, 9, 206), corpse], ENTRY)
+    assert any("level_min" in gap and "later CREATE" in gap for gap in gaps)
+
+
 def test_a_disagreement_is_reported_against_its_own_spawns_first_sighting():
     other = GUID + 1
     events = _stats_events() + [
