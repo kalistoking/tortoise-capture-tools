@@ -198,6 +198,20 @@ def test_an_attributed_sound_is_still_written_when_a_schema_exists():
     assert aggro.provenance["sound_id"] == DERIVED
 
 
+def test_a_trigger_that_only_just_won_says_what_else_fitted():
+    events = _dialogue_events() + [
+        make_event("text_trigger", 999.0, entry=ENTRY, subject=AGGRO_TEXT, trigger="aggro",
+                   also=["death"]),
+    ]
+    rows, _ = author_rows(Dialogue(), events, ENTRY)
+    event = next(r for r in rows if r.table == "creature_ai_events"
+                 and "Aggro text" in r.values["comment"])
+    assert any("death fits every occurrence" in note for note in event.notes)
+    plain = next(r for r in rows if r.table == "creature_ai_events"
+                 and "Death text" in r.values["comment"])
+    assert not any("fits every occurrence" in note for note in plain.notes)
+
+
 def test_unattributed_dialogue_becomes_a_gap_not_a_row():
     events = [
         make_event("monster_say", 5.0, guid=GUID, entry=ENTRY, message="Who knows why",

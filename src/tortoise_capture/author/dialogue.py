@@ -73,6 +73,7 @@ class Dialogue(BaseAuthorRule):
     def __init__(self) -> None:
         self._said: dict[str, dict[str, Any]] = {}     # message -> what the wire said
         self._triggers: dict[str, str] = {}            # message -> aggro | death
+        self._also: dict[str, list[str]] = {}          # message -> the triggers that fit it too
         self._sounds: dict[str, int] = {}               # message -> sound_id, when attributed
         self._untriggered: list[str] = []
         self._name: str | None = None
@@ -91,6 +92,7 @@ class Dialogue(BaseAuthorRule):
             })
         elif ev.kind == "text_trigger":
             self._triggers[ev.data["subject"]] = ev.data["trigger"]
+            self._also[ev.data["subject"]] = ev.data.get("also", [])
             if "sound_id" in ev.data:
                 # behaviour.py only sets this when exactly one line -- across
                 # every creature -- fell inside the coincidence window.
@@ -160,6 +162,10 @@ class Dialogue(BaseAuthorRule):
                                 "comment": CONVENTION}
             event_notes = [f"event_type {_EVENT_TYPES[trigger]} ({trigger}) inferred from the "
                           "text firing on that trigger's timestamp every time it was seen"]
+            if self._also.get(message):
+                event_notes.append(f"{' and '.join(self._also[message])} fits every occurrence of "
+                                   f"this line too, only less closely than {trigger} -- a "
+                                   "one-shot kill puts both beside the line")
             self.fill_schema_defaults(ctx, "creature_ai_events", event_values,
                                       event_provenance, event_notes)
             yield AuthoredRow(table="creature_ai_events", values=event_values,

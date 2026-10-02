@@ -593,6 +593,66 @@ def test_a_text_that_only_sometimes_coincides_is_not_attributed():
     assert "text_untriggered" in kinds and "text_trigger" not in kinds
 
 
+def _kills_saying(line, said_after_aggro, said_after_death=0.0, kills=3):
+    """One-shot kills: an aggro, then a death `said_after_aggro` seconds later and
+    the line `said_after_death` seconds after the death -- so the line is always
+    `said_after_aggro + said_after_death` after the aggro."""
+    events = []
+    for n in range(kills):
+        t = 10.0 + 20.0 * n
+        events += [
+            make_event("ai_reaction", t, guid=GUID, entry=ENTRY, reaction=2),
+            make_event("party_kill", t + said_after_aggro, guid=GUID, entry=ENTRY),
+            make_event("monster_say", t + said_after_aggro + said_after_death,
+                       guid=GUID, entry=ENTRY, message=line),
+        ]
+    return events
+
+
+def test_the_trigger_that_is_strictly_closer_wins_where_two_explain_every_line():
+    """Each line comes 0.4 s after the aggro and with the death, to the
+    millisecond. Both triggers are within the window every time; the death is
+    closer every time, and the aggro was only first inserted."""
+    found = run_analyzer(Behaviour(), _kills_saying("Gah!", said_after_aggro=0.4))
+    [trigger] = [ev for ev in found if ev.kind == "text_trigger"]
+    assert trigger.data["trigger"] == "death" and trigger.data["offset"] == 0.0
+    assert trigger.data["also"] == ["aggro"]
+    assert "aggro" in trigger.data["caveat"]
+    assert "text_untriggered" not in {ev.kind for ev in found}
+
+
+def test_two_triggers_equally_close_at_every_line_attribute_nothing():
+    """The line is on the death and the aggro at once (a one-shot kill): the
+    clock cannot tell which of them fired it."""
+    found = run_analyzer(Behaviour(), _kills_saying("Gah!", said_after_aggro=0.0))
+    kinds = {ev.kind for ev in found if ev.data.get("subject") == "Gah!"}
+    assert kinds == {"text_untriggered"}
+
+
+def test_two_triggers_that_swap_places_between_lines_attribute_nothing():
+    """The death is closer at the first line and the aggro at the next two:
+    neither is strictly closer at every occurrence."""
+    events = _kills_saying("Gah!", said_after_aggro=0.4, kills=1)         # death closer
+    events += [
+        make_event("ai_reaction", 40.0, guid=GUID, entry=ENTRY, reaction=2),
+        make_event("party_kill", 40.4, guid=GUID, entry=ENTRY),
+        make_event("monster_say", 40.0, guid=GUID, entry=ENTRY, message="Gah!"),   # aggro closer
+        make_event("ai_reaction", 60.0, guid=GUID, entry=ENTRY, reaction=2),
+        make_event("party_kill", 60.4, guid=GUID, entry=ENTRY),
+        make_event("monster_say", 60.0, guid=GUID, entry=ENTRY, message="Gah!"),
+    ]
+    found = run_analyzer(Behaviour(), events)
+    kinds = {ev.kind for ev in found if ev.data.get("subject") == "Gah!"}
+    assert kinds == {"text_untriggered"}
+
+
+def test_a_single_trigger_that_explains_every_line_has_no_caveat():
+    found = run_analyzer(Behaviour(), _session())
+    for ev in found:
+        if ev.kind == "text_trigger":
+            assert ev.data["also"] == [] and ev.data["caveat"] == ""
+
+
 def test_initial_cast_delay_is_measured_from_engagement():
     found = findings_by_kind(run_analyzer(Behaviour(), _session()))
     delay = found["spell_initial_delay"].data

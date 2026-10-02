@@ -19,7 +19,10 @@ Three questions that no single packet answers:
   `SMSG_AI_REACTION` and a death line on the same timestamp as
   `SMSG_PARTYKILLLOG`, every time, so the trigger can be read off the clock.
   A line is only attributed when *every* occurrence agrees; one coincidence is
-  not evidence, and this says so rather than guessing.
+  not evidence, and this says so rather than guessing. Where both triggers
+  agree every time (a one-shot kill), the one strictly closer to every line
+  wins and the finding names the other; with none strictly closer, nothing is
+  attributed.
 
   **Cast timing** -- delay from engagement to first cast, and the intervals
   between repeats. The first is usually clean. The second is not: an observed
@@ -84,6 +87,20 @@ RESPAWN_SLACK = 0.5
 
 _TRIGGERS = {"ai_reaction": "aggro", "party_kill": "death"}
 
+
+def _closest_everywhere(every: dict[str, list[float]]) -> str | None:
+    """The one trigger of those that explain every line that is strictly closer
+    to each line than all the others, or None when there is none -- when there
+    are none left to compare, the only one is the answer."""
+    if len(every) <= 1:
+        return next(iter(every), None)
+    for name, offsets in every.items():
+        if all(mine < theirs
+               for other, others in every.items() if other != name
+               for mine, theirs in zip(offsets, others)):
+            return name
+    return None
+
 _TABLE = TableSpec(
     name="capture_behaviour",
     columns=(
@@ -129,7 +146,7 @@ class Behaviour(BaseAnalyzer):
         "respawn_timer": "entry={entry:<7} respawn {value_min:.1f}-{value_max:.1f}s "
                          "(death -> next sighting, {samples} observation(s)){caveat}",
         "text_trigger": "entry={entry:<7} {trigger} text: {subject!r} "
-                        "({samples}x, offset {offset:+.3f}s)",
+                        "({samples}x, offset {offset:+.3f}s){caveat}",
         "text_untriggered": "entry={entry:<7} text with no matching trigger: {subject!r} "
                             "({samples}x)",
         "spell_initial_delay": "entry={entry:<7} spell {subject} first cast {value_min:.3f}s "
@@ -257,14 +274,23 @@ class Behaviour(BaseAnalyzer):
             extra = {"sound_id": sound_id} if sound_id is not None else {}
 
             # Only attribute when one trigger explains every occurrence: a text
-            # that lines up once out of three has told us nothing.
-            winner = next((name for name, offsets in matched[message].items()
-                           if len(offsets) == len(times)), None)
+            # that lines up once out of three has told us nothing. And when two
+            # explain every occurrence, only if one is strictly closer to every
+            # line than the other -- a one-shot kill puts the aggro, the death
+            # and the line within a second of each other, and "whichever was
+            # inserted first" is not a reason.
+            every = {name: offsets for name, offsets in matched[message].items()
+                     if len(offsets) == len(times)}
+            winner = _closest_everywhere(every)
             if winner:
                 offsets = matched[message][winner]
+                also = sorted(set(every) - {winner})
+                caveat = (f" -- {' and '.join(also)} fits every line too, only less "
+                          "closely" if also else "")
                 yield self.event(last, "text_trigger", entry=entry, subject=message,
                                  trigger=winner, samples=len(times),
-                                 offset=sum(offsets) / len(offsets), **extra)
+                                 offset=sum(offsets) / len(offsets), also=also,
+                                 caveat=caveat, **extra)
             else:
                 yield self.event(last, "text_untriggered", entry=entry,
                                  subject=message, samples=len(times), **extra)
