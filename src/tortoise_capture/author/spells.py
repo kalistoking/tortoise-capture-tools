@@ -38,6 +38,7 @@ measurement.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
@@ -54,7 +55,7 @@ DEFAULT_PROBABILITY = 100
 class Spells(BaseAuthorRule):
     def __init__(self) -> None:
         self._casts: dict[int, int] = {}          # spell id -> times seen
-        self._initial: dict[int, float] = {}      # spell id -> engage-to-first-cast
+        self._initial: dict[int, dict[str, Any]] = {}   # spell id -> engage-to-first-cast range
         self._repeat: dict[int, dict[str, Any]] = {}
         self._name: str | None = None
 
@@ -63,7 +64,7 @@ class Spells(BaseAuthorRule):
             spell = ev.data["spell_id"]
             self._casts[spell] = self._casts.get(spell, 0) + 1
         elif ev.kind == "spell_initial_delay":
-            self._initial[int(ev.data["subject"])] = ev.data["value_min"]
+            self._initial[int(ev.data["subject"])] = dict(ev.data)
         elif ev.kind == "spell_repeat_delay":
             self._repeat[int(ev.data["subject"])] = dict(ev.data)
         elif ev.kind == "creature_query":
@@ -94,13 +95,27 @@ class Spells(BaseAuthorRule):
             provenance[f"probability_{slot}"] = CONVENTION
 
             if spell in self._initial:
-                seconds = int(round(self._initial[spell]))
-                values[f"delayInitialMin_{slot}"] = seconds
-                values[f"delayInitialMax_{slot}"] = seconds
+                observed = self._initial[spell]
+                # The server rolls the first cast at urand(Min, Max) seconds
+                # (CreatureAI.h:63), so the range written has to hold every
+                # first cast the capture saw: round the bounds outwards. The
+                # times carry milliseconds, hence the round() before the
+                # floor and ceiling -- 6.000000000000001 s is 6 s, not 7.
+                low = math.floor(round(observed["value_min"], 3))
+                high = math.ceil(round(observed["value_max"], 3))
+                fights = observed["samples"]
+                values[f"delayInitialMin_{slot}"] = low
+                values[f"delayInitialMax_{slot}"] = high
                 provenance[f"delayInitialMin_{slot}"] = DERIVED
                 provenance[f"delayInitialMax_{slot}"] = DERIVED
-                notes.append(f"spell {spell}: first cast {self._initial[spell]:.3f}s after "
-                             f"a fight began from rest, so delayInitial rounds to {seconds}")
+                note = (f"spell {spell}: first cast {observed['value_min']:.3f}s to "
+                        f"{observed['value_max']:.3f}s after a fight began from rest "
+                        f"({fights} fight{'' if fights == 1 else 's'}), so delayInitial "
+                        f"is {low} to {high}")
+                if fights < 2:
+                    note += (" -- one fight, so the range is bounded below only: "
+                             "a later first cast is not excluded")
+                notes.append(note)
             else:
                 # 0 would read as "casts the moment it aggroes" -- a claim, where
                 # the truth is that no fresh engagement ever reached this spell.

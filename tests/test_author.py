@@ -1407,6 +1407,42 @@ def test_spells_emits_what_it_saw_cast():
     assert row.provenance["probability_1"] == CONVENTION
 
 
+def _initial_delay_events(value_min, value_max, samples):
+    return [
+        make_event("creature_query", 12.9, entry=ENTRY, name="Ralthas"),
+        make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=1449),
+        make_event("spell_initial_delay", 999.0, entry=ENTRY, subject=1449,
+                   value_min=value_min, value_max=value_max, samples=samples),
+    ]
+
+
+def test_the_initial_delay_keeps_both_ends_of_what_was_observed():
+    """Two fights from rest, first casts 2.1 s and 6.4 s after aggro: the server
+    rolls the first cast at urand(delayInitialMin, delayInitialMax)
+    (CreatureAI.h:63), and 2/2 forbade the 6.4 s the capture itself saw."""
+    rows, _ = author_rows(Spells(), _initial_delay_events(2.1, 6.4, 2), ENTRY)
+    row = rows[0]
+    assert row.values["delayInitialMin_1"] == 2
+    assert row.values["delayInitialMax_1"] == 7
+    assert row.provenance["delayInitialMin_1"] == DERIVED
+    assert row.provenance["delayInitialMax_1"] == DERIVED
+    assert any("2 fights" in note and "1449" in note for note in row.notes)
+
+
+def test_one_fight_bounds_the_initial_delay_below_only_and_says_so():
+    rows, _ = author_rows(Spells(), _initial_delay_events(2.1, 2.1, 1), ENTRY)
+    row = rows[0]
+    assert row.values["delayInitialMin_1"] == 2
+    assert row.values["delayInitialMax_1"] == 3
+    assert any("1 fight" in note and "bounded below only" in note for note in row.notes)
+
+
+def test_a_float_whisker_over_a_whole_second_does_not_round_the_bound_up():
+    """Timestamps carry milliseconds; 6.000000000000001 is 6 s, not 7."""
+    rows, _ = author_rows(Spells(), _initial_delay_events(2.0, 6.000000000000001, 2), ENTRY)
+    assert rows[0].values["delayInitialMax_1"] == 6
+
+
 def test_a_spell_list_named_without_a_query_says_where_the_name_came_from():
     """Ralthas's capture never queried 62635, and its list was named '62635'
     with the provenance of a name read off the wire."""
