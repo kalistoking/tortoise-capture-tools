@@ -176,6 +176,8 @@ def _capture_logs(level="info", **kwargs):
     """Runs setup() against string streams and returns (stdout, stderr)."""
     out, err = io.StringIO(), io.StringIO()
     real_out, real_err = sys.stdout, sys.stderr
+    root = logging.getLogger(_log.ROOT)
+    saved = (root.level, root.propagate, list(root.handlers))
     sys.stdout, sys.stderr = out, err
     try:
         _log.setup(level=level, log_file=None, **kwargs)
@@ -188,8 +190,11 @@ def _capture_logs(level="info", **kwargs):
         return out.getvalue(), err.getvalue()
     finally:
         sys.stdout, sys.stderr = real_out, real_err
-        logging.getLogger(_log.ROOT).handlers.clear()
-        logging.getLogger(_log.ROOT).addHandler(logging.NullHandler())
+        # setup() sets the level, propagation and handlers of the `tct` logger;
+        # put back all three, or the next test in this process inherits them.
+        root.setLevel(saved[0])
+        root.propagate = saved[1]
+        root.handlers[:] = saved[2]
         logging.getLogger(f"{_log.ROOT}.mod.update_object").setLevel(logging.NOTSET)
 
 
@@ -215,6 +220,18 @@ def test_a_module_level_overrides_the_console_level_for_that_module_only():
     out, _ = _capture_logs("info", module_levels={"update_object": "debug"})
     assert "module detail" in out          # the module's own debug got through
     assert "a debug line" not in out       # everything else stayed at info
+
+
+def test_capturing_logs_leaves_the_tct_logger_as_it_found_it():
+    """setup() sets the `tct` logger's level to the most verbose threshold
+    asked for; the helper that drives it must put the level back, or a later
+    test in the same process that expects a warning (one that watches a
+    handler on a child logger) sees none."""
+    root = logging.getLogger(_log.ROOT)
+    level, handlers = root.level, list(root.handlers)
+    _capture_logs("error")
+    assert root.level == level
+    assert root.handlers == handlers
 
 
 def test_errors_and_warnings_are_counted_separately():

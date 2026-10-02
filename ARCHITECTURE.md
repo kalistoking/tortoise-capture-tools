@@ -300,10 +300,13 @@ Rules:
 - Output is ASCII-only and written UTF-8: the local console is cp1250 and a
   stray arrow character is a real, previously observed crash source.
 
-Levels are thresholds on *handlers*, not on loggers: loggers stay permissive
-and each destination filters per record. A level set on a logger could not
-express "info everywhere, debug for this one module", and would outlive the
-call that set it.
+Levels are thresholds on *handlers*, not on loggers: each destination filters
+per record, and a per-module override is part of that filter. A logger level
+could not express "info everywhere, debug for this one module". The one logger
+level there is is the permissive gate: `setup` sets the `tct` logger to the
+most verbose threshold any destination asked for, so nothing is dropped before
+a handler can decide. It is process-wide state that stays set until the next
+`setup`, so a test that calls `setup` puts the level back when it is done.
 
 Exit codes: `0` clean, `2` completed with errors, `1` fatal (could not start).
 

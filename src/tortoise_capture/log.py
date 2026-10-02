@@ -15,10 +15,10 @@ Warnings share stderr with errors on purpose: stdout carries the text report,
 and a diagnostic line in the middle of it would corrupt that output.
 
 Verbosity comes from the config file ([log] level / file_level / modules) and
-can be overridden per run on the command line. Per-module levels work by
-setting the level on `tct.mod.<id>` and keeping the handlers permissive, so
-`update_object = "debug"` gives detail for one module without flooding the
-console with the other 824.
+can be overridden per run on the command line. Per-module levels are part of
+each handler's filter, with the `tct` logger kept permissive at the most
+verbose threshold asked for, so `update_object = "debug"` gives detail for one
+module without flooding the console with the other 824.
 
 Console output must stay ASCII: the local console is cp1250 and a stray
 non-ASCII character in a printed line is a real crash source. Streams are
