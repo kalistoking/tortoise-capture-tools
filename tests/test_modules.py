@@ -489,15 +489,17 @@ def test_new_world_reads_the_map_id_too_and_tags_it_a_teleport():
     assert ev.data["source"] == "teleport"
 
 
-def test_a_later_transfer_is_what_authoring_should_use():
-    """Both opcodes decode independently; picking "the last one seen" for
-    authoring is the author rule's job, not this module's -- it just reports
-    what each packet said."""
-    ev1 = decode_one(WorldTransfer(), make_packet(0x236, _transfer_body(0),
-                                                  "SMSG_LOGIN_VERIFY_WORLD"), make_ctx())
-    ev2 = decode_one(WorldTransfer(), make_packet(0x3E, _transfer_body(1),
-                                                  "SMSG_NEW_WORLD"), make_ctx())
-    assert ev1.data["map_id"] == 0 and ev2.data["map_id"] == 1
+def test_each_transfer_packet_reports_its_own_map_whatever_came_before_it():
+    """One module instance decodes both opcodes in turn and each event says what its
+    own packet said. Which of two transfers authoring uses -- the last -- is the
+    author rule's, and is tested there:
+    test_author.test_the_last_world_transfer_wins_over_an_earlier_one."""
+    module = WorldTransfer()
+    ev1 = decode_one(module, make_packet(0x236, _transfer_body(0), "SMSG_LOGIN_VERIFY_WORLD"),
+                     make_ctx())
+    ev2 = decode_one(module, make_packet(0x3E, _transfer_body(1), "SMSG_NEW_WORLD"), make_ctx())
+    assert (ev1.data["map_id"], ev1.data["source"]) == (0, "login")
+    assert (ev2.data["map_id"], ev2.data["source"]) == (1, "teleport")
 
 
 # --------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import tempfile
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from support import make_packet
 from tortoise_capture.core.contracts import Column, Event, Row, SqlContext, TableSpec
 from tortoise_capture.emit.jsonl import EventSink
 from tortoise_capture.emit.sql import SqlSink, create_table, literal
+from tortoise_capture.emit import text as text_sink
 from tortoise_capture.emit.text import TextSink
 
 MANAGED = TableSpec(name="capture_demo",
@@ -126,8 +128,22 @@ def test_a_section_with_no_events_says_so():
 
 
 def test_a_missing_template_is_reported_not_raised():
+    """The sink says which module emitted which kind with no template, as an error,
+    and writes no line for the event; the run goes on."""
     out = io.StringIO()
     sink = TextSink(out, [DemoModule()])
-    sink.handle(_event(kind="unknown", entry=1), DemoModule())   # must not raise
-    sink.close()
+    reported = []
+
+    class Catch(logging.Handler):
+        def emit(self, record):
+            reported.append((record.levelno, record.getMessage()))
+
+    handler = Catch()
+    text_sink._logger.addHandler(handler)
+    try:
+        sink.handle(_event(kind="unknown", entry=1), DemoModule())   # must not raise
+        sink.close()
+    finally:
+        text_sink._logger.removeHandler(handler)
+    assert reported == [(logging.ERROR, "module demo emits kind 'unknown' with no text template")]
     assert "(no records)" in out.getvalue()
