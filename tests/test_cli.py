@@ -66,6 +66,26 @@ def test_a_slim_copy_that_cannot_be_written_does_not_stop_the_run():
     assert files == ["capture.pcap"] and errors == 0
 
 
+def test_a_slim_copy_whose_write_fails_leaves_no_partial_file_behind():
+    """The write ran before the try whose cleanup unlinks the .partial file, so
+    a disk filling up mid-write left half a capture beside the original."""
+    def failing_write(plan, partial):
+        Path(partial).write_bytes(b"half a capture")
+        raise OSError("no space left on device")
+
+    with tempfile.TemporaryDirectory() as tmp, _replaced(slim, "write", failing_write):
+        capture = Path(tmp) / "capture.pcap"
+        capture.write_bytes(_session())
+        plan = slim.plan(capture, slim.Endpoint(None, slim.LOGON_PORT), None)
+        try:
+            cli._write_verified(plan, Path(tmp) / "capture.wow.pcap", _SESSION, b"key", None, None)
+        except OSError:
+            pass
+        else:
+            raise AssertionError("the write's own failure must still reach the caller")
+        assert sorted(p.name for p in Path(tmp).iterdir()) == ["capture.pcap"]
+
+
 def test_a_slim_copy_that_decodes_differently_is_dropped_without_failing_the_run():
     decoded = iter([["the original"], ["something else"]])
     read = lambda *_: _SESSION                                           # noqa: E731

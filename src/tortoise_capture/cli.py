@@ -211,8 +211,10 @@ def _write_verified(plan: slim.SlimPlan, out: Path, session, key, registry, ctx,
     by-product of some other command. `reported`: that command already decoded
     the original, and said whatever it had to say about it."""
     partial = out.with_name(out.name + ".partial")
-    slim.write(plan, partial)
     try:
+        # The write is inside the try: a disk filling up halfway leaves a file
+        # that the cleanup below must remove.
+        slim.write(plan, partial)
         # The original's decode speaks unless it already has; the rest is muted:
         # the copy repeats the original, and the keys are recovered only to
         # compare -- --session-key may have made them unrecoverable. `failed`
