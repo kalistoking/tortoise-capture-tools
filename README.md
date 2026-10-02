@@ -119,8 +119,9 @@ a capture that holds more than the WoW conversation, it leaves a slim copy
 beside it (`capture.wow.pcap`): the logon and world connections, record for
 record, kept only after it decodes to exactly the same packets and session key
 as the original. The original is never touched; `tct slim capture.pcap
---replace` swaps it for the slim copy when you ask, and `--no-slim` skips the
-copy altogether.
+--replace` swaps it for the slim copy when you ask -- and only after a run that
+logged no error; otherwise the original stays and the copy is kept beside it --
+and `--no-slim` skips the copy altogether.
 
 ```bash
 tct slim capture.pcap                  # write capture.wow.pcap beside it, verified

@@ -121,8 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
     slim_to.add_argument("--out", help="output capture (default: <capture stem>.wow<suffix>, "
                                        "beside it)")
     slim_to.add_argument("--replace", action="store_true",
-                         help="replace the original with the verified slim copy -- it is the "
-                              "only copy of a session that cannot be recorded again")
+                         help="replace the original with the verified slim copy, if the run "
+                              "logged no error -- it is the only copy of a session that "
+                              "cannot be recorded again")
     p_slim.add_argument("--session-key", help="hex key, skips recovery")
 
     p_ops = sub.add_parser("opcodes", parents=[common], help="opcode table and coverage")
@@ -431,6 +432,14 @@ def cmd_slim(args, cfg: RunConfig) -> int:
     if key is None or not _write_verified(plan, out, session, key, registry, ctx):
         return EXIT_WITH_ERRORS
     if args.replace:
+        # The original may be the only copy of a session that cannot be recorded
+        # again, and a run that logged an error -- the decode of the original is
+        # where they come from -- did not read it cleanly: keep both.
+        if _log.error_count():
+            _logger.error("%s is not replaced: this run logged %d error(s), so the original "
+                          "stays; the verified slim copy is kept as %s", capture,
+                          _log.error_count(), out)
+            return EXIT_WITH_ERRORS
         os.replace(out, capture)
         _logger.info("replaced %s with its slim copy, as asked", capture)
     return EXIT_OK

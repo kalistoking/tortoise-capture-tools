@@ -86,6 +86,64 @@ def test_a_slim_copy_whose_write_fails_leaves_no_partial_file_behind():
         assert sorted(p.name for p in Path(tmp).iterdir()) == ["capture.pcap"]
 
 
+def _slim_replace(decode_errors):
+    """`tct slim --replace` on a capture holding foreign traffic, whose decode
+    logs `decode_errors` errors. Returns (exit code, the capture's bytes before
+    and after, the files left in its folder)."""
+    calls = []
+
+    def decoded(*_):
+        calls.append(1)
+        if len(calls) == 1:                                  # the original's decode speaks
+            for _ in range(decode_errors):
+                cli.pipeline._logger.error("framing desync")
+        return ["the same"]
+
+    root = logging.getLogger(cli._log.ROOT)
+    saved = (root.level, root.propagate, list(root.handlers))
+    out, err = io.StringIO(), io.StringIO()
+    with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+        capture = Path(tmp) / "capture.pcap"
+        capture.write_bytes(_session())
+        before = capture.read_bytes()
+        config = Path(tmp) / "tct.toml"
+        config.write_text("", encoding="utf-8")
+        for (owner, name), value in {(cli, "_load_tables"): lambda _: None,
+                                     (cli.registry_mod, "load"): lambda _: None,
+                                     (cli, "_context"): lambda *_, **__: None,
+                                     (cli, "_decoded"): decoded,
+                                     (cli.crypt, "recover_session_key"): lambda _: b"key"}.items():
+            stack.enter_context(_replaced(owner, name, value))
+        stack.enter_context(contextlib.redirect_stdout(out))
+        stack.enter_context(contextlib.redirect_stderr(err))
+        try:
+            code = cli.main(["slim", str(capture), "--replace", "--config", str(config),
+                             "--no-log-file"])
+        finally:
+            root.setLevel(saved[0])                  # main() installs the tct logger's handlers
+            root.propagate = saved[1]
+            root.handlers[:] = saved[2]
+        return code, before, capture.read_bytes(), sorted(p.name for p in Path(tmp).iterdir())
+
+
+def test_replace_keeps_the_original_when_the_run_logged_an_error():
+    """--replace swapped the slim copy in as soon as it verified, before main
+    turned the original's decode errors into exit 2: the original -- the only
+    copy of a session that cannot be recorded again -- was gone from a run that
+    was not clean. The verified copy stays beside it for the user to keep."""
+    code, before, after, files = _slim_replace(decode_errors=1)
+    assert code == cli.EXIT_WITH_ERRORS
+    assert after == before
+    assert files == ["capture.pcap", "capture.wow.pcap", "tct.toml"]
+
+
+def test_replace_still_replaces_the_original_after_a_clean_run():
+    code, before, after, files = _slim_replace(decode_errors=0)
+    assert code == cli.EXIT_OK
+    assert after != before and len(after) < len(before)
+    assert files == ["capture.pcap", "tct.toml"]
+
+
 def test_a_slim_copy_that_decodes_differently_is_dropped_without_failing_the_run():
     decoded = iter([["the original"], ["something else"]])
     read = lambda *_: _SESSION                                           # noqa: E731
