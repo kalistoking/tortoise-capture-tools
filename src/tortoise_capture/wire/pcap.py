@@ -25,7 +25,7 @@ class Stream:
 
     data: bytes
     breakpoints: tuple[tuple[int, float], ...] = ()   # (buffer offset, capture time)
-    segments: tuple[bytes, ...] = ()                  # in order, for key recovery
+    segments: tuple[bytes, ...] = ()                  # in order; an overlap's tail joins its chunk
     gaps: tuple[tuple[int, int], ...] = ()            # [start, end) zero-filled, never seen
     _offsets: list[int] = field(default_factory=list, init=False, compare=False, repr=False)
 
@@ -75,6 +75,11 @@ def _reassemble(segments: list[tuple[int, bytes, float]], src: tuple[str, int],
     grows only by the bytes past its end. Sequence numbers count from the
     first segment's, modulo 2^32, so a stream that wraps carries on.
 
+    `Stream.segments` is for key recovery, which reads one message per chunk:
+    the fresh tail of an overlapping retransmit starts wherever the overlap
+    ended, mid-message more often than not, so it joins the chunk it
+    continues instead of being one of its own.
+
     A gap is zero-filled and reported: the decode after it will desync, and
     saying where is more useful than silently shifting every later offset.
     """
@@ -103,7 +108,10 @@ def _reassemble(segments: list[tuple[int, bytes, float]], src: tuple[str, int],
         fresh = data[end - offset:]               # only what is past the end so far
         if fresh:
             breakpoints.append((len(buf), ts))
-            kept.append(fresh)
+            if offset < end:
+                kept[-1] += fresh                 # the tail of an overlap continues its chunk
+            else:
+                kept.append(fresh)
             buf.extend(fresh)
             end += len(fresh)
 

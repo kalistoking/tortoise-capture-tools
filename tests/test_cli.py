@@ -12,10 +12,13 @@ from types import SimpleNamespace
 from test_slim import _session
 from tortoise_capture import cli
 from tortoise_capture.wire import slim
+from tortoise_capture.wire.opcodes import OpcodeTable
 
 _CFG = SimpleNamespace(logon_ip=None, logon_port=slim.LOGON_PORT)
 _ARGS = SimpleNamespace(no_slim=False)
-_SESSION = SimpleNamespace(server=("127.0.0.1", 8090), c2s=SimpleNamespace(segments=()))
+_SESSION = SimpleNamespace(server=("127.0.0.1", 8090), c2s=SimpleNamespace(segments=()),
+                           s2c="the server's stream")
+_TABLES = SimpleNamespace(opcodes=OpcodeTable(by_value={0x1EC: "SMSG_AUTH_CHALLENGE", 0x4FF: "X"}))
 
 
 class _Errors(logging.Handler):
@@ -108,11 +111,11 @@ def _slim_replace(decode_errors):
         before = capture.read_bytes()
         config = Path(tmp) / "tct.toml"
         config.write_text("", encoding="utf-8")
-        for (owner, name), value in {(cli, "_load_tables"): lambda _: None,
+        for (owner, name), value in {(cli, "_load_tables"): lambda _: _TABLES,
                                      (cli.registry_mod, "load"): lambda _: None,
                                      (cli, "_context"): lambda *_, **__: None,
                                      (cli, "_decoded"): decoded,
-                                     (cli.crypt, "recover_session_key"): lambda _: b"key"}.items():
+                                     (cli.crypt, "recover_session_key"): lambda *_: b"key"}.items():
             stack.enter_context(_replaced(owner, name, value))
         stack.enter_context(contextlib.redirect_stdout(out))
         stack.enter_context(contextlib.redirect_stderr(err))
@@ -285,3 +288,18 @@ def test_slim_refuses_an_out_path_it_would_not_write_to():
     except SystemExit:
         return
     raise AssertionError("--out and --replace together must be refused")
+
+
+def test_a_recovered_key_is_checked_against_the_server_and_the_forks_highest_opcode():
+    """The key came out of the client's headers alone and was trusted: a slot pair
+    gone wrong dispatched every tenth server message to the wrong module."""
+    seen = []
+
+    def recover(segments, server=None, ceiling=None):
+        seen.append((segments, server, ceiling))
+        return b"key"
+
+    with _replaced(cli.crypt, "recover_session_key", recover):
+        assert cli._session_key(_SESSION, None, _TABLES.opcodes) == b"key"
+        assert cli._session_key(_SESSION, "6b6579", _TABLES.opcodes) == b"key"  # given
+    assert seen == [((), "the server's stream", 0x4FF)]

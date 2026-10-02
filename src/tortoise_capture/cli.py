@@ -146,10 +146,13 @@ def _context(tables: Tables, cfg: RunConfig, **options) -> DecodeContext:
     return DecodeContext(tables=tables, log=_log.get_logger("decode"), options=options)
 
 
-def _session_key(session: pcap.CaptureSession, given: str | None) -> bytes | None:
+def _session_key(session: pcap.CaptureSession, given: str | None,
+                 opcodes: opcode_tables.OpcodeTable) -> bytes | None:
+    """The key given, or the one recovered and checked against the server's headers
+    and the highest opcode this fork defines."""
     if given:
         return bytes.fromhex(given)
-    return crypt.recover_session_key(session.c2s.segments)
+    return crypt.recover_session_key(session.c2s.segments, session.s2c, opcodes.max_opcode)
 
 
 def _packet_source(args, cfg: RunConfig, registry, ctx):
@@ -158,7 +161,7 @@ def _packet_source(args, cfg: RunConfig, registry, ctx):
     if source.suffix.lower() == ".jsonl":
         return jsonl_emit.read_packets(source), source.stem
     session = pcap.read_session(source, *_world(cfg, source))
-    key = _session_key(session, args.session_key)
+    key = _session_key(session, args.session_key, ctx.tables.opcodes)
     if key is None:
         return None, source.stem
     _slim_beside(source, session, key, cfg, registry, ctx, args)
@@ -271,7 +274,7 @@ def _slim_beside(capture: Path, session, key, cfg: RunConfig, registry, ctx, arg
 
 def cmd_key(args, cfg: RunConfig) -> int:
     session = pcap.read_session(Path(args.capture), *_world(cfg, Path(args.capture)))
-    key = crypt.recover_session_key(session.c2s.segments)
+    key = _session_key(session, None, opcode_tables.load(cfg.repo, cfg.cache_dir))
     if key is None:
         return EXIT_WITH_ERRORS
     print(key.hex())          # stdout contract: the key, on its own line
@@ -284,7 +287,7 @@ def cmd_dump(args, cfg: RunConfig) -> int:
     ctx = _context(tables, cfg)
 
     session = pcap.read_session(Path(args.capture), *_world(cfg, Path(args.capture)))
-    key = _session_key(session, args.session_key)
+    key = _session_key(session, args.session_key, tables.opcodes)
     if key is None:
         return EXIT_WITH_ERRORS
     _slim_beside(Path(args.capture), session, key, cfg, registry, ctx, args)
@@ -428,7 +431,7 @@ def cmd_slim(args, cfg: RunConfig) -> int:
     registry = registry_mod.load(tables)
     ctx = _context(tables, cfg)
     session = pcap.read_session(capture, *plan.world_server)
-    key = _session_key(session, args.session_key)
+    key = _session_key(session, args.session_key, tables.opcodes)
     if key is None or not _write_verified(plan, out, session, key, registry, ctx):
         return EXIT_WITH_ERRORS
     if args.replace:
