@@ -346,7 +346,77 @@ def test_a_disagreement_is_reported_against_its_own_spawns_first_sighting():
     ]
     _, gaps = author_rows(Stats(), events, ENTRY)
     gap = next(gap for gap in gaps if "dmg_min" in gap)
-    assert f"said {_float_bits(30.0)}" in gap
+    assert "said 30" in gap
+
+
+def test_spawns_disagreeing_on_a_field_the_template_owns_are_reported():
+    """Faction, attack time and attack power are not rolled per spawn
+    (Creature.cpp:568-575, StatSystem.cpp:804-810): the template has one value,
+    so a spawn showing another was changed -- a script flipped its faction --
+    and the first value seen, 14, would be authored with nothing said."""
+    other = GUID + 1
+    events = [
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_FACTIONTEMPLATE=14, UNIT_FIELD_ATTACK_POWER=44)),
+        make_event("object_create", 13.1, guid=other, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_FACTIONTEMPLATE=17, UNIT_FIELD_ATTACK_POWER=44)),
+    ]
+    rows, gaps = author_rows(Stats(), events, ENTRY)
+    [gap] = [gap for gap in gaps if "faction" in gap]
+    assert "14" in gap and "17" in gap
+    assert not any("attack_power" in gap for gap in gaps)
+    assert rows[0].values["faction"] == 14 and rows[0].provenance["faction"] == WIRE
+
+
+def test_spawns_agreeing_on_every_field_the_template_owns_are_not_reported():
+    other = GUID + 1
+    events = [make_event("object_create", 12.9 + n, guid=GUID + n, entry=ENTRY, fields=_fields(
+        UNIT_FIELD_FACTIONTEMPLATE=14, UNIT_FIELD_BASEATTACKTIME=2000, UNIT_FIELD_ATTACK_POWER=44,
+        UNIT_FIELD_LEVEL=9 + n)) for n in range(2)]
+    _, gaps = author_rows(Stats(), events, ENTRY)
+    assert not any("faction" in gap or "attack" in gap for gap in gaps)
+
+
+def test_a_respawn_that_changes_a_field_the_template_owns_is_reported():
+    events = [
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_FACTIONTEMPLATE=14)),
+        make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
+        make_event("object_create", 400.0, guid=GUID, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_FACTIONTEMPLATE=17)),
+    ]
+    _, gaps = author_rows(Stats(), events, ENTRY)
+    assert any("faction" in gap and "14" in gap and "17" in gap for gap in gaps)
+
+
+def test_a_spawn_that_omits_a_field_is_not_a_disagreement_about_it():
+    """A CREATE leaves out every zero field, and a spawn first seen without
+    one is the same 'not yet seen' the within-spawn check already allows."""
+    events = [
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_FACTIONTEMPLATE=14)),
+        make_event("object_create", 13.1, guid=GUID + 1, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_LEVEL=9)),
+    ]
+    _, gaps = author_rows(Stats(), events, ENTRY)
+    assert not any("faction" in gap for gap in gaps)
+
+
+def test_a_disagreement_gap_shows_the_decoded_value_not_the_raw_slot():
+    """A float field's raw slot is its bit pattern (1109393408 for 20.0 ...) and
+    a negative attack power's is its unsigned form (4294967292 for -4)."""
+    events = [
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_MINDAMAGE=_float_bits(20.5), UNIT_FIELD_ATTACK_POWER=44)),
+        make_event("object_create", 20.0, guid=GUID, entry=ENTRY, fields=_fields(
+            UNIT_FIELD_MINDAMAGE=_float_bits(40.25), UNIT_FIELD_ATTACK_POWER=0xFFFFFFFC)),
+    ]
+    _, gaps = author_rows(Stats(), events, ENTRY)
+    damage = next(gap for gap in gaps if "dmg_min" in gap)
+    assert "40.25" in damage and "20.5" in damage
+    assert str(_float_bits(40.25)) not in damage and str(_float_bits(20.5)) not in damage
+    power = next(gap for gap in gaps if "attack_power" in gap)
+    assert "-4" in power and "4294967292" not in power
 
 
 def test_a_spawn_level_inside_the_database_range_is_agreement():

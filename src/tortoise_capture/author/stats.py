@@ -37,10 +37,10 @@ the database exactly.
 `level_min..level_max` -- again at every respawn (Creature.cpp:755), so a spawn
 before and after a death is two rolls, compared as two spawns are -- and derives
 its health and mana from where that level falls in the range (the per-rank
-rates are 1 on this core, mangosd.conf.dist), so one spawn can confirm or contradict a stored range but pins at most one end
-of it -- and an observed range can only be narrower than the authored one. They
-are therefore checked against the database spawn by spawn and reported, never
-proposed. Against a fully migrated tw_world the check holds exactly: every
+rates are 1 on this core, mangosd.conf.dist), so one spawn can confirm or
+contradict a stored range but pins at most one end of it -- and an observed
+range can only be narrower than the authored one. They are therefore checked
+against the database spawn by spawn and reported, never proposed. Against a fully migrated tw_world the check holds exactly: every
 spawn of all 58 creature kinds in the three test captures lands on its
 template's level range, health and mana at its own level. `sql/base` alone does
 not -- it predates the migration that replaces `creature_template` wholesale
@@ -125,8 +125,11 @@ def _npc_flags_agree(stored: int, wire: int) -> bool:
     return (wire & ~_NPC_HIDDEN) == (seen & ~_NPC_HIDDEN) and not (wire & _NPC_HIDDEN & ~seen)
 
 
-def _shown(values: list) -> str:
-    return ", ".join(f"{v:g}" if isinstance(v, float) else str(v) for v in values)
+def _shown(values: list, name: str | None = None) -> str:
+    """Values as a person reads them: a float field's raw slot is its bit
+    pattern and a signed field's is the unsigned form, so decode by name."""
+    return ", ".join(f"{v:.9g}" if isinstance(v, float) else str(v)
+                     for v in (fv.decode(name, v) for v in values))
 
 
 def _agrees(stored: float, observed: float) -> bool:
@@ -447,10 +450,29 @@ class Stats(BaseAuthorRule):
             firsts = sorted({first for first, _ in pairs})
             laters = sorted({later for _, later in pairs})
             yield (f"creature_template.{column} -- a later CREATE of the same spawn broadcast "
-                   f"{name} as {_shown(laters)} where its first said {_shown(firsts)}; "
+                   f"{name} as {_shown(laters, name)} where its first said "
+                   f"{_shown(firsts, name)}; "
                    "the first value seen for the entry was used, but a creature whose stats "
                    "move between sightings was not in its authored state in at least one "
                    "of them")
+
+        # What no spawn rolls -- faction, attack time, attack power and the rest
+        # of _STATS are the template's own (Creature.cpp:568-575, :1633-1642,
+        # StatSystem.cpp:804-810) -- is one value for the entry. A spawn that
+        # shows another was changed, and which of them was not is not for a
+        # capture to say. A spawn that left the field out is not compared.
+        for name, column in _STATS.items():
+            seen: dict[int, int] = {}
+            for spawn in self._spawns.values():
+                if name in spawn:
+                    seen[spawn[name]] = seen.get(spawn[name], 0) + 1
+            if len(seen) > 1:
+                counts = ", ".join(f"{_shown([raw], name)} ({n} spawn{'s' * (n > 1)})"
+                                   for raw, n in sorted(seen.items()))
+                yield (f"creature_template.{column} -- spawns of this entry broadcast {name} as "
+                       f"{counts}, a respawn counting as one; the template owns one value, "
+                       "so at least one was not in its authored state, and the first seen, "
+                       f"{_shown([self._fields[name]], name)}, was used")
 
     def _stored_int(self, ctx: AuthorContext, column: str) -> int | None:
         if ctx.world is None:
