@@ -1,7 +1,8 @@
 """creature_spells: which spells, and the timings a capture can and cannot give.
 
-The spell ids are read straight off `SMSG_SPELL_GO`, and the delay from
-engagement to first cast is a clean measurement. Everything else in an unused
+The spell ids are read off `SMSG_SPELL_GO` -- those the creature chose to cast,
+which `casts.py` tells from the ones the server cast for it -- and the delay
+from engagement to first cast is a clean measurement. Everything else in an unused
 slot (`spellId_2`..`_8` and their siblings, for a creature with only one spell)
 is boilerplate the table already knows the value of, so it comes from
 `fill_schema_defaults` rather than being retyped here -- see
@@ -42,8 +43,9 @@ import math
 from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
+from .casts import CastLedger
 from ..core.contracts import (
-    CONVENTION, DERIVED, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event, is_creature,
+    CONVENTION, DERIVED, LOOKUP, WIRE, AuthorContext, AuthoredRow, Event,
 )
 from ..core.registry import author_rule
 
@@ -54,21 +56,40 @@ DEFAULT_PROBABILITY = 100
 @author_rule(id="spells", table="creature_spells", order=80)
 class Spells(BaseAuthorRule):
     def __init__(self) -> None:
+        self._ledger = CastLedger()
         self._casts: dict[int, int] = {}          # spell id -> times seen
+        self._triggered: dict[int, int] = {}      # spell id -> SPELL_GOs with no SPELL_START
         self._initial: dict[int, dict[str, Any]] = {}   # spell id -> engage-to-first-cast range
         self._repeat: dict[int, dict[str, Any]] = {}
         self._name: str | None = None
 
     def handle(self, ev: Event, mod: Any = None) -> None:
-        if ev.kind == "spell_go" and is_creature(ev.data.get("guid")):
+        chosen = self._ledger.classify(ev)
+        if chosen is not None:
             spell = ev.data["spell_id"]
-            self._casts[spell] = self._casts.get(spell, 0) + 1
+            seen = self._casts if chosen else self._triggered
+            seen[spell] = seen.get(spell, 0) + 1
         elif ev.kind == "spell_initial_delay":
             self._initial[int(ev.data["subject"])] = dict(ev.data)
         elif ev.kind == "spell_repeat_delay":
             self._repeat[int(ev.data["subject"])] = dict(ev.data)
         elif ev.kind == "creature_query":
             self._name = ev.data.get("name")
+
+    def _triggered_only(self) -> dict[int, int]:
+        """Spells never seen cast with a start: the server's, not a slot's. One
+        seen both ways stays a slot -- a start the capture missed is likelier
+        than a spell that is sometimes the creature's and sometimes not."""
+        return {spell: n for spell, n in sorted(self._triggered.items())
+                if spell not in self._casts}
+
+    @staticmethod
+    def _triggered_text(spell: int, times: int) -> str:
+        return (f"spell {spell}: cast {times} time(s) with no SMSG_SPELL_START before it, which "
+                "a spell the server casts for the creature (a TRIGGER_SPELL child, say) never "
+                "sends; left out, since a slot would make the creature cast it itself -- a "
+                "creature_spells row or an EventAI action casting with CF_TRIGGERED would look "
+                "the same, so check castFlags if this one is meant to be a slot")
 
     def rows(self, ctx: AuthorContext) -> Iterator[AuthoredRow]:
         if not self._casts:
@@ -137,6 +158,8 @@ class Spells(BaseAuthorRule):
                 skip.add(f"delayRepeatMin_{slot}")
                 skip.add(f"delayRepeatMax_{slot}")
 
+        for spell, times in self._triggered_only().items():
+            notes.append(self._triggered_text(spell, times))
         notes.append(f"{len(spells)} spell(s) seen cast; a spell never used during the "
                      "capture cannot appear here at all")
         notes.append("castTarget is left at the table's own default (1) for every slot: "
@@ -150,6 +173,9 @@ class Spells(BaseAuthorRule):
         yield self.row(values, provenance, notes=tuple(notes))
 
     def gaps(self, ctx: AuthorContext) -> Iterator[str]:
+        if not self._casts:                # no row to carry the note: say it here
+            for spell, times in self._triggered_only().items():
+                yield "creature_spells -- " + self._triggered_text(spell, times)
         for spell in sorted(self._casts):
             if spell not in self._initial:
                 yield (f"creature_spells.delayInitialMin/Max for spell {spell} -- seen cast, "

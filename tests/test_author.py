@@ -28,6 +28,13 @@ AGGRO_TEXT = "The Brotherhood Stands for Justice!"
 DEATH_TEXT = "The lies of Stormwind, must be told!"
 
 
+def _cast(t, spell, guid=GUID):
+    """A cast the creature chose to make: SMSG_SPELL_START, then its SMSG_SPELL_GO."""
+    return [make_event("spell_start", t, guid=guid, entry=ENTRY, spell_id=spell,
+                       cast_time_ms=0, is_instant=True),
+            make_event("spell_go", t, guid=guid, entry=ENTRY, spell_id=spell)]
+
+
 def _fields(**named):
     return [{"index": i, "name": name, "raw": raw}
             for i, (name, raw) in enumerate(named.items())]
@@ -509,7 +516,7 @@ def test_npc_flags_the_database_contradicts_are_left_to_a_human():
 
 
 def _casting():
-    return _stats_events() + [make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=12544)]
+    return _stats_events() + _cast(60.0, 12544)
 
 
 def test_a_template_with_its_own_spell_list_is_not_repointed():
@@ -1388,8 +1395,8 @@ def test_without_a_database_equipment_is_a_gap_not_a_guess():
 def _spell_events(confident=False, samples=1):
     return [
         make_event("creature_query", 12.9, entry=ENTRY, name="Ralthas"),
-        make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=1449),
-        make_event("spell_go", 78.3, guid=GUID, entry=ENTRY, spell_id=1449),
+        *_cast(60.0, 1449),
+        *_cast(78.3, 1449),
         make_event("spell_initial_delay", 999.0, entry=ENTRY, subject=1449,
                    value_min=0.047, value_max=0.047, samples=2),
         make_event("spell_repeat_delay", 999.0, entry=ENTRY, subject=1449,
@@ -1410,7 +1417,7 @@ def test_spells_emits_what_it_saw_cast():
 def _initial_delay_events(value_min, value_max, samples):
     return [
         make_event("creature_query", 12.9, entry=ENTRY, name="Ralthas"),
-        make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=1449),
+        *_cast(60.0, 1449),
         make_event("spell_initial_delay", 999.0, entry=ENTRY, subject=1449,
                    value_min=value_min, value_max=value_max, samples=samples),
     ]
@@ -1454,6 +1461,59 @@ def test_a_spell_list_named_without_a_query_says_where_the_name_came_from():
     assert rows[0].values["name"] == str(ENTRY) and rows[0].provenance["name"] == CONVENTION
 
 
+_TRIGGERED_CHILD = 12626      # Glutton's: 130 SMSG_SPELL_GOs, not one SMSG_SPELL_START
+
+
+def _lone_go(t, spell, guid=GUID):
+    return make_event("spell_go", t, guid=guid, entry=ENTRY, spell_id=spell)
+
+
+def test_a_spell_the_server_cast_for_the_creature_is_a_note_not_a_slot():
+    """A TRIGGER_SPELL effect's child goes out as its own SMSG_SPELL_GO but skips
+    SMSG_SPELL_START (Spell.cpp:3647-3650, `if (!m_IsTriggeredSpell)
+    SendSpellStart()`). It is not in the creature's creature_spells row, and a
+    slot for it makes the creature cast it on its own."""
+    events = [make_event("creature_query", 12.9, entry=ENTRY, name="Ralthas"),
+              *_cast(60.0, 1449), _lone_go(61.0, _TRIGGERED_CHILD)]
+    rows, _ = author_rows(Spells(), events, ENTRY)
+    values = rows[0].values
+    assert values["spellId_1"] == 1449 and _TRIGGERED_CHILD not in values.values()
+    assert any(str(_TRIGGERED_CHILD) in note and "SMSG_SPELL_START" in note
+               for note in rows[0].notes)
+
+
+def test_a_creature_that_only_ever_cast_triggered_spells_has_no_spell_list():
+    """No slot to author, so no creature_spells row -- and creature_template must
+    not point spell_list_id at the row that is not there."""
+    events = [make_event("creature_query", 12.9, entry=ENTRY, name="Glutton"),
+              _lone_go(61.0, _TRIGGERED_CHILD), _lone_go(62.0, _TRIGGERED_CHILD)]
+    rows, gaps = author_rows(Spells(), events, ENTRY)
+    assert rows == []
+    assert any(str(_TRIGGERED_CHILD) in gap and "SMSG_SPELL_START" in gap for gap in gaps)
+    rows, _ = author_rows(Stats(), _identity_events() + events[1:], ENTRY)
+    assert "spell_list_id" not in rows[0].values
+
+
+def test_a_chosen_cast_still_gives_the_template_its_spell_list():
+    rows, _ = author_rows(Stats(), _identity_events() + _cast(60.0, 1449), ENTRY)
+    assert rows[0].values["spell_list_id"] == ENTRY
+
+
+def test_a_cast_start_pairs_only_with_its_own_spell_and_caster():
+    """Another spell's start, or another creature's of the same spell, is no
+    start for this SMSG_SPELL_GO."""
+    other = make_guid(ENTRY, 99)
+    events = [make_event("spell_start", 59.0, guid=GUID, entry=ENTRY, spell_id=1449,
+                         cast_time_ms=0, is_instant=True),
+              _lone_go(60.0, 1450),                       # started 1449, not 1450
+              make_event("spell_start", 61.0, guid=other, entry=ENTRY, spell_id=1451,
+                         cast_time_ms=0, is_instant=True),
+              _lone_go(62.0, 1451)]                       # started by the other one
+    rows, gaps = author_rows(Spells(), events, ENTRY)
+    assert rows == []
+    assert any("1450" in gap for gap in gaps) and any("1451" in gap for gap in gaps)
+
+
 def test_slot_order_does_not_depend_on_how_often_a_spell_happened_to_fire():
     """creature_spells is positional, so the slot a spell lands in is content.
 
@@ -1464,9 +1524,9 @@ def test_slot_order_does_not_depend_on_how_often_a_spell_happened_to_fire():
     """
     events = [
         make_event("creature_query", 12.9, entry=ENTRY, name="Death Prophet Rakameg"),
-        make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=22417),
-        make_event("spell_go", 70.0, guid=GUID, entry=ENTRY, spell_id=28447),
-        make_event("spell_go", 80.0, guid=GUID, entry=ENTRY, spell_id=28447),
+        *_cast(60.0, 22417),
+        *_cast(70.0, 28447),
+        *_cast(80.0, 28447),
     ]
     rows, _ = author_rows(Spells(), events, ENTRY)
     assert rows[0].values["spellId_1"] == 22417      # lower id, cast less often
@@ -1515,7 +1575,7 @@ def test_an_unmeasured_initial_delay_is_never_schema_filled():
                                                   "delayInitialMax_1": 0}})
     events = [
         make_event("creature_query", 12.9, entry=ENTRY, name="Ralthas"),
-        make_event("spell_go", 60.0, guid=GUID, entry=ENTRY, spell_id=1449),
+        *_cast(60.0, 1449),
     ]
     rows, gaps = author_rows(Spells(), events, ENTRY, world=world)
     assert "delayInitialMin_1" not in rows[0].values

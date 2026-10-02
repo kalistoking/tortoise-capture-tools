@@ -60,6 +60,7 @@ from ..core.contracts import (
     CONFIRMED, CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, is_creature,
 )
 from ..core.registry import author_rule
+from .casts import CastLedger
 from ..fields import values as fv
 
 # A stored value this close to the broadcast one is the same value seen through
@@ -155,6 +156,7 @@ class Stats(BaseAuthorRule):
         self._spawns: dict[int, dict[str, int]] = {}       # guid -> its own first CREATE
         self._disagreed: dict[str, set[tuple[int, int]]] = {}  # name -> (first, later)
         self._saw_spells = False
+        self._casts = CastLedger()
 
     def handle(self, ev: Event, mod: Any = None) -> None:
         if ev.kind == "object_create" and is_creature(ev.data.get("guid")):
@@ -189,8 +191,9 @@ class Stats(BaseAuthorRule):
                     first[column] = speeds[index]
                 elif speeds[index] != first[column]:
                     self._disagreed.setdefault(column, set()).add((first[column], speeds[index]))
-        elif ev.kind == "spell_go" and is_creature(ev.data.get("guid")):
-            self._saw_spells = True
+        elif ev.kind in ("spell_start", "spell_go"):
+            if self._casts.classify(ev):        # a cast the creature chose: see casts.py
+                self._saw_spells = True
         elif ev.kind == "creature_query" and self._query is None:
             self._query = dict(ev.data)
 
