@@ -211,6 +211,87 @@ def is_corpse(ev: Event) -> bool:
     return "UNIT_FIELD_MAXHEALTH" in names and "UNIT_FIELD_HEALTH" not in names
 
 
+def health_of(ev: Event) -> int | None:
+    """The raw UNIT_FIELD_HEALTH value in a CREATE/VALUES block's field list,
+    or None when this event carries no health field at all."""
+    for f in ev.data.get("fields", ()):
+        if f.get("name") == "UNIT_FIELD_HEALTH":
+            return f["raw"]
+    return None
+
+
+# SMSG_PARTYKILLLOG and the HEALTH block that shows the same death arrive in
+# one batch -- offsets of 0.000 s were observed -- so this is slack.
+DEATH_COINCIDENCE = 1.0
+
+
+class Lifeline:
+    """When one creature died and lived again, as far as its blocks show.
+
+    A death has three witnesses, and a creature somebody else killed has only
+    the last two. SMSG_PARTYKILLLOG goes to the tapping player's group alone
+    (Unit.cpp:1125-1134), so it dates a death exactly but is often not there.
+    UNIT_FIELD_HEALTH going to 0 in a VALUES block says the creature died when
+    that block arrived. A corpse CREATE after a live sighting says it died
+    while the player was out of range, some time before: it proves the death
+    and only bounds when.
+
+    `deaths` holds every death the capture proves -- a corpse's at the time of
+    its CREATE, which is the latest it can have been; `timed` holds those whose
+    time is known, the only ones a respawn gap can be counted from. A
+    party_kill that follows the HEALTH-0 block of the same death puts its exact
+    time on it, and one that comes first leaves the HEALTH block nothing to add.
+
+    A creature never seen alive proves nothing by lying dead: it may stand
+    dead by default or have died before the capture began. `revivals` are the
+    VALUES blocks that put HEALTH back above 0 after a death -- a player who
+    never lost sight of the creature gets no fresh CREATE when it respawns.
+    """
+
+    def __init__(self) -> None:
+        self.deaths: list[float] = []
+        self.timed: list[float] = []
+        self.revivals: list[float] = []
+        self.alive = True            # no news is a creature standing; a death says otherwise
+        self.seen_alive = False      # a live CREATE or a HEALTH above 0 was shown
+        self._by_health: float | None = None   # a HEALTH-0 death a party_kill may yet date
+
+    def see(self, ev: Event) -> None:
+        """Take in one event about this creature; the ones that say nothing of
+        its life or death -- most of them -- are ignored."""
+        t = ev.packet.t
+        if t is None:
+            return
+        if ev.kind == "party_kill":
+            if self.deaths[-1:] == [self._by_health] and t - self._by_health <= DEATH_COINCIDENCE:
+                self.deaths[-1] = self.timed[-1] = t
+            else:
+                self.deaths.append(t)
+                self.timed.append(t)
+            self._by_health = None
+            self.alive = False
+        elif ev.kind == "object_create":
+            if not is_corpse(ev):
+                self.alive = self.seen_alive = True
+            else:
+                if self.alive and self.seen_alive:
+                    self.deaths.append(t)
+                self.alive = False
+        elif ev.kind == "object_values":
+            health = health_of(ev)
+            if health == 0:
+                if self.alive:
+                    self.deaths.append(t)
+                    self.timed.append(t)
+                    self._by_health = t
+                    self.alive = False
+            elif health is not None:
+                if not self.alive:
+                    self.revivals.append(t)
+                    self.alive = True
+                self.seen_alive = True
+
+
 def spawn_sighting(creates: Iterable[tuple[float, Any]],
                    deaths: Iterable[float]) -> tuple[Any, bool] | None:
     """Which CREATE stands for the spawn: (what it carried, after a death?).

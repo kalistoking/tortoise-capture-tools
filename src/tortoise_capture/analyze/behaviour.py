@@ -7,9 +7,12 @@ Three questions that no single packet answers:
   a player who never loses sight of the creature gets no fresh `CREATE` on
   respawn at all (the object never left the client's known-objects set), just
   a `VALUES` block resetting `HEALTH` back up from 0. Both count as "the
-  creature is alive again" -- `_health_of` and the `alive` flag on
-  `_Creature` exist to catch the second case, which a `CREATE`-only check
-  would miss entirely, not just measure less precisely.
+  creature is alive again" -- `Lifeline` (core/contracts.py) catches the
+  second case, which a `CREATE`-only check would miss entirely, not just
+  measure less precisely. The same `Lifeline` finds the deaths: not only
+  `SMSG_PARTYKILLLOG`, which reaches the tapping player's group alone, but a
+  `VALUES` block taking `HEALTH` to 0 and a corpse `CREATE` after a live
+  sighting, so a creature somebody else killed has its death too.
 
   **What triggers a text** -- a creature's lines arrive as plain chat packets
   with no hint of why. But an aggro line lands on the same timestamp as
@@ -54,7 +57,8 @@ from typing import Iterator
 
 from ..core.base import BaseAnalyzer
 from ..core.contracts import (
-    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec, is_corpse, is_creature,
+    Column, DecodeContext, Event, Lifeline, Packet, Row, SqlContext, TableSpec, is_corpse,
+    is_creature,
 )
 from ..core.registry import analyzer
 
@@ -98,15 +102,6 @@ _TABLE = TableSpec(
 )
 
 
-def _health_of(ev: Event) -> int | None:
-    """The raw UNIT_FIELD_HEALTH value in a CREATE/VALUES block's field list,
-    or None when this event carries no health field at all."""
-    for f in ev.data.get("fields", ()):
-        if f.get("name") == "UNIT_FIELD_HEALTH":
-            return f["raw"]
-    return None
-
-
 def _timer_fits(gaps: list[float]) -> list[int]:
     """Every whole-second timer all the gaps fit: one is the timer, two are a
     fixed timer the count cannot pick between, none is not one fixed timer."""
@@ -122,10 +117,8 @@ class _Creature:
     triggers: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     texts: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     spells: dict[int, list[float]] = field(default_factory=lambda: defaultdict(list))
-    deaths: list[float] = field(default_factory=list)
     creates: list[float] = field(default_factory=list)
-    revivals: list[float] = field(default_factory=list)   # HEALTH>0 sightings after a death
-    alive: bool = True                                     # gates a revival: must follow a death
+    life: Lifeline = field(default_factory=Lifeline)       # its deaths and revivals
     last_packet: Packet | None = None
 
 
@@ -171,28 +164,19 @@ class Behaviour(BaseAnalyzer):
 
         if ev.kind in _TRIGGERS:
             creature.triggers[_TRIGGERS[ev.kind]].append(t)
-            if ev.kind == "party_kill":
-                creature.deaths.append(t)
-                creature.alive = False
         elif ev.kind in ("monster_say", "monster_yell"):
             creature.texts[ev.data["message"]].append(t)
         elif ev.kind == "spell_go":
             creature.spells[ev.data["spell_id"]].append(t)
-        elif ev.kind == "object_create" and is_corpse(ev):
-            creature.alive = False
-        elif ev.kind == "object_create":
+        elif ev.kind == "object_create" and not is_corpse(ev):
             creature.creates.append(t)
-            creature.alive = True
 
-        # Checked regardless of kind: a revival can arrive as either a fresh
-        # CREATE (handled above too, for the creates list) or a VALUES block
-        # -- only the latter needs this extra path, since CREATE already
-        # counts as a sighting on its own.
-        if ev.kind in ("object_create", "object_values"):
-            health = _health_of(ev)
-            if health is not None and health > 0 and not creature.alive:
-                creature.revivals.append(t)
-                creature.alive = True
+        # Deaths and revivals are Lifeline's: a party_kill, a VALUES block
+        # taking HEALTH to 0 or back up, a CREATE that is a corpse or a
+        # creature standing. Not only the first -- it reaches the tapping
+        # player's group alone.
+        if ev.kind in ("party_kill", "object_create", "object_values"):
+            creature.life.see(ev)
 
     # -- report ------------------------------------------------------------
 
@@ -231,10 +215,12 @@ class Behaviour(BaseAnalyzer):
         # Either signal counts as "alive again": a fresh CREATE, or -- when the
         # player never lost sight of the creature and the server never had to
         # resend one -- a VALUES block resetting HEALTH off 0. See the module
-        # docstring.
-        sightings = sorted(c.creates + c.revivals)
+        # docstring. A gap is counted from a death whose time is known: a
+        # corpse seen on return only bounds when it died, so the gap from it
+        # would read short.
+        sightings = sorted(c.creates + c.life.revivals)
         gaps = []
-        for death in c.deaths:
+        for death in c.life.timed:
             after = [t for t in sightings if t > death]
             if after:
                 gaps.append(min(after) - death)
@@ -305,7 +291,7 @@ class Behaviour(BaseAnalyzer):
         casting a spell cannot lend that engagement a cast from its next life.
         """
         aggros = sorted(c.triggers.get("aggro", []))
-        deaths = sorted(c.deaths)
+        deaths = sorted(c.life.deaths)
         fights = []
         for boundary in [-math.inf, *deaths]:
             start = next((t for t in aggros if t > boundary), None)
@@ -340,7 +326,7 @@ class Behaviour(BaseAnalyzer):
                 aggros = c.triggers.get("aggro", ())
                 repeats[spell_id].extend(
                     b - a for a, b in zip(casts, casts[1:])
-                    if not any(a < d < b for d in c.deaths)
+                    if not any(a < d < b for d in c.life.deaths)
                     and not any(a < t <= b for t in aggros))
 
         for spell_id in sorted(initial.keys() | repeats.keys()):

@@ -46,7 +46,7 @@ from typing import Any, Iterator, Mapping
 
 from ..core.base import BaseAnalyzer
 from ..core.contracts import (
-    Column, DecodeContext, Event, Packet, Row, SqlContext, TableSpec, is_corpse,
+    Column, DecodeContext, Event, Lifeline, Packet, Row, SqlContext, TableSpec, is_corpse,
     is_creature, spawn_sighting,
 )
 from ..core.registry import analyzer
@@ -171,7 +171,7 @@ class _Route:
         self.entry: int | None = None
         self.last_packet: Packet | None = None
         self.engagements: list[float] = []          # aggro-trigger timestamps (ai_reaction)
-        self.deaths: list[float] = []                # party_kill timestamps
+        self.life = Lifeline()                       # its deaths, by every witness
         self.closes_elsewhere = False               # walk() came round to a non-start point
 
     def add_hop(self, point: tuple[float, float, float], t: float,
@@ -208,7 +208,7 @@ class _Route:
         return [p for p, t in zip(self.hop_points, self.hop_times) if not self._in_combat(t)]
 
     def _in_combat(self, t: float) -> bool:
-        deaths = sorted(self.deaths)
+        deaths = sorted(self.life.deaths)
         for start in self.engagements:
             after = [d for d in deaths if d > start]
             if start <= t <= (min(after) if after else math.inf):
@@ -339,7 +339,7 @@ class _Route:
         death the sighting is the first one -- where the spawn row stands
         too, so the route at least starts where the authored creature does.
         """
-        sighting = spawn_sighting(self.creates, self.deaths)
+        sighting = spawn_sighting(self.creates, self.life.deaths)
         if sighting is not None:
             spawn = sighting[0]
             return min(range(len(self.clusters)),
@@ -385,14 +385,23 @@ class Patrol(BaseAnalyzer):
             # only the respawn one is; the first sighting catches it mid-route.
             # spawn_sighting() tells them apart once the deaths are known too.
             position = (ev.data.get("movement") or {}).get("movement_info", {}).get("pos")
+            route = self._routes.get(guid)
             if position and ev.packet.t is not None and not is_corpse(ev):
                 route = self._routes.setdefault(guid, _Route())
                 route.entry = ev.data.get("entry")
                 route.creates.append((ev.packet.t, tuple(position[:3])))
+            if route is not None:
+                route.life.see(ev)
         elif ev.kind == "ai_reaction" and ev.data.get("reaction") == 2 and ev.packet.t is not None:
             self._routes.setdefault(guid, _Route()).engagements.append(ev.packet.t)
         elif ev.kind == "party_kill" and ev.packet.t is not None:
-            self._routes.setdefault(guid, _Route()).deaths.append(ev.packet.t)
+            self._routes.setdefault(guid, _Route()).life.see(ev)
+        elif ev.kind == "object_values":
+            # A creature somebody else killed has no party_kill: its death is
+            # the HEALTH block (see Lifeline). Only a route already begun can
+            # be told a death -- one never created has no sighting to place.
+            if (route := self._routes.get(guid)) is not None:
+                route.life.see(ev)
 
     # -- report ------------------------------------------------------------
 

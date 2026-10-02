@@ -154,6 +154,30 @@ def test_the_respawn_pins_the_numbering_even_when_seen_again_later():
     assert (round(first["position_x"]), round(first["position_y"])) == SQUARE[0][:2]
 
 
+def test_numbering_follows_the_respawn_of_a_creature_someone_else_killed():
+    """No party_kill came: the death is the HEALTH going to 0 in a VALUES block."""
+    events = ([_sighted(0.5, 3)] + _hops(laps=2.5)
+              + [make_event("object_values", 20.0, guid=GUID, entry=ENTRY,
+                            fields=[{"index": 0, "name": "UNIT_FIELD_HEALTH", "raw": 0}]),
+                 _sighted(30.0, 0), _sighted(40.0, 3)])
+    points = [ev for ev in run_analyzer(Patrol(), events) if ev.kind == "patrol_waypoint"]
+    first = points[0].data
+    assert (round(first["position_x"]), round(first["position_y"])) == SQUARE[0][:2]
+
+
+def test_numbering_follows_the_respawn_after_a_corpse_the_player_came_back_to():
+    """Seen alive, out of range while it died, then a corpse CREATE: that proves
+    the death, and the live CREATE after it is the respawn."""
+    x, y, z = SQUARE[2]
+    corpse = make_event("object_create", 25.0, guid=GUID, entry=ENTRY,
+                        movement={"movement_info": {"pos": (x, y, z, 0.0)}},
+                        fields=[{"index": 0, "name": "UNIT_FIELD_MAXHEALTH", "raw": 342}])
+    events = ([_sighted(0.5, 3)] + _hops(laps=2.5) + [corpse, _sighted(30.0, 0), _sighted(40.0, 3)])
+    points = [ev for ev in run_analyzer(Patrol(), events) if ev.kind == "patrol_waypoint"]
+    first = points[0].data
+    assert (round(first["position_x"]), round(first["position_y"])) == SQUARE[0][:2]
+
+
 def test_a_corpse_in_view_does_not_pin_the_numbering():
     """Where the corpse lies is where the creature died, not where it spawns."""
     x, y, z = SQUARE[2]
@@ -607,6 +631,66 @@ def test_a_reaggro_between_two_casts_costs_that_interval_and_nothing_else():
     events = _cast_events(("aggro", 100.0), ("cast", 104.0), ("cast", 120.0), ("cast", 130.0))
     repeat = findings_by_kind(run_analyzer(Behaviour(), events))["spell_repeat_delay"].data
     assert (repeat["value_min"], repeat["value_max"], repeat["samples"]) == (10.0, 16.0, 2)
+
+
+# A creature somebody else killed: SMSG_PARTYKILLLOG goes to the tapper's group
+# alone (Unit.cpp:1125-1134), so what the capture holds is the HEALTH going to 0
+# in a VALUES block -- or, when the player was out of range, a corpse CREATE.
+def _alive(t):
+    return make_event("object_create", t, guid=GUID, entry=ENTRY,
+                      fields=_fields(UNIT_FIELD_HEALTH=342, UNIT_FIELD_MAXHEALTH=342))
+
+
+def _corpse(t):
+    return make_event("object_create", t, guid=GUID, entry=ENTRY,
+                      fields=_fields(UNIT_FIELD_MAXHEALTH=342))
+
+
+def _health(t, health):
+    return make_event("object_values", t, guid=GUID, entry=ENTRY,
+                      fields=_fields(UNIT_FIELD_HEALTH=health))
+
+
+def test_a_death_seen_only_as_health_going_to_zero_is_a_death():
+    """The cast before the death and the one after the respawn were read as a
+    319 s repeat, the second fight's initial delay was lost, and there was no
+    respawn timer."""
+    events = _cast_events(("aggro", 100.0), ("cast", 104.0), ("aggro", 420.0), ("cast", 423.0))
+    events += [_health(110.0, 0), _health(410.0, 342)]
+    events.sort(key=lambda ev: ev.packet.t)
+    found = findings_by_kind(run_analyzer(Behaviour(), events))
+    assert "spell_repeat_delay" not in found
+    initial = found["spell_initial_delay"].data
+    assert (initial["value_min"], initial["value_max"], initial["samples"]) == (3.0, 4.0, 2)
+    respawn = found["respawn_timer"].data
+    assert (respawn["value_min"], respawn["value_max"], respawn["samples"]) == (300.0, 300.0, 1)
+
+
+def test_a_party_kill_stays_the_exact_time_of_a_death_the_health_block_also_shows():
+    """The two arrive in one batch, in either order, and are one death: the
+    gap counts from the party_kill and is counted once."""
+    for health_at, kill_at in ((109.9, 110.0), (110.1, 110.0)):
+        events = [_alive(10.0),
+                  _health(health_at, 0),
+                  make_event("party_kill", kill_at, guid=GUID, entry=ENTRY),
+                  _health(410.0, 342)]
+        events.sort(key=lambda ev: ev.packet.t)
+        respawn = findings_by_kind(run_analyzer(Behaviour(), events))["respawn_timer"].data
+        assert (respawn["value_min"], respawn["value_max"], respawn["samples"]) == (300.0, 300.0, 1)
+
+
+def test_a_corpse_coming_into_view_after_a_live_sighting_is_a_death_that_is_not_timed():
+    """The creature died while the player was out of range, so the corpse CREATE
+    only bounds when: the fight ends there, but the gap to its respawn is not a
+    respawn timer (it would read short by however long the corpse lay unseen)."""
+    events = _cast_events(("aggro", 100.0), ("cast", 104.0), ("aggro", 510.0), ("cast", 513.0))
+    events += [_corpse(200.0), _alive(500.0)]
+    events.sort(key=lambda ev: ev.packet.t)
+    found = findings_by_kind(run_analyzer(Behaviour(), events))
+    assert "spell_repeat_delay" not in found
+    initial = found["spell_initial_delay"].data
+    assert (initial["value_min"], initial["value_max"], initial["samples"]) == (3.0, 4.0, 2)
+    assert "respawn_timer" not in found
 
 
 # One entry, several spawns: every measurement belongs to the spawn it was taken on.

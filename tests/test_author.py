@@ -749,6 +749,46 @@ def test_a_spawn_only_ever_seen_dead_is_placed_where_it_lies_and_questioned():
     assert any("0x80" in gap for gap in gaps)
 
 
+def _health_values(t, health):
+    return make_event("object_values", t, guid=GUID, entry=ENTRY,
+                      fields=_fields(UNIT_FIELD_HEALTH=health))
+
+
+def test_a_death_seen_as_health_going_to_zero_makes_the_next_create_the_respawn():
+    """SMSG_PARTYKILLLOG goes to the tapping player's group alone
+    (Unit.cpp:1125-1134); a creature someone else killed shows as HEALTH 0."""
+    events = [_create(12.9, -9177.9, -1026.8), _health_values(90.0, 0),
+              _create(389.8, -9129.66, -1098.79, 73.66, -2.3216900825500488)]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert abs(creature.values["position_x"] - (-9129.66)) < 0.01
+    assert not any("holds no death" in note for note in creature.notes)
+
+
+def test_a_corpse_after_a_live_sighting_proves_a_death_and_the_next_create_is_the_respawn():
+    """It stood there, left the player's range, and was a corpse when the player
+    came back: it died in between, and the CREATE that follows is its respawn.
+    The note used to say the capture held no death."""
+    events = [_create(12.9, -9177.9, -1026.8), _lying_dead(120.0),
+              _create(389.8, -9129.66, -1098.79, 73.66, -2.3216900825500488)]
+    rows, gaps = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert abs(creature.values["position_x"] - (-9129.66)) < 0.01
+    assert not any("holds no death" in note or "NOT a respawn" in note for note in creature.notes)
+    # It died, but not where the clock saw it: no timer to measure, and not
+    # "never died" either.
+    assert any("spawntimesecsmin/max" in gap and "out of sight" in gap for gap in gaps)
+    assert not any("never died" in gap for gap in gaps)
+
+
+def test_a_corpse_seen_before_any_live_sighting_proves_no_death():
+    """It may stand dead by default, or have died before the capture began."""
+    events = [_lying_dead(10.0), _create(400.0, -9129.66, -1098.79, 73.66)]
+    rows, _ = author_rows(Spawn(), events, ENTRY)
+    creature = next(r for r in rows if r.table == "creature")
+    assert any("NOT a respawn" in note for note in creature.notes)
+
+
 _GAMEOBJECT = make_guid(ENTRY, 7, high=0xF110)
 
 

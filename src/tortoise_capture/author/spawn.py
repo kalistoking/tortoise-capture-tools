@@ -56,8 +56,8 @@ from typing import Any, Iterator
 
 from ..core.base import BaseAuthorRule
 from ..core.contracts import (
-    CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, is_corpse, is_creature,
-    spawn_sighting,
+    CONVENTION, DERIVED, WIRE, AuthorContext, AuthoredRow, Event, Lifeline, is_corpse,
+    is_creature, spawn_sighting,
 )
 from ..core.registry import author_rule
 
@@ -72,12 +72,16 @@ GUID_COUNTER_MASK = 0xFFFFFF    # ObjectGuid low bits: the spawn's database id
 _SUMMONER = {"UNIT_FIELD_CREATEDBY", "UNIT_FIELD_SUMMONEDBY"}
 
 
+# Said where a position is not a respawn's although the capture shows a death.
+_DIED_NOT_SEEN_AGAIN = "it died in the capture but no CREATE showed it standing again afterwards"
+
+
 @dataclass
 class _Spawn:
     """Everything the capture showed about one spawn -- the makings of one row."""
 
     creates: list[tuple[float, tuple[float, ...]]] = field(default_factory=list)
-    deaths: list[float] = field(default_factory=list)
+    life: Lifeline = field(default_factory=Lifeline)    # its deaths, by every witness
     waypoints: list[dict[str, Any]] = field(default_factory=list)
     route: dict[str, Any] | None = None       # its patrol_route finding
     wander: dict[str, Any] | None = None      # its wander_area finding
@@ -92,17 +96,17 @@ class _Spawn:
         or, for a spawn only ever seen lying dead, where it lay."""
         if not self.creates and self.lies_dead():
             return min(self.corpses)[1], False
-        return spawn_sighting(self.creates, self.deaths)
+        return spawn_sighting(self.creates, self.life.deaths)
 
     def lies_dead(self) -> bool:
         """Seen only dead, and never seen dying: a spawn that stands dead by
         default (SPAWN_FLAG_DEAD, Creature.cpp:1749) at its spawn point, or one
         killed before the capture began, where it died."""
-        return bool(self.corpses) and not self.creates and not self.deaths
+        return bool(self.corpses) and not self.creates and not self.life.deaths
 
     def died_out_of_sight(self) -> bool:
         """Seen dying and then only as the corpse, which lies where it died."""
-        return bool(self.corpses) and not self.creates and bool(self.deaths)
+        return bool(self.corpses) and not self.creates and bool(self.life.deaths)
 
     def patrols(self) -> bool:
         return bool(self.waypoints) and bool((self.route or {}).get("confident", True))
@@ -134,15 +138,19 @@ class Spawn(BaseAuthorRule):
                 spawn.map = self._map_id
             if spawn is not None and _SUMMONER & {f.get("name") for f in ev.data.get("fields", ())}:
                 spawn.summoned = True
+            if spawn is not None:
+                spawn.life.see(ev)
             if spawn is not None and is_corpse(ev):
                 if position and ev.packet.t is not None:
                     spawn.corpses.append((ev.packet.t, tuple(position)))
             elif position and ev.packet.t is not None and spawn is not None:
                 spawn.creates.append((ev.packet.t, tuple(position)))
-        elif ev.kind == "party_kill":
-            spawn = self._of(ev)
-            if ev.packet.t is not None and spawn is not None:
-                spawn.deaths.append(ev.packet.t)
+        elif ev.kind in ("party_kill", "object_values"):
+            # A death has three witnesses (Lifeline); a creature somebody else
+            # killed leaves only the HEALTH block and, if the player was out of
+            # range, a corpse CREATE above.
+            if (spawn := self._of(ev)) is not None:
+                spawn.life.see(ev)
         elif ev.kind == "respawn_timer":
             if (spawn := self._of(ev)) is not None:
                 spawn.respawn = dict(ev.data)
@@ -251,16 +259,18 @@ class Spawn(BaseAuthorRule):
             values["wander_distance"] = 0
             provenance["wander_distance"] = CONVENTION
         if wander and not after_death:
+            why = _DIED_NOT_SEEN_AGAIN if spawn.life.deaths else "the capture holds no death for it"
             notes.append("position is the centre of the area it wandered, NOT a respawn -- "
-                         "the capture holds no death for it; orientation is whichever way "
-                         "it faced when first seen")
+                         f"{why}; orientation is whichever way it faced when first seen")
         elif spawn.lies_dead():
             notes.append("position is where it lay dead, the only way it was seen: its spawn "
                          "point if it stands dead by default, where it died if it was killed "
                          "before the capture began -- see gaps")
         elif not after_death:
-            notes.append("position is the first sighting, NOT a respawn -- the capture "
-                         "holds no death for this creature, so this may be mid-route")
+            why = (_DIED_NOT_SEEN_AGAIN if spawn.life.deaths
+                   else "the capture holds no death for this creature")
+            notes.append(f"position is the first sighting, NOT a respawn -- {why}, so this "
+                         "may be mid-route")
         notes.append("position_z is ground-snapped by the server at runtime and tracks "
                      "the terrain, not the authored value")
 
@@ -346,7 +356,7 @@ class Spawn(BaseAuthorRule):
         elif any(s.map is None for _, s in seen):
             yield ("creature.map -- seen before the capture's first SMSG_LOGIN_VERIFY_WORLD "
                    "or SMSG_NEW_WORLD, so the map it stood on is not known")
-        if not any(s.deaths for _, s in seen):
+        if not any(s.life.deaths for _, s in seen):
             yield ("creature.spawntimesecsmin/max -- the creature never died in this capture, "
                    "so the respawn timer could not be measured")
         else:
@@ -354,9 +364,14 @@ class Spawn(BaseAuthorRule):
                 table = ("creature" if len(seen) == 1
                          else f"creature (spawn {guid & GUID_COUNTER_MASK})")
                 r = spawn.respawn
-                if not spawn.deaths:
+                if not spawn.life.deaths:
                     yield (f"{table}.spawntimesecsmin/max -- this spawn never died in the "
                            "capture, so its respawn timer could not be measured")
+                elif not spawn.life.timed:
+                    yield (f"{table}.spawntimesecsmin/max -- it died out of sight: the capture "
+                           "holds only the corpse that was lying there when the player came "
+                           "back, so when it died is not known and the gap to its respawn is "
+                           "no measure of the timer")
                 elif r is None:
                     yield (f"{table}.spawntimesecsmin/max -- it died but was not seen alive "
                            "again before the capture ended")
