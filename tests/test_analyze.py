@@ -575,6 +575,40 @@ def test_an_interval_spanning_a_death_is_not_a_repeat_delay():
     assert found["spell_repeat_delay"].data["samples"] == 1
 
 
+def _cast_events(*stamps):
+    """Aggros and casts of spell 28447 on one spawn: ("aggro", t) or ("cast", t)."""
+    events = [make_event("object_create", 10.0, guid=GUID, entry=ENTRY)]
+    for what, t in stamps:
+        if what == "aggro":
+            events.append(make_event("ai_reaction", t, guid=GUID, entry=ENTRY, reaction=2))
+        else:
+            events.append(make_event("spell_go", t, guid=GUID, entry=ENTRY, spell_id=28447))
+    return events
+
+
+def test_an_interval_spanning_an_evade_and_reset_is_not_a_repeat_delay():
+    """The player dies, the creature evades and resets -- its timers restart,
+    and no death of its own is on the wire -- and it aggroes again. The casts
+    either side of that are two fights, not one interval: 284 s read as a repeat
+    delay, and at 5 samples spells.py authors that max."""
+    events = _cast_events(("aggro", 100.0), ("cast", 104.0), ("cast", 120.0),
+                          ("aggro", 400.0), ("cast", 404.0), ("cast", 420.0))
+    repeat = findings_by_kind(run_analyzer(Behaviour(), events))["spell_repeat_delay"].data
+    assert (repeat["value_min"], repeat["value_max"], repeat["samples"]) == (16.0, 16.0, 2)
+
+
+def test_a_reaggro_between_two_casts_costs_that_interval_and_nothing_else():
+    """SMSG_AI_REACTION does not say whether an aggro restarted the timers, so
+    the interval it falls inside cannot be shown to be one timer's: it is left
+    out, the safe direction. The fight's opening aggro, before the first cast,
+    leaves the intervals after it alone."""
+    events = _cast_events(("aggro", 100.0), ("cast", 104.0), ("aggro", 110.0), ("cast", 120.0))
+    assert "spell_repeat_delay" not in findings_by_kind(run_analyzer(Behaviour(), events))
+    events = _cast_events(("aggro", 100.0), ("cast", 104.0), ("cast", 120.0), ("cast", 130.0))
+    repeat = findings_by_kind(run_analyzer(Behaviour(), events))["spell_repeat_delay"].data
+    assert (repeat["value_min"], repeat["value_max"], repeat["samples"]) == (10.0, 16.0, 2)
+
+
 # One entry, several spawns: every measurement belongs to the spawn it was taken on.
 OTHER = GUID + 1
 

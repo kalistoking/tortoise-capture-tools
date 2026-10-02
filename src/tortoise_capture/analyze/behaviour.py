@@ -297,7 +297,9 @@ class Behaviour(BaseAnalyzer):
 
         A full evade-and-reset also restarts the timers and is not detected
         here, so a capture of repeated evades yields fewer samples than it
-        could. Fewer, never wrong -- the safe direction.
+        could. Fewer, never wrong -- the safe direction. (The repeat delays
+        below do not rely on that: they drop every interval an aggro falls
+        inside, a reset or not, for the same reason.)
 
         The fight ends at the next death, so a creature that dies before
         casting a spell cannot lend that engagement a cast from its next life.
@@ -329,9 +331,17 @@ class Behaviour(BaseAnalyzer):
                         initial[spell_id].append(inside[0] - start)
 
                 # Intervals between consecutive casts inside one engagement: a
-                # gap spanning a death and respawn is not a repeat delay.
-                repeats[spell_id].extend(b - a for a, b in zip(casts, casts[1:])
-                                         if not any(a < d < b for d in c.deaths))
+                # gap spanning a death and respawn is not a repeat delay, nor is
+                # one an aggro falls inside. An evade-and-reset restarts the
+                # timers with no death of the creature's own on the wire, and
+                # SMSG_AI_REACTION does not say whether an aggro was one or a
+                # re-aggro mid-fight -- so neither interval can be shown to be a
+                # single timer's. An aggro at b counts: it came before that cast.
+                aggros = c.triggers.get("aggro", ())
+                repeats[spell_id].extend(
+                    b - a for a, b in zip(casts, casts[1:])
+                    if not any(a < d < b for d in c.deaths)
+                    and not any(a < t <= b for t in aggros))
 
         for spell_id in sorted(initial.keys() | repeats.keys()):
             if delays := initial[spell_id]:
