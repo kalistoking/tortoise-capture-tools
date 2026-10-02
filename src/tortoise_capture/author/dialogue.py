@@ -44,9 +44,21 @@ _EVENT_TYPES = {"aggro": EVENT_T_AGGRO, "death": EVENT_T_DEATH}
 # as the SMSG_MESSAGECHAT message type. The same numbering is `enum ChatType`
 # (Creature.h:122-123), which is also what a TALK script's datalong holds
 # (ScriptMgr.h:80) -- one wire fact, two columns.
+#
+# A yell is only nearly that: `MonsterYellToZone` builds the same
+# CHAT_MSG_MONSTER_YELL packet as `MonsterYell` (Object.cpp:3215-3217), so wire
+# type 0x0C is CHAT_TYPE_YELL (1) or CHAT_TYPE_ZONE_YELL (6) (ScriptMgr.cpp:2826,
+# :2851). Say against yell is the wire's; 1 against 6 is a reading, DERIVED.
 CHAT_MSG_MONSTER_SAY = 0x0B
 CHAT_MSG_MONSTER_YELL = 0x0C
 _CHAT_TYPES = {CHAT_MSG_MONSTER_SAY: 0, CHAT_MSG_MONSTER_YELL: 1}
+
+_ZONE_YELL_NOTE = ("{column} 1 (yell): SMSG_MESSAGECHAT type 0x0C is what both a yell "
+                   "(CHAT_TYPE_YELL, 1) and a zone yell (CHAT_TYPE_ZONE_YELL, 6, heard "
+                   "all over the zone) send -- Object.cpp:3215-3217 -- so the capture "
+                   "cannot tell them apart and 1 is the plain reading; a yell the "
+                   "player heard from farther than ListenRange.Yell (300 yd by default, "
+                   "World.cpp:1061) can only be 6, which is not checked here")
 
 # Columns whose schema default is a real value ("silent", "no emote"), not
 # boilerplate -- see the module docstring.
@@ -105,6 +117,8 @@ class Dialogue(BaseAuthorRule):
             said = self._said[message]
             text_id = self.authored_id(ctx.entry, n)
             chat_type = _CHAT_TYPES.get(said.get("chat_type"), 0)
+            yelled = said.get("chat_type") == CHAT_MSG_MONSTER_YELL
+            chat_source = DERIVED if yelled else WIRE
 
             # male_text only: a speaker's line is female_text for a female one
             # but male_text whenever female_text is empty (Object.cpp:3027 ->
@@ -113,8 +127,8 @@ class Dialogue(BaseAuthorRule):
             bt_values = {"entry": text_id, "male_text": message,
                         "chat_type": chat_type, "language_id": said.get("language", 0)}
             bt_provenance = {"entry": CONVENTION, "male_text": WIRE,
-                             "chat_type": WIRE, "language_id": WIRE}
-            bt_notes = []
+                             "chat_type": chat_source, "language_id": WIRE}
+            bt_notes = [_ZONE_YELL_NOTE.format(column="chat_type")] if yelled else []
             if message in self._sounds:
                 bt_values["sound_id"] = self._sounds[message]
                 bt_provenance["sound_id"] = DERIVED
@@ -129,9 +143,9 @@ class Dialogue(BaseAuthorRule):
                              "datalong": chat_type, "dataint": text_id,
                              "comments": f"{self._name or ctx.entry} - {trigger.capitalize()} text"}
             script_provenance = {"id": CONVENTION, "command": CONVENTION,
-                                 "datalong": WIRE, "dataint": CONVENTION,
+                                 "datalong": chat_source, "dataint": CONVENTION,
                                  "comments": CONVENTION}
-            script_notes = []
+            script_notes = [_ZONE_YELL_NOTE.format(column="datalong")] if yelled else []
             self.fill_schema_defaults(ctx, "creature_ai_scripts", script_values,
                                       script_provenance, script_notes)
             yield AuthoredRow(table="creature_ai_scripts", values=script_values,

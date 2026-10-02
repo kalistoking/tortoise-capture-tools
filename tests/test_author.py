@@ -121,7 +121,34 @@ def test_a_yell_sets_the_talk_scripts_datalong_to_the_chat_type():
     rows, _ = author_rows(Dialogue(), events, ENTRY)
     script = next(r for r in rows if r.table == "creature_ai_scripts")
     assert script.values["datalong"] == 1
-    assert script.provenance["datalong"] == WIRE
+    assert script.provenance["datalong"] == DERIVED       # 1 or 6: see the next test
+
+
+def test_a_yell_is_derived_because_the_wire_cannot_tell_a_zone_yell_from_one():
+    """MonsterYellToZone builds the same CHAT_MSG_MONSTER_YELL packet as a yell
+    (Object.cpp:3215-3217), so wire type 0x0C is CHAT_TYPE_YELL (1) or
+    CHAT_TYPE_ZONE_YELL (6) (ScriptMgr.cpp:2826, :2851). The say/yell
+    distinction is still the wire's; which yell it was is not."""
+    events = [
+        make_event("monster_yell", 59.9, guid=GUID, entry=ENTRY, message=AGGRO_TEXT,
+                   chat_type=0x0C, language=0),
+        make_event("text_trigger", 999.0, entry=ENTRY, subject=AGGRO_TEXT, trigger="aggro"),
+    ]
+    rows, _ = author_rows(Dialogue(), events, ENTRY)
+    text = next(r for r in rows if r.table == "broadcast_text")
+    script = next(r for r in rows if r.table == "creature_ai_scripts")
+    assert text.values["chat_type"] == 1
+    assert text.provenance["chat_type"] == DERIVED
+    for row in (text, script):
+        assert any("ZONE_YELL" in note and "Object.cpp" in note for note in row.notes)
+
+
+def test_a_say_keeps_the_chat_type_as_the_wire_gave_it():
+    rows, _ = author_rows(Dialogue(), _dialogue_events(), ENTRY)
+    text = next(r for r in rows if r.table == "broadcast_text")
+    script = next(r for r in rows if r.table == "creature_ai_scripts")
+    assert text.provenance["chat_type"] == WIRE and script.provenance["datalong"] == WIRE
+    assert not any("ZONE_YELL" in note for note in text.notes + script.notes)
 
 
 def test_a_say_sets_datalong_to_zero_for_the_same_reason():
