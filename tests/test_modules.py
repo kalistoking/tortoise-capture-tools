@@ -525,6 +525,79 @@ def test_play_sound_carries_no_sender_so_no_entry_key():
 
 
 # --------------------------------------------------------------------------
+# forced_reactions: SMSG_SET_FORCED_REACTIONS -- the player's whole table
+# --------------------------------------------------------------------------
+
+from tortoise_capture.core.reader import WireError  # noqa: E402
+from tortoise_capture.modules.forced_reactions import ForcedReactions  # noqa: E402
+
+FORCED_REACTIONS_OPCODE = 0x2A5
+GORDOK_FACTION, STORMWIND_FACTION = 1374, 56
+
+
+def _forced_reactions_packet(*pairs: tuple[int, int], count: int | None = None):
+    body = struct.pack("<I", len(pairs) if count is None else count)
+    body += b"".join(struct.pack("<II", faction, rank) for faction, rank in pairs)
+    return make_packet(FORCED_REACTIONS_OPCODE, body, "SMSG_SET_FORCED_REACTIONS")
+
+
+def test_forced_reactions_reads_each_pair_in_wire_order_with_the_rank_named():
+    pkt = _forced_reactions_packet((GORDOK_FACTION, 4), (STORMWIND_FACTION, 7))
+    mod = ForcedReactions()
+    ev = decode_one(mod, pkt, make_ctx())
+    assert ev.kind == "forced_reactions" and ev.data["count"] == 2
+    assert ev.data["reactions"] == [
+        {"faction_id": GORDOK_FACTION, "rank": 4, "rank_name": "friendly"},
+        {"faction_id": STORMWIND_FACTION, "rank": 7, "rank_name": "exalted"},
+    ]
+    assert "entry" not in ev.data and "guid" not in ev.data
+    text = mod.text_templates["forced_reactions"].format_map(mod.text_fields(ev))
+    assert text == "count=2 1374->friendly(4), 56->exalted(7)"
+    rows = list(mod.sql_rows(ev, _sql_ctx()))
+    assert [(r.table, r.values) for r in rows] == [
+        ("capture_forced_reactions", {"capture": "test", "t": 1.0, "seq": 0, "slot": 0,
+                                      "faction_id": GORDOK_FACTION, "rank": 4}),
+        ("capture_forced_reactions", {"capture": "test", "t": 1.0, "seq": 0, "slot": 1,
+                                      "faction_id": STORMWIND_FACTION, "rank": 7}),
+    ]
+
+
+def test_an_empty_forced_reaction_table_is_one_event_saying_everything_ended():
+    """The server resends the whole table when an aura is removed, so count 0 is
+    the clearing itself (SpellAuras.cpp:2698-2709), not an absent packet."""
+    mod = ForcedReactions()
+    ev = decode_one(mod, _forced_reactions_packet(), make_ctx())
+    assert ev.data["count"] == 0 and ev.data["reactions"] == []
+    text = mod.text_templates["forced_reactions"].format_map(mod.text_fields(ev))
+    assert text == "count=0 (cleared)"
+    rows = list(mod.sql_rows(ev, _sql_ctx()))
+    assert [(r.table, r.values) for r in rows] == [
+        ("capture_forced_reactions", {"capture": "test", "t": 1.0, "seq": 0, "slot": 0,
+                                      "faction_id": None, "rank": None}),
+    ]
+
+
+def test_a_forced_reaction_table_cut_inside_a_pair_is_a_wire_error_naming_the_field():
+    pkt = _forced_reactions_packet((GORDOK_FACTION, 4), count=2)
+    pkt = make_packet(FORCED_REACTIONS_OPCODE, pkt.body + struct.pack("<I", STORMWIND_FACTION),
+                      "SMSG_SET_FORCED_REACTIONS")
+    try:
+        list(ForcedReactions().decode(pkt, make_ctx()))
+        assert False, "expected WireError"
+    except WireError as err:
+        assert "rank1" in str(err)
+
+
+def test_a_forced_reaction_rank_above_exalted_is_a_wire_error_not_a_guess():
+    """ReputationRank ends at REP_EXALTED = 7 (SharedDefines.h:102-111)."""
+    try:
+        list(ForcedReactions().decode(_forced_reactions_packet((GORDOK_FACTION, 8)), make_ctx()))
+        assert False, "expected WireError"
+    except WireError as err:
+        assert "rank0" in str(err)
+
+
+# --------------------------------------------------------------------------
 # attacker_state: SMSG_ATTACKERSTATEUPDATE -- one melee swing's outcome
 # --------------------------------------------------------------------------
 
