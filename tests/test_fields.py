@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import logging
-import struct
-
+from support import float_bits, logged
 from tortoise_capture.fields import tables, values
 
 # The shape of the server's own UpdateFields.h, cut down: OBJECT_END is also
@@ -49,31 +47,17 @@ def test_the_last_member_of_an_enum_needs_no_trailing_comma():
 def test_a_symbol_the_header_does_not_define_is_reported_not_read_as_zero():
     """An unknown term summed as 0 would shift every index after it in silence."""
     header = HEADER.replace("0x00 + OBJECT_END", "0x00 + OBJECT_ENDS")
-    seen = []
-
-    class Catch(logging.Handler):
-        def emit(self, record):
-            seen.append(record)
-
-    handler = Catch(logging.ERROR)
-    tables._logger.addHandler(handler)
-    try:
+    with logged(tables._logger) as seen:
         tables._evaluate(header, ("EObjectFields", "EUnitFields"))
-    finally:
-        tables._logger.removeHandler(handler)
-    assert any("OBJECT_ENDS" in record.getMessage() for record in seen)
-
-
-def _raw(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
+    assert any("OBJECT_ENDS" in message for message in seen.messages)
 
 
 def test_the_cast_speed_and_power_cost_multipliers_are_floats():
     """The server sends UNIT_MOD_CAST_SPEED as a float (Object.cpp:782-787), 1.0
     for every creature (Creature.cpp:425) -- read as an int it was 1065353216.
     UNIT_FIELD_POWER_COST_MULTIPLIER is one too (SpellAuras.cpp:5491)."""
-    assert values.decode("UNIT_MOD_CAST_SPEED", _raw(1.0)) == 1.0
-    assert values.decode("UNIT_FIELD_POWER_COST_MULTIPLIER_03", _raw(0.5)) == 0.5
+    assert values.decode("UNIT_MOD_CAST_SPEED", float_bits(1.0)) == 1.0
+    assert values.decode("UNIT_FIELD_POWER_COST_MULTIPLIER_03", float_bits(0.5)) == 0.5
 
 
 def test_resistances_and_power_cost_modifiers_are_signed():

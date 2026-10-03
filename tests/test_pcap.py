@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from support import logged
 from tortoise_capture.wire import pcap
 
 CLIENT, SERVER = ("10.0.0.2", 50000), ("10.0.0.1", 8090)
@@ -50,21 +51,11 @@ def test_every_other_connection_to_the_world_port_is_named_not_dropped_unseen():
     or a session that was still closing when the capture began."""
     import logging
 
-    seen = []
-
-    class Catch(logging.Handler):
-        def emit(self, record):
-            seen.append(record.getMessage())
-
-    handler = Catch(logging.WARNING)
-    pcap._logger.addHandler(handler)
-    try:
+    with logged(pcap._logger, level=logging.WARNING) as seen:
         client = pcap._world_client([("10.0.0.2", 50000), ("10.0.0.2", 50000),
                                      ("10.0.0.2", 50007)], "10.0.0.1", 8090)
-    finally:
-        pcap._logger.removeHandler(handler)
     assert client == ("10.0.0.2", 50000)
-    assert any("50007" in message for message in seen)
+    assert any("50007" in message for message in seen.messages)
 
 
 
@@ -105,20 +96,10 @@ def test_a_message_whose_body_the_capture_never_saw_is_not_decoded():
         def name(self, opcode):
             return None
 
-    seen = []
-
-    class Catch(logging.Handler):
-        def emit(self, record):
-            seen.append(record.getMessage())
-
-    handler = Catch(logging.ERROR)
-    framing._logger.addHandler(handler)
-    try:
+    with logged(framing._logger) as seen:
         packets = list(framing.walk(stream, Direction.S2C, key, Table(), 0.0))
-    finally:
-        framing._logger.removeHandler(handler)
     assert [p.opcode for p in packets] == [framing.SMSG_AUTH_CHALLENGE, 0x97]
-    assert any("20 byte" in message for message in seen)
+    assert any("20 byte" in message for message in seen.messages)
 
 
 def test_the_reassembly_says_where_it_filled_a_gap():
@@ -151,18 +132,8 @@ def test_a_stream_too_short_for_its_first_header_is_reported_not_a_traceback():
         def name(self, opcode):
             return None
 
-    seen = []
-
-    class Catch(logging.Handler):
-        def emit(self, record):
-            seen.append(record.getMessage())
-
-    handler = Catch(logging.ERROR)
-    framing._logger.addHandler(handler)
-    try:
+    with logged(framing._logger) as seen:
         for direction, size in ((Direction.S2C, 3), (Direction.C2S, 5)):
             stream = pcap.Stream(b"\x00" * size, ((0, 0.0),))
             assert list(framing.walk(stream, direction, bytes(40), Table(), 0.0)) == []
-    finally:
-        framing._logger.removeHandler(handler)
-    assert len(seen) == 2 and "3 byte" in seen[0] and "5 byte" in seen[1]
+    assert seen.count == 2 and "3 byte" in seen.messages[0] and "5 byte" in seen.messages[1]

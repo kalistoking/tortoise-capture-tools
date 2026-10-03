@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 
-from support import findings_by_kind, make_event, make_guid, run_analyzer
+from support import (
+    findings_by_kind, health_values, make_event, make_guid, named_fields, run_analyzer,
+)
 from tortoise_capture.analyze.behaviour import Behaviour
 from tortoise_capture.analyze.patrol import Patrol
 
@@ -516,10 +518,6 @@ def test_respawn_timer_is_the_death_to_create_gap():
     assert respawn["samples"] == 1 and respawn["confident"] is False
 
 
-def _fields(**named):
-    return [{"index": i, "name": name, "raw": raw} for i, (name, raw) in enumerate(named.items())]
-
-
 def test_a_corpse_coming_into_view_is_not_the_respawn():
     """A CREATE omits zero fields, so one carrying MAXHEALTH but no HEALTH is
     a corpse -- sent to a player who walks back into range while it still
@@ -527,12 +525,12 @@ def test_a_corpse_coming_into_view_is_not_the_respawn():
     timer read 20 s."""
     events = [
         make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342, UNIT_FIELD_MAXHEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342, UNIT_FIELD_MAXHEALTH=342)),
         make_event("party_kill", 20.0, guid=GUID, entry=ENTRY),
         make_event("object_create", 40.0, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_MAXHEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_MAXHEALTH=342)),
         make_event("object_create", 320.0, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342, UNIT_FIELD_MAXHEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342, UNIT_FIELD_MAXHEALTH=342)),
     ]
     respawn = findings_by_kind(run_analyzer(Behaviour(), events))["respawn_timer"].data
     assert math.isclose(respawn["value_min"], 300.0)
@@ -546,15 +544,15 @@ def test_respawn_is_also_detected_from_a_health_reset_with_no_fresh_create():
     300s timer."""
     events = [
         make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
-                  fields=_fields(UNIT_FIELD_HEALTH=342)),
+                  fields=named_fields(UNIT_FIELD_HEALTH=342)),
         make_event("party_kill", 755.841, guid=GUID, entry=ENTRY),
         make_event("object_values", 756.0, guid=GUID, entry=ENTRY,
-                  fields=_fields(UNIT_FIELD_HEALTH=0)),
+                  fields=named_fields(UNIT_FIELD_HEALTH=0)),
         make_event("object_values", 1055.863, guid=GUID, entry=ENTRY,
-                  fields=_fields(UNIT_FIELD_HEALTH=342)),
+                  fields=named_fields(UNIT_FIELD_HEALTH=342)),
         make_event("party_kill", 1499.668, guid=GUID, entry=ENTRY),
         make_event("object_values", 1798.885, guid=GUID, entry=ENTRY,
-                  fields=_fields(UNIT_FIELD_HEALTH=342)),
+                  fields=named_fields(UNIT_FIELD_HEALTH=342)),
     ]
     found = findings_by_kind(run_analyzer(Behaviour(), events))
     respawn = found["respawn_timer"].data
@@ -573,13 +571,13 @@ def test_respawn_gaps_two_whole_seconds_fit_are_left_open_not_called_redrawn():
     samples of a fixed 300 s land like this."""
     events = [
         make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342)),
         make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
         make_event("object_values", 399.30, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342)),
         make_event("party_kill", 500.0, guid=GUID, entry=ENTRY),
         make_event("object_values", 799.45, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342)),
     ]
     respawn = findings_by_kind(run_analyzer(Behaviour(), events))["respawn_timer"].data
     assert respawn["seconds"] is None and respawn["fits"] == [299, 300]
@@ -590,13 +588,13 @@ def test_respawn_gaps_no_one_whole_second_explains_are_not_a_timer():
     (Creature.cpp:1974): gaps a whole second apart and more are not one timer."""
     events = [
         make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342)),
         make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
         make_event("object_values", 400.1, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342)),
         make_event("party_kill", 500.0, guid=GUID, entry=ENTRY),
         make_event("object_values", 828.4, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342)),
     ]
     respawn = findings_by_kind(run_analyzer(Behaviour(), events))["respawn_timer"].data
     assert respawn["seconds"] is None and respawn["confident"] is False
@@ -608,11 +606,11 @@ def test_a_health_update_while_already_alive_is_not_mistaken_for_a_respawn():
     confirmed death is a revival."""
     events = [
         make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
-                  fields=_fields(UNIT_FIELD_HEALTH=342)),
+                  fields=named_fields(UNIT_FIELD_HEALTH=342)),
         make_event("object_values", 20.0, guid=GUID, entry=ENTRY,
-                  fields=_fields(UNIT_FIELD_HEALTH=200)),      # took damage
+                  fields=named_fields(UNIT_FIELD_HEALTH=200)),      # took damage
         make_event("object_values", 25.0, guid=GUID, entry=ENTRY,
-                  fields=_fields(UNIT_FIELD_HEALTH=342)),      # healed back up
+                  fields=named_fields(UNIT_FIELD_HEALTH=342)),      # healed back up
     ]
     found = run_analyzer(Behaviour(), events)
     assert "respawn_timer" not in {ev.kind for ev in found}
@@ -795,17 +793,16 @@ def test_a_reaggro_between_two_casts_costs_that_interval_and_nothing_else():
 # in a VALUES block -- or, when the player was out of range, a corpse CREATE.
 def _alive(t):
     return make_event("object_create", t, guid=GUID, entry=ENTRY,
-                      fields=_fields(UNIT_FIELD_HEALTH=342, UNIT_FIELD_MAXHEALTH=342))
+                      fields=named_fields(UNIT_FIELD_HEALTH=342, UNIT_FIELD_MAXHEALTH=342))
 
 
 def _corpse(t):
     return make_event("object_create", t, guid=GUID, entry=ENTRY,
-                      fields=_fields(UNIT_FIELD_MAXHEALTH=342))
+                      fields=named_fields(UNIT_FIELD_MAXHEALTH=342))
 
 
 def _health(t, health):
-    return make_event("object_values", t, guid=GUID, entry=ENTRY,
-                      fields=_fields(UNIT_FIELD_HEALTH=health))
+    return health_values(t, health, guid=GUID, entry=ENTRY)
 
 
 def test_a_death_seen_only_as_health_going_to_zero_is_a_death():
@@ -859,12 +856,12 @@ def test_a_respawn_is_only_the_same_spawn_seen_alive_again():
     later read as a 20 s respawn -- the dead one's `alive` flag was shared."""
     events = [
         make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=206)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=206)),
         make_event("object_create", 11.0, guid=OTHER, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=231)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=231)),
         make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
         make_event("object_values", 120.0, guid=OTHER, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=231)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=231)),
         make_event("object_create", 130.0, guid=OTHER, entry=ENTRY),
         make_event("object_create", 400.0, guid=GUID, entry=ENTRY),
     ]
@@ -957,13 +954,13 @@ def test_the_respawn_slack_is_half_a_second():
     -- where a slack of a whole second would let 300 in as well."""
     events = [
         make_event("object_create", 10.0, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342)),
         make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
         make_event("object_values", 400.8, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342)),
         make_event("party_kill", 500.0, guid=GUID, entry=ENTRY),
         make_event("object_values", 800.9, guid=GUID, entry=ENTRY,
-                   fields=_fields(UNIT_FIELD_HEALTH=342)),
+                   fields=named_fields(UNIT_FIELD_HEALTH=342)),
     ]
     respawn = findings_by_kind(run_analyzer(Behaviour(), events))["respawn_timer"].data
     assert respawn["seconds"] == 301
@@ -977,10 +974,10 @@ def test_the_analyzers_take_a_creature_guid_only():
                         dest=SQUARE[i % 4]) for i in range(40)]
     assert not findings_by_kind(run_analyzer(Patrol(), moves))
     lives = [make_event("object_create", 10.0, guid=pet, entry=ENTRY,
-                        fields=_fields(UNIT_FIELD_HEALTH=342)),
+                        fields=named_fields(UNIT_FIELD_HEALTH=342)),
              make_event("party_kill", 100.0, guid=pet, entry=ENTRY),
              make_event("object_create", 400.0, guid=pet, entry=ENTRY,
-                        fields=_fields(UNIT_FIELD_HEALTH=342))]
+                        fields=named_fields(UNIT_FIELD_HEALTH=342))]
     assert "respawn_timer" not in findings_by_kind(run_analyzer(Behaviour(), lives))
 
 

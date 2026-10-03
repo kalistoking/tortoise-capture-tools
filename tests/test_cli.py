@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from support import logged
+
 from test_slim import _session
 from tortoise_capture import cli
 from tortoise_capture.wire import slim
@@ -19,19 +21,6 @@ _ARGS = SimpleNamespace(no_slim=False)
 _SESSION = SimpleNamespace(server=("127.0.0.1", 8090), c2s=SimpleNamespace(segments=()),
                            s2c="the server's stream")
 _TABLES = SimpleNamespace(opcodes=OpcodeTable(by_value={0x1EC: "SMSG_AUTH_CHALLENGE", 0x4FF: "X"}))
-
-
-class _Errors(logging.Handler):
-    """Counts what a run would report as an error -- what fails its exit code."""
-
-    def __init__(self):
-        super().__init__(logging.ERROR)
-        self.count = 0
-        self.messages = []
-
-    def emit(self, record):
-        self.count += 1
-        self.messages.append(record.getMessage())
 
 
 @contextlib.contextmanager
@@ -51,12 +40,8 @@ def _slim_beside_a_capture(patches):
         capture.write_bytes(_session())
         for (owner, name), value in patches.items():
             stack.enter_context(_replaced(owner, name, value))
-        seen = _Errors()
-        cli._logger.addHandler(seen)
-        try:
+        with logged(cli._logger) as seen:
             cli._slim_beside(capture, _SESSION, b"key", _CFG, None, None, _ARGS)
-        finally:
-            cli._logger.removeHandler(seen)
         return seen.count, sorted(p.name for p in Path(tmp).iterdir())
 
 
@@ -172,17 +157,12 @@ def test_checking_a_slim_copy_reports_nothing_the_run_would_count_as_an_error():
         cli.pipeline._logger.error("framing desync")
         return ["the same"]
 
-    seen = _Errors()
-    root = logging.getLogger(cli._log.ROOT)
-    root.addHandler(seen)
-    try:
+    with logged(logging.getLogger(cli._log.ROOT)) as seen:
         _, files = _slim_beside_a_capture({
             (cli.pcap, "read_session"): lambda *_: _SESSION,
             (cli.crypt, "recover_session_key"): recover,
             (cli, "_decoded"): decoded,
         })
-    finally:
-        root.removeHandler(seen)
     assert seen.count == 0 and len(files) == 2
 
 
@@ -196,8 +176,6 @@ def test_slim_itself_reports_what_the_original_decodes_with():
             cli.pipeline._logger.error("framing desync")
         return ["the same"]
 
-    seen = _Errors()
-    root = logging.getLogger(cli._log.ROOT)
     with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
         capture = Path(tmp) / "capture.pcap"
         capture.write_bytes(_session())
@@ -206,11 +184,8 @@ def test_slim_itself_reports_what_the_original_decodes_with():
                                      (cli, "_decoded"): decoded}.items():
             stack.enter_context(_replaced(owner, name, value))
         plan = slim.plan(capture, slim.Endpoint(None, slim.LOGON_PORT), None)
-        root.addHandler(seen)
-        try:
+        with logged(logging.getLogger(cli._log.ROOT)) as seen:
             cli._write_verified(plan, Path(tmp) / "capture.wow.pcap", _SESSION, b"key", None, None)
-        finally:
-            root.removeHandler(seen)
     assert seen.count == 1
 
 
@@ -254,14 +229,9 @@ def test_a_named_address_no_realm_is_at_is_warned_about_not_whispered():
     """A tct.toml copied from the old example keeps server_ip uncommented; with
     the realm elsewhere the run fell back to 127.0.0.1:8090 and said why only
     at debug level."""
-    warned = _Errors()
-    warned.setLevel(logging.WARNING)
-    cli._logger.addHandler(warned)
-    try:
+    with logged(cli._logger, level=logging.WARNING) as warned:
         _world_of(_session(world_port=8085, listed="127.0.0.1:8085"),
                   named=frozenset({"server_ip"}), server_ip="10.0.0.5")
-    finally:
-        cli._logger.removeHandler(warned)
     assert warned.count == 1
 
 
@@ -322,12 +292,8 @@ def test_slim_reads_a_named_port_at_the_address_dump_does():
 
 def test_an_unknown_output_format_is_an_error_not_dropped():
     """`--format text,xml` wrote the text and said nothing of xml."""
-    seen = _Errors()
-    cli._logger.addHandler(seen)
-    try:
+    with logged(cli._logger) as seen:
         code = cli.cmd_decode(SimpleNamespace(format="text,xml"), None)
-    finally:
-        cli._logger.removeHandler(seen)
     assert code == cli.EXIT_WITH_ERRORS
     assert any("xml" in message for message in seen.messages)
 

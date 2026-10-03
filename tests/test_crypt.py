@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 import struct
 
+from support import logged
 from tortoise_capture.wire import crypt, pcap
 
 KEY = bytes((n * 37 + 11) % 256 for n in range(40))
@@ -79,19 +79,9 @@ def test_two_messages_in_one_segment_do_not_give_a_wrong_key_either():
 def test_a_key_that_fails_the_server_headers_says_which_slots_to_look_at():
     messages = _client_messages()
     chunks = [messages[0], messages[1] + messages[2][:10], messages[2][10:], *messages[3:]]
-    seen = []
-
-    class Catch(logging.Handler):
-        def emit(self, record):
-            seen.append(record.getMessage())
-
-    handler = Catch(logging.ERROR)
-    crypt._logger.addHandler(handler)
-    try:
+    with logged(crypt._logger) as seen:
         assert _recover(chunks, _server_stream()) is None
-    finally:
-        crypt._logger.removeHandler(handler)
-    assert any("not recovered" in line and "slot" in line for line in seen)
+    assert any("not recovered" in line and "slot" in line for line in seen.messages)
 
 
 def test_a_key_is_checked_against_the_opcode_ceiling_too():

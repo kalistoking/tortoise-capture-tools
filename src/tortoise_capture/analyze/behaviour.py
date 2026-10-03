@@ -34,11 +34,11 @@ Three questions that no single packet answers:
 A fourth question is answered across creatures rather than within one:
 `SMSG_PLAY_SOUND` carries a sound id and nothing else -- no sender, no
 target -- so attributing a captured sound to a particular line of dialogue is
-pure timestamp coincidence. `_sound_for` looks across *every* creature's
-dialogue at once and attributes a sound only when exactly one line, from any
-of them, falls inside the coincidence window: two creatures talking in the
-same instant makes that sound's owner a coin flip, not a fact, and it is left
-unattributed rather than guessed.
+pure timestamp coincidence. `_sound_attribution` looks across *every*
+creature's dialogue at once and attributes a sound only when exactly one line,
+from any of them, falls inside the coincidence window: two creatures talking
+in the same instant makes that sound's owner a coin flip, not a fact, and it
+is left unattributed rather than guessed.
 
 Every measurement is taken on one spawn -- keyed by guid, not entry -- because
 an entry is a template and a capture can hold many of its spawns: one dying

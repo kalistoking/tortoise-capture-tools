@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from support import make_ctx, make_packet, make_tables
+from support import logged, make_ctx, make_packet, make_tables
 from tortoise_capture import log as _log
 from tortoise_capture.core.base import BaseModule
 from tortoise_capture.core.dispatch import Filters, Runner
@@ -133,23 +133,9 @@ def test_every_run_gets_its_own_analyzers_and_authoring_rules():
         assert [type(a) for a in first] == [type(b) for b in second]
 
 
-class _Errors(logging.Handler):
-    def __init__(self):
-        super().__init__(logging.ERROR)
-        self.messages = []
-
-    def emit(self, record):
-        self.messages.append(record.getMessage())
-
-
 def _errors_while(body):
-    seen = _Errors()
-    root = logging.getLogger(_log.ROOT)
-    root.addHandler(seen)
-    try:
+    with logged(logging.getLogger(_log.ROOT)) as seen:
         return body(), seen.messages
-    finally:
-        root.removeHandler(seen)
 
 
 def test_an_only_that_names_no_module_is_an_error_not_an_empty_run():

@@ -6,7 +6,8 @@ import struct
 import zlib
 
 from support import (
-    HIGH_GAMEOBJECT, HIGH_UNIT, decode_one, make_ctx, make_guid, make_packet, make_tables,
+    HIGH_GAMEOBJECT, HIGH_UNIT, decode_one, float_bits, logged, make_ctx, make_guid, make_packet,
+    make_tables,
     pack_guid, sized_string, update_mask,
 )
 from tortoise_capture.modules.ai_reaction import AiReaction
@@ -326,7 +327,7 @@ def test_compressed_update_object_is_one_message_not_a_batch():
 # --------------------------------------------------------------------------
 
 FIELD_NAMES = {6: "UNIT_FIELD_HEALTH", 8: "UNIT_FIELD_MINDAMAGE"}
-MINDAMAGE_BITS = struct.unpack("<I", struct.pack("<f", 20.2119))[0]
+MINDAMAGE_BITS = float_bits(20.2119)
 
 
 def _create_block(guid: int) -> bytes:
@@ -1244,22 +1245,10 @@ def test_a_walk_or_run_mode_switch_carries_only_the_unit():
 
 def _errors_of(body_to_events):
     """Runs a decode and returns what it logged at error level."""
-    import logging
-
-    seen = []
-
-    class Catch(logging.Handler):
-        def emit(self, record):
-            seen.append(record.getMessage())
-
     ctx = make_ctx()
-    handler = Catch(logging.ERROR)
-    ctx.log.addHandler(handler)
-    try:
+    with logged(ctx.log) as seen:
         list(body_to_events(ctx))
-    finally:
-        ctx.log.removeHandler(handler)
-    return seen
+    return seen.messages
 
 
 def test_bytes_left_after_a_monster_move_are_reported():

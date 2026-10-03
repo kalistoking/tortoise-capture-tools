@@ -7,7 +7,7 @@ what `DoScriptText` calls when a `broadcast_text` row has a nonzero
 is genuinely unattributable from this packet alone: only correlation with a
 `monster_say`/`monster_yell` at (nearly) the same timestamp can connect the
 two, and only when that correlation is unambiguous -- see
-`analyze/behaviour.py`'s `_sound_for`.
+`analyze/behaviour.py`'s `_sound_attribution`.
 
 Distinct from `SMSG_PLAY_OBJECT_SOUND`, which *does* carry a raw source guid
 (`Object.cpp`'s `PlayDistanceSound`) and is not decoded here.

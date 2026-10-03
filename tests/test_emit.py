@@ -7,7 +7,7 @@ import logging
 import tempfile
 from pathlib import Path
 
-from support import make_packet
+from support import logged, make_packet
 from tortoise_capture.core.contracts import Column, Event, Row, SqlContext, TableSpec
 from tortoise_capture.emit.jsonl import EventSink
 from tortoise_capture.emit.sql import SqlSink, create_table, literal
@@ -132,37 +132,12 @@ def test_a_missing_template_is_reported_not_raised():
     and writes no line for the event; the run goes on."""
     out = io.StringIO()
     sink = TextSink(out, [DemoModule()])
-    reported = []
-
-    class Catch(logging.Handler):
-        def emit(self, record):
-            reported.append((record.levelno, record.getMessage()))
-
-    handler = Catch()
-    text_sink._logger.addHandler(handler)
-    try:
+    with logged(text_sink._logger, level=logging.NOTSET) as seen:
         sink.handle(_event(kind="unknown", entry=1), DemoModule())   # must not raise
         sink.close()
-    finally:
-        text_sink._logger.removeHandler(handler)
-    assert reported == [(logging.ERROR, "module demo emits kind 'unknown' with no text template")]
+    assert [(r.levelno, r.getMessage()) for r in seen.records] == [
+        (logging.ERROR, "module demo emits kind 'unknown' with no text template")]
     assert "(no records)" in out.getvalue()
-
-
-def _errors_of(logger, work):
-    messages = []
-
-    class Catch(logging.Handler):
-        def emit(self, record):
-            messages.append(record.getMessage())
-
-    handler = Catch(logging.ERROR)
-    logger.addHandler(handler)
-    try:
-        work()
-    finally:
-        logger.removeHandler(handler)
-    return messages
 
 
 def test_a_template_that_cannot_format_a_value_is_reported_not_raised():
@@ -174,8 +149,9 @@ def test_a_template_that_cannot_format_a_value_is_reported_not_raised():
 
     out = io.StringIO()
     sink = TextSink(out, [Moving()])
-    messages = _errors_of(text_sink._logger,
-                          lambda: sink.handle(_event(x=None), Moving()))
+    with logged(text_sink._logger) as seen:
+        sink.handle(_event(x=None), Moving())
+    messages = seen.messages
     assert len(messages) == 1 and "does not match its fields" in messages[0]
 
 
@@ -193,7 +169,9 @@ def test_a_value_json_has_no_form_for_is_reported_not_quietly_a_string():
 
     out = io.StringIO()
     event = Event(packet=make_packet(1, b""), module_id="m", kind="k", data={"ids": {1, 2}})
-    messages = _errors_of(jsonl._logger, lambda: jsonl.EventSink(out).handle(event))
+    with logged(jsonl._logger) as seen:
+        jsonl.EventSink(out).handle(event)
+    messages = seen.messages
     assert len(messages) == 1 and "set" in messages[0]
     assert json.loads(out.getvalue())["data"]["ids"]            # still one valid line
 
@@ -206,8 +184,9 @@ def test_a_dump_line_that_is_not_an_object_is_reported_and_the_rest_is_read():
         good = io.StringIO()
         jsonl.PacketSink(good).handle(make_packet(0x1EC, b"\x01\x02", "SMSG_AUTH_CHALLENGE"))
         path.write_text("[1, 2]\n3\n" + good.getvalue(), encoding="utf-8")
-        found = []
-        messages = _errors_of(jsonl._logger, lambda: found.extend(jsonl.read_packets(path)))
+        with logged(jsonl._logger) as seen:
+            found = list(jsonl.read_packets(path))
+        messages = seen.messages
     assert len(found) == 1 and len(messages) == 2
 
 

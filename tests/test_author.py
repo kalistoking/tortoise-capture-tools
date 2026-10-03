@@ -7,7 +7,10 @@ import struct
 import tempfile
 from pathlib import Path
 
-from support import StubWorld, author_rows, make_event, make_guid, make_packet
+from support import (
+    StubWorld, author_rows, float_bits, health_values, logged, make_event, make_guid,
+    make_packet, named_fields,
+)
 from tortoise_capture.author.dialogue import EVENT_T_AGGRO, EVENT_T_DEATH, Dialogue
 from tortoise_capture.author.existing import only_new
 from tortoise_capture.author.equipment import (
@@ -33,15 +36,6 @@ def _cast(t, spell, guid=GUID):
     return [make_event("spell_start", t, guid=guid, entry=ENTRY, spell_id=spell,
                        cast_time_ms=0, is_instant=True),
             make_event("spell_go", t, guid=guid, entry=ENTRY, spell_id=spell)]
-
-
-def _fields(**named):
-    return [{"index": i, "name": name, "raw": raw}
-            for i, (name, raw) in enumerate(named.items())]
-
-
-def _float_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 # --------------------------------------------------------------------------
@@ -228,11 +222,11 @@ def test_unattributed_dialogue_becomes_a_gap_not_a_row():
 # --------------------------------------------------------------------------
 
 def _stats_events():
-    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
-        UNIT_FIELD_MINDAMAGE=_float_bits(20.2119007111),
+    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
+        UNIT_FIELD_MINDAMAGE=float_bits(20.2119007111),
         UNIT_FIELD_ATTACK_POWER=44,
         UNIT_FIELD_BYTES_0=512,                     # class 2 in byte 1
-        OBJECT_FIELD_SCALE_X=_float_bits(1.0),
+        OBJECT_FIELD_SCALE_X=float_bits(1.0),
     ))]
 
 
@@ -255,11 +249,11 @@ def test_a_later_sighting_disagreeing_with_the_first_is_reported():
     piece of evidence a capture can offer, so it must not be discarded.
     """
     events = _stats_events() + [
-        make_event("object_create", 300.0, guid=GUID, entry=ENTRY, fields=_fields(
-            UNIT_FIELD_MINDAMAGE=_float_bits(40.0),          # double: enraged earlier?
+        make_event("object_create", 300.0, guid=GUID, entry=ENTRY, fields=named_fields(
+            UNIT_FIELD_MINDAMAGE=float_bits(40.0),          # double: enraged earlier?
             UNIT_FIELD_ATTACK_POWER=44,
             UNIT_FIELD_BYTES_0=512,
-            OBJECT_FIELD_SCALE_X=_float_bits(1.0),
+            OBJECT_FIELD_SCALE_X=float_bits(1.0),
         )),
     ]
     rows, gaps = author_rows(Stats(), events, ENTRY)
@@ -281,9 +275,9 @@ def test_two_spawns_rolling_different_levels_are_not_a_modified_creature():
     """
     other = GUID + 1
     events = [
-        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
             UNIT_FIELD_LEVEL=9, UNIT_FIELD_MAXHEALTH=206, UNIT_FIELD_ATTACK_POWER=44)),
-        make_event("object_create", 13.1, guid=other, entry=ENTRY, fields=_fields(
+        make_event("object_create", 13.1, guid=other, entry=ENTRY, fields=named_fields(
             UNIT_FIELD_LEVEL=10, UNIT_FIELD_MAXHEALTH=231, UNIT_FIELD_ATTACK_POWER=44)),
     ]
     rows, gaps = author_rows(Stats(), events, ENTRY)
@@ -293,7 +287,7 @@ def test_two_spawns_rolling_different_levels_are_not_a_modified_creature():
 
 
 def _prowler(t, level, health, guid=GUID, **extra):
-    return make_event("object_create", t, guid=guid, entry=ENTRY, fields=_fields(
+    return make_event("object_create", t, guid=guid, entry=ENTRY, fields=named_fields(
         UNIT_FIELD_LEVEL=level, UNIT_FIELD_BASE_HEALTH=health, UNIT_FIELD_ATTACK_POWER=44,
         **extra))
 
@@ -315,7 +309,7 @@ def test_a_respawn_rolls_its_level_again_and_is_not_a_modified_creature():
 def test_a_respawn_seen_as_health_going_to_zero_rolls_its_level_again_too():
     events = [_prowler(12.9, 9, 206),
               make_event("object_values", 100.0, guid=GUID, entry=ENTRY,
-                         fields=_fields(UNIT_FIELD_HEALTH=0)),
+                         fields=named_fields(UNIT_FIELD_HEALTH=0)),
               _prowler(400.0, 10, 231)]
     _, gaps = author_rows(Stats(), events, ENTRY)
     assert not any("later CREATE" in gap for gap in gaps)
@@ -331,7 +325,7 @@ def test_a_level_that_changes_with_no_death_between_is_still_reported():
 def test_a_corpse_the_player_came_back_to_is_not_a_respawn():
     """A corpse CREATE is the same life the first CREATE showed, dead meanwhile;
     a level that differs between the two is a creature that changed."""
-    corpse = make_event("object_create", 400.0, guid=GUID, entry=ENTRY, fields=_fields(
+    corpse = make_event("object_create", 400.0, guid=GUID, entry=ENTRY, fields=named_fields(
         UNIT_FIELD_LEVEL=10, UNIT_FIELD_MAXHEALTH=231, UNIT_FIELD_ATTACK_POWER=44))
     _, gaps = author_rows(Stats(), [_prowler(12.9, 9, 206), corpse], ENTRY)
     assert any("level_min" in gap and "later CREATE" in gap for gap in gaps)
@@ -340,8 +334,8 @@ def test_a_corpse_the_player_came_back_to_is_not_a_respawn():
 def test_a_disagreement_is_reported_against_its_own_spawns_first_sighting():
     other = GUID + 1
     events = _stats_events() + [
-        make_event("object_create", t, guid=other, entry=ENTRY, fields=_fields(
-            UNIT_FIELD_MINDAMAGE=_float_bits(damage)))
+        make_event("object_create", t, guid=other, entry=ENTRY, fields=named_fields(
+            UNIT_FIELD_MINDAMAGE=float_bits(damage)))
         for t, damage in ((20.0, 30.0), (40.0, 45.0))
     ]
     _, gaps = author_rows(Stats(), events, ENTRY)
@@ -356,9 +350,9 @@ def test_spawns_disagreeing_on_a_field_the_template_owns_are_reported():
     and the first value seen, 14, would be authored with nothing said."""
     other = GUID + 1
     events = [
-        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
             UNIT_FIELD_FACTIONTEMPLATE=14, UNIT_FIELD_ATTACK_POWER=44)),
-        make_event("object_create", 13.1, guid=other, entry=ENTRY, fields=_fields(
+        make_event("object_create", 13.1, guid=other, entry=ENTRY, fields=named_fields(
             UNIT_FIELD_FACTIONTEMPLATE=17, UNIT_FIELD_ATTACK_POWER=44)),
     ]
     rows, gaps = author_rows(Stats(), events, ENTRY)
@@ -370,7 +364,7 @@ def test_spawns_disagreeing_on_a_field_the_template_owns_are_reported():
 
 def test_spawns_agreeing_on_every_field_the_template_owns_are_not_reported():
     other = GUID + 1
-    events = [make_event("object_create", 12.9 + n, guid=GUID + n, entry=ENTRY, fields=_fields(
+    events = [make_event("object_create", 12.9 + n, guid=GUID + n, entry=ENTRY, fields=named_fields(
         UNIT_FIELD_FACTIONTEMPLATE=14, UNIT_FIELD_BASEATTACKTIME=2000, UNIT_FIELD_ATTACK_POWER=44,
         UNIT_FIELD_LEVEL=9 + n)) for n in range(2)]
     _, gaps = author_rows(Stats(), events, ENTRY)
@@ -379,10 +373,10 @@ def test_spawns_agreeing_on_every_field_the_template_owns_are_not_reported():
 
 def test_a_respawn_that_changes_a_field_the_template_owns_is_reported():
     events = [
-        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
             UNIT_FIELD_FACTIONTEMPLATE=14)),
         make_event("party_kill", 100.0, guid=GUID, entry=ENTRY),
-        make_event("object_create", 400.0, guid=GUID, entry=ENTRY, fields=_fields(
+        make_event("object_create", 400.0, guid=GUID, entry=ENTRY, fields=named_fields(
             UNIT_FIELD_FACTIONTEMPLATE=17)),
     ]
     _, gaps = author_rows(Stats(), events, ENTRY)
@@ -393,9 +387,9 @@ def test_a_spawn_that_omits_a_field_is_not_a_disagreement_about_it():
     """A CREATE leaves out every zero field, and a spawn first seen without
     one is the same 'not yet seen' the within-spawn check already allows."""
     events = [
-        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
             UNIT_FIELD_FACTIONTEMPLATE=14)),
-        make_event("object_create", 13.1, guid=GUID + 1, entry=ENTRY, fields=_fields(
+        make_event("object_create", 13.1, guid=GUID + 1, entry=ENTRY, fields=named_fields(
             UNIT_FIELD_LEVEL=9)),
     ]
     _, gaps = author_rows(Stats(), events, ENTRY)
@@ -406,15 +400,15 @@ def test_a_disagreement_gap_shows_the_decoded_value_not_the_raw_slot():
     """A float field's raw slot is its bit pattern (1109393408 for 20.0 ...) and
     a negative attack power's is its unsigned form (4294967292 for -4)."""
     events = [
-        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
-            UNIT_FIELD_MINDAMAGE=_float_bits(20.5), UNIT_FIELD_ATTACK_POWER=44)),
-        make_event("object_create", 20.0, guid=GUID, entry=ENTRY, fields=_fields(
-            UNIT_FIELD_MINDAMAGE=_float_bits(40.25), UNIT_FIELD_ATTACK_POWER=0xFFFFFFFC)),
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
+            UNIT_FIELD_MINDAMAGE=float_bits(20.5), UNIT_FIELD_ATTACK_POWER=44)),
+        make_event("object_create", 20.0, guid=GUID, entry=ENTRY, fields=named_fields(
+            UNIT_FIELD_MINDAMAGE=float_bits(40.25), UNIT_FIELD_ATTACK_POWER=0xFFFFFFFC)),
     ]
     _, gaps = author_rows(Stats(), events, ENTRY)
     damage = next(gap for gap in gaps if "dmg_min" in gap)
     assert "40.25" in damage and "20.5" in damage
-    assert str(_float_bits(40.25)) not in damage and str(_float_bits(20.5)) not in damage
+    assert str(float_bits(40.25)) not in damage and str(float_bits(20.5)) not in damage
     power = next(gap for gap in gaps if "attack_power" in gap)
     assert "-4" in power and "4294967292" not in power
 
@@ -423,7 +417,7 @@ def test_a_spawn_level_inside_the_database_range_is_agreement():
     """A 9-10 template spawning at 10 is not a level_min of 10."""
     world = StubWorld(columns={("creature_template", "level_min"): "9",
                                ("creature_template", "level_max"): "10"})
-    events = [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+    events = [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
         UNIT_FIELD_LEVEL=10, UNIT_FIELD_ATTACK_POWER=44))]
     rows, gaps = author_rows(Stats(), events, ENTRY, world=world)
     assert "level_min" not in rows[0].values and "level_max" not in rows[0].values
@@ -434,7 +428,7 @@ def test_a_spawn_level_inside_the_database_range_is_agreement():
 def test_a_spawn_level_outside_the_database_range_is_reported_not_proposed():
     world = StubWorld(columns={("creature_template", "level_min"): "9",
                                ("creature_template", "level_max"): "10"})
-    events = [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+    events = [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
         UNIT_FIELD_LEVEL=12, UNIT_FIELD_ATTACK_POWER=44))]
     rows, gaps = author_rows(Stats(), events, ENTRY, world=world)
     assert "level_min" not in rows[0].values
@@ -443,7 +437,7 @@ def test_a_spawn_level_outside_the_database_range_is_reported_not_proposed():
 
 def _wizard(level, health, mana):
     return make_event("object_create", 12.9 + level, guid=GUID + level, entry=ENTRY,
-                      fields=_fields(UNIT_FIELD_LEVEL=level, UNIT_FIELD_BASE_HEALTH=health,
+                      fields=named_fields(UNIT_FIELD_LEVEL=level, UNIT_FIELD_BASE_HEALTH=health,
                                      UNIT_FIELD_BASE_MANA=mana, UNIT_FIELD_ATTACK_POWER=44))
 
 
@@ -484,7 +478,7 @@ def test_mana_a_create_leaves_out_is_checked_as_the_zero_it_is():
     """A CREATE omits every zero field, so a spawn carrying no BASE_MANA
     broadcast 0 -- against a template giving it 350 at level 9."""
     world = StubWorld(columns=_WIZARD_TEMPLATE)
-    event = make_event("object_create", 21.9, guid=GUID + 9, entry=ENTRY, fields=_fields(
+    event = make_event("object_create", 21.9, guid=GUID + 9, entry=ENTRY, fields=named_fields(
         UNIT_FIELD_LEVEL=9, UNIT_FIELD_BASE_HEALTH=186, UNIT_FIELD_ATTACK_POWER=44))
     _, gaps = author_rows(Stats(), [event], ENTRY, world=world)
     assert any("mana_min" in gap and "0 at level 9" in gap for gap in gaps)
@@ -540,7 +534,7 @@ def test_a_column_the_database_already_holds_is_restated_as_its_own_value():
 def _moving(t, run, guid=GUID):
     """A CREATE carrying the six speeds: walk, run, run_back, swim, swim_back, turn."""
     return make_event("object_create", t, guid=guid, entry=ENTRY,
-                      fields=_fields(UNIT_FIELD_ATTACK_POWER=44),
+                      fields=named_fields(UNIT_FIELD_ATTACK_POWER=44),
                       movement={"speeds": (2.5, run, 4.5, 4.722222, 2.5, 3.141594)})
 
 
@@ -574,7 +568,7 @@ def _identity_events():
     return [
         make_event("creature_query", 12.8, entry=ENTRY, name="Ralthas", subname="",
                    type_flags=0, type=7, beast_family=0, rank=0),
-        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+        make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
             UNIT_FIELD_ATTACK_POWER=44, UNIT_FIELD_FACTIONTEMPLATE=17,
             UNIT_FIELD_BASEATTACKTIME=2000, UNIT_FIELD_RANGEDATTACKTIME=1900)),
     ]
@@ -628,7 +622,7 @@ def test_an_empty_subname_over_a_stored_null_is_left_alone():
 
 
 def _flagged(npc_flags):
-    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
         UNIT_FIELD_ATTACK_POWER=44, UNIT_NPC_FLAGS=npc_flags))]
 
 
@@ -749,8 +743,8 @@ class _Displays:
 
 
 def _scaled(scale):
-    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
-        OBJECT_FIELD_SCALE_X=_float_bits(scale), UNIT_FIELD_ATTACK_POWER=44))]
+    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
+        OBJECT_FIELD_SCALE_X=float_bits(scale), UNIT_FIELD_ATTACK_POWER=44))]
 
 
 _MODEL_SCALED = {("creature_template", "scale"): "0",
@@ -879,8 +873,7 @@ def test_a_spawn_only_ever_seen_dead_is_placed_where_it_lies_and_questioned():
 
 
 def _health_values(t, health):
-    return make_event("object_values", t, guid=GUID, entry=ENTRY,
-                      fields=_fields(UNIT_FIELD_HEALTH=health))
+    return health_values(t, health, guid=GUID, entry=ENTRY)
 
 
 def test_a_death_seen_as_health_going_to_zero_makes_the_next_create_the_respawn():
@@ -1003,7 +996,7 @@ def test_a_gameobject_sharing_the_entry_is_not_a_creature():
     numbered apart from creature ones, so the same number can name one of each."""
     thing = make_event("object_create", 5.0, guid=_GAMEOBJECT, entry=ENTRY,
                        movement={"movement_info": {"pos": (1.0, 2.0, 3.0, 0.0)}},
-                       fields=_fields(OBJECT_FIELD_SCALE_X=0x40000000))
+                       fields=named_fields(OBJECT_FIELD_SCALE_X=0x40000000))
     rows, _ = author_rows(Spawn(), _spawn_events() + [thing], ENTRY)
     assert [r.values["guid"] for r in rows if r.table == "creature"] == [SPAWN_GUID]
     rows, _ = author_rows(Stats(), [thing], ENTRY)
@@ -1015,7 +1008,7 @@ def test_a_creature_a_spell_summoned_is_reported_not_spawned():
     (SpellEffects.cpp:2206); it despawns, and has no row to be authored."""
     summoned = make_event("object_create", 5.0, guid=GUID + 1, entry=ENTRY,
                           movement={"movement_info": {"pos": (1.0, 2.0, 3.0, 0.0)}},
-                          fields=_fields(UNIT_FIELD_CREATEDBY=0x2A, UNIT_FIELD_HEALTH=10,
+                          fields=named_fields(UNIT_FIELD_CREATEDBY=0x2A, UNIT_FIELD_HEALTH=10,
                                          UNIT_FIELD_MAXHEALTH=10))
     rows, gaps = author_rows(Spawn(), _spawn_events() + [summoned], ENTRY)
     assert [r.values["guid"] for r in rows if r.table == "creature"] == [SPAWN_GUID]
@@ -1440,7 +1433,7 @@ ITEM_INFO = 0x11000A02
 
 
 def _equip_events(display=5010, info=ITEM_INFO):
-    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=_fields(
+    return [make_event("object_create", 12.9, guid=GUID, entry=ENTRY, fields=named_fields(
         UNIT_VIRTUAL_ITEM_DISPLAY=display, UNIT_VIRTUAL_ITEM_INFO=info))]
 
 
@@ -2248,7 +2241,6 @@ def test_a_table_the_database_would_not_describe_is_an_error():
     """A failed DESCRIBE left key_column None, so the existing-row check let every
     row of that table through as an INSERT, and schema defaults went unfilled
     -- with only a warning, which the exit code ignores."""
-    import logging
     from tortoise_capture.world import World, WorldError
     from tortoise_capture import world as world_mod
 
@@ -2256,19 +2248,9 @@ def test_a_table_the_database_would_not_describe_is_an_error():
         def query(self, sql):
             raise WorldError("access denied")
 
-    seen = []
-
-    class Catch(logging.Handler):
-        def emit(self, record):
-            seen.append(record)
-
-    handler = Catch(logging.ERROR)
-    world_mod._logger.addHandler(handler)
-    try:
+    with logged(world_mod._logger) as seen:
         assert Refusing(client="unused").key_column("creature") is None
-    finally:
-        world_mod._logger.removeHandler(handler)
-    assert seen
+    assert seen.count
 
 
 def test_describe_coerces_types_and_treats_null_as_no_default():

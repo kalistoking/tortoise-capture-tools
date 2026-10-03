@@ -7,8 +7,10 @@ question, and runs anywhere.
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import struct
-from typing import Any
+from typing import Any, Iterator
 
 from tortoise_capture.core.contracts import DecodeContext, Direction, Packet, Tables
 from tortoise_capture.fields.tables import FieldTable
@@ -94,6 +96,55 @@ def run_analyzer(an, events, ctx: DecodeContext | None = None) -> list["Event"]:
 
 def findings_by_kind(found) -> dict:
     return {ev.kind: ev for ev in found}
+
+
+def named_fields(**named: int) -> list[dict[str, Any]]:
+    """Update fields as the update_object module reports them: index by position."""
+    return [{"index": i, "name": name, "raw": raw} for i, (name, raw) in enumerate(named.items())]
+
+
+def float_bits(value: float) -> int:
+    """A float32's bits, which is how an update field carries one."""
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def health_values(t: float, health: int, *, guid: int, entry: int) -> "Event":
+    """A VALUES block carrying UNIT_FIELD_HEALTH alone."""
+    return make_event("object_values", t, guid=guid, entry=entry,
+                      fields=named_fields(UNIT_FIELD_HEALTH=health))
+
+
+class Errors(logging.Handler):
+    """What was logged to the loggers it is on, at its level and above."""
+
+    def __init__(self, level: int = logging.ERROR) -> None:
+        super().__init__(level)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+    @property
+    def messages(self) -> list[str]:
+        return [record.getMessage() for record in self.records]
+
+    @property
+    def count(self) -> int:
+        return len(self.records)
+
+
+@contextlib.contextmanager
+def logged(*loggers: logging.Logger, level: int = logging.ERROR) -> Iterator[Errors]:
+    """`with logged(logger) as seen:` -- seen.messages and seen.count are what the
+    block logged to `logger` at `level` or above (errors, by default)."""
+    handler = Errors(level)
+    for logger in loggers:
+        logger.addHandler(handler)
+    try:
+        yield handler
+    finally:
+        for logger in loggers:
+            logger.removeHandler(handler)
 
 
 class StubWorld:
